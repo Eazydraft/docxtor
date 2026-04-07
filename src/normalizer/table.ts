@@ -1,0 +1,78 @@
+/**
+ * Table normalizer: walks a w:tbl FXP node and produces a
+ * NormalizedTable with rows, cells, and inner paragraphs.
+ *
+ * Tables are containers — their text lives in paragraphs inside cells.
+ * We normalize the structure and delegate paragraph normalization to
+ * the paragraph normalizer.
+ */
+
+import type {
+  FXPNode,
+  NormalizedTable,
+  NormalizedTableRow,
+  NormalizedTableCell,
+} from "../types.js";
+import {
+  findChild,
+  findChildren,
+  getAttr,
+} from "../xml/helpers.js";
+import { normalizeParagraph } from "./paragraph.js";
+
+/**
+ * Normalize a w:tbl FXP node into a NormalizedTable.
+ *
+ * @param tableNode - The w:tbl FXP node
+ * @param id - The stable ID (e.g., "tbl0")
+ */
+export function normalizeTable(
+  tableNode: FXPNode,
+  id: string,
+): NormalizedTable {
+  const rows: NormalizedTableRow[] = [];
+  const trNodes = findChildren(tableNode, "w:tr");
+
+  for (let rowIdx = 0; rowIdx < trNodes.length; rowIdx++) {
+    const trNode = trNodes[rowIdx]!;
+    const cells: NormalizedTableCell[] = [];
+    const tcNodes = findChildren(trNode, "w:tc");
+
+    for (let colIdx = 0; colIdx < tcNodes.length; colIdx++) {
+      const tcNode = tcNodes[colIdx]!;
+      const paragraphs = findChildren(tcNode, "w:p");
+      const normalizedParas = paragraphs.map((pNode, pIdx) =>
+        normalizeParagraph(
+          pNode,
+          `${id}.r${rowIdx}.c${colIdx}.p${pIdx}`,
+        ),
+      );
+
+      cells.push({
+        rowIndex: rowIdx,
+        colIndex: colIdx,
+        paragraphs: normalizedParas,
+        xmlRef: tcNode,
+      });
+    }
+
+    rows.push({
+      index: rowIdx,
+      cells,
+      xmlRef: trNode,
+    });
+  }
+
+  // Extract table style
+  const tblPr = findChild(tableNode, "w:tblPr");
+  const tblStyle = tblPr ? findChild(tblPr, "w:tblStyle") : undefined;
+  const style = tblStyle ? getAttr(tblStyle, "w:val") : undefined;
+
+  return {
+    kind: "table",
+    id,
+    rows,
+    xmlRef: tableNode,
+    style,
+  };
+}
