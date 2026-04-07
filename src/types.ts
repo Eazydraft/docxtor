@@ -267,6 +267,12 @@ export interface ProjectionOptions {
   includeHeadersFooters?: boolean;
   /** Include table structure. Default: true. */
   includeTables?: boolean;
+  /**
+   * Truncate paragraph text to this many characters in the markdown projection.
+   * Set to a number (e.g. 80) to produce a compact overview.
+   * Default: undefined (no truncation, full text).
+   */
+  maxTextLength?: number;
 }
 
 // =============================================================================

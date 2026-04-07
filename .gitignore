@@ -2,6 +2,8 @@ node_modules/
 dist/
 coverage/
 *.tgz
+*.docx
+*.pdf
 .DS_Store
 Thumbs.db
 nul
