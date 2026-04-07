@@ -13,6 +13,7 @@ import type {
   BodyElement,
   HeaderFooter,
   DocxXmlParts,
+  LoadOptions,
 } from "../types.js";
 import type { DocxZipEntries } from "../zip/reader.js";
 import { parseXml } from "../xml/parser.js";
@@ -36,7 +37,10 @@ import { normalizeHeaderFooter } from "./header-footer.js";
  */
 export function normalizeDocument(
   zipEntries: DocxZipEntries,
+  options?: LoadOptions,
 ): NormalizedDocument {
+  const includeHeadersFooters = options?.includeHeadersFooters ?? true;
+
   // Parse all XML parts
   const documentFxp = parseXml(zipEntries.documentXml);
 
@@ -56,30 +60,32 @@ export function normalizeDocument(
   // Normalize body elements
   const body = normalizeBody(documentFxp);
 
-  // Normalize headers and footers
+  // Normalize headers and footers (unless disabled)
   const headers = new Map<string, HeaderFooter>();
   const footers = new Map<string, HeaderFooter>();
 
-  // Find section properties to discover header/footer references
-  const sectPrRefs = findHeaderFooterRefs(documentFxp);
+  if (includeHeadersFooters) {
+    // Find section properties to discover header/footer references
+    const sectPrRefs = findHeaderFooterRefs(documentFxp);
 
-  for (const ref of sectPrRefs) {
-    const target = relMap.get(ref.rId);
-    if (!target) continue;
+    for (const ref of sectPrRefs) {
+      const target = relMap.get(ref.rId);
+      if (!target) continue;
 
-    const fullPath = `word/${target}`;
+      const fullPath = `word/${target}`;
 
-    if (ref.type === "header") {
-      const fxp = headersFxp.get(fullPath);
-      if (fxp) {
-        const hdr = normalizeHeaderFooter(fxp, "header", ref.variant, ref.rId);
-        headers.set(ref.rId, hdr);
-      }
-    } else {
-      const fxp = footersFxp.get(fullPath);
-      if (fxp) {
-        const ftr = normalizeHeaderFooter(fxp, "footer", ref.variant, ref.rId);
-        footers.set(ref.rId, ftr);
+      if (ref.type === "header") {
+        const fxp = headersFxp.get(fullPath);
+        if (fxp) {
+          const hdr = normalizeHeaderFooter(fxp, "header", ref.variant, ref.rId);
+          headers.set(ref.rId, hdr);
+        }
+      } else {
+        const fxp = footersFxp.get(fullPath);
+        if (fxp) {
+          const ftr = normalizeHeaderFooter(fxp, "footer", ref.variant, ref.rId);
+          footers.set(ref.rId, ftr);
+        }
       }
     }
   }

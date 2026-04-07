@@ -8,6 +8,7 @@ import type {
   NormalizedDocument,
   NormalizedParagraph,
   NormalizedTable,
+  RunFormatting,
   ProjectionOptions,
 } from "../types.js";
 
@@ -19,18 +20,21 @@ interface JsonProjectionParagraph {
   id: string;
   text: string;
   style?: string;
-  formatting?: { bold?: boolean; italic?: boolean }[];
+  listLevel?: number;
+  formatting?: RunFormatting[];
 }
 
 interface JsonProjectionTableCell {
   id: string;
   text: string;
+  paragraphs?: JsonProjectionParagraph[];
 }
 
 interface JsonProjectionTable {
   id: string;
   style?: string;
   rows: JsonProjectionTableCell[][];
+  nestedTables?: JsonProjectionTable[];
 }
 
 interface JsonProjectionHeaderFooter {
@@ -62,7 +66,7 @@ export function projectToJson(
     if (element.kind === "paragraph") {
       body.push(projectParagraphToJson(element, includeFormatting));
     } else if (element.kind === "table" && includeTables) {
-      body.push(projectTableToJson(element));
+      body.push(projectTableToJson(element, includeFormatting));
     }
   }
 
@@ -111,11 +115,23 @@ function projectParagraphToJson(
     result.style = para.style;
   }
 
+  if (para.listInfo) {
+    result.listLevel = para.listInfo.level;
+  }
+
   if (includeFormatting && para.runs.length > 0) {
-    result.formatting = para.runs.map((r) => ({
-      ...(r.formatting.bold ? { bold: true } : {}),
-      ...(r.formatting.italic ? { italic: true } : {}),
-    }));
+    result.formatting = para.runs.map((r) => {
+      const fmt: RunFormatting = {};
+      if (r.formatting.bold) fmt.bold = true;
+      if (r.formatting.italic) fmt.italic = true;
+      if (r.formatting.underline) fmt.underline = r.formatting.underline;
+      if (r.formatting.strikethrough) fmt.strikethrough = true;
+      if (r.formatting.fontSize) fmt.fontSize = r.formatting.fontSize;
+      if (r.formatting.fontFamily) fmt.fontFamily = r.formatting.fontFamily;
+      if (r.formatting.color) fmt.color = r.formatting.color;
+      if (r.formatting.highlight) fmt.highlight = r.formatting.highlight;
+      return fmt;
+    });
   }
 
   return result;
@@ -123,17 +139,42 @@ function projectParagraphToJson(
 
 function projectTableToJson(
   table: NormalizedTable,
+  includeFormatting: boolean = false,
 ): JsonProjectionTable {
-  return {
+  const result: JsonProjectionTable = {
     id: table.id,
     style: table.style,
     rows: table.rows.map((row) =>
-      row.cells.map((cell) => ({
-        id: cell.paragraphs[0]?.id ?? `${table.id}.r${row.index}.c${cell.colIndex}.p0`,
-        text: cell.paragraphs.map((p) => p.text).join("\n"),
-      })),
+      row.cells.map((cell) => {
+        const cellResult: JsonProjectionTableCell = {
+          id: cell.paragraphs[0]?.id ?? `${table.id}.r${row.index}.c${cell.colIndex}.p0`,
+          text: cell.paragraphs.map((p) => p.text).join("\n"),
+        };
+        // Include individual paragraph details for multi-paragraph cells
+        if (cell.paragraphs.length > 1) {
+          cellResult.paragraphs = cell.paragraphs.map((p) =>
+            projectParagraphToJson(p, includeFormatting),
+          );
+        }
+        return cellResult;
+      }),
     ),
   };
+
+  // Include nested tables if any exist
+  const allNested: JsonProjectionTable[] = [];
+  for (const row of table.rows) {
+    for (const cell of row.cells) {
+      for (const nested of cell.nestedTables) {
+        allNested.push(projectTableToJson(nested, includeFormatting));
+      }
+    }
+  }
+  if (allNested.length > 0) {
+    result.nestedTables = allNested;
+  }
+
+  return result;
 }
 
 // =============================================================================
@@ -200,7 +241,8 @@ export function projectToMarkdown(
 
 function formatParagraphMarkdown(para: NormalizedParagraph): string {
   const styleHint = para.style ? ` (${para.style})` : "";
-  return `[${para.id}]${styleHint} ${para.text}`;
+  const listHint = para.listInfo ? ` [list L${para.listInfo.level}]` : "";
+  return `[${para.id}]${styleHint}${listHint} ${para.text}`;
 }
 
 function formatTableMarkdown(table: NormalizedTable): string[] {

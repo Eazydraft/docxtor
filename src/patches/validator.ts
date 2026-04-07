@@ -40,6 +40,14 @@ export function validatePatch(
       if (patch.type === "insert_text" && patch.text.length === 0) {
         return { valid: false, error: "Empty insert text" };
       }
+      if ("occurrence" in patch && patch.occurrence !== undefined) {
+        if (patch.occurrence < 1 || !Number.isInteger(patch.occurrence)) {
+          return {
+            valid: false,
+            error: `Invalid occurrence: ${patch.occurrence} (must be a positive integer)`,
+          };
+        }
+      }
       return { valid: true };
     }
     case "add_table_row": {
@@ -53,6 +61,12 @@ export function validatePatch(
       if (patch.cells.length === 0) {
         return { valid: false, error: "Empty cells array" };
       }
+      if (patch.afterRow < -1 || patch.afterRow >= table.rows.length) {
+        return {
+          valid: false,
+          error: `Invalid afterRow ${patch.afterRow} for table "${patch.target}" with ${table.rows.length} rows`,
+        };
+      }
       return { valid: true };
     }
     case "delete_table_row": {
@@ -61,6 +75,12 @@ export function validatePatch(
         return {
           valid: false,
           error: `Table "${patch.target}" not found`,
+        };
+      }
+      if (patch.row < 0 || patch.row >= table.rows.length) {
+        return {
+          valid: false,
+          error: `Invalid row index ${patch.row} for table "${patch.target}" with ${table.rows.length} rows`,
         };
       }
       return { valid: true };
@@ -105,17 +125,37 @@ export function findParagraphById(
 }
 
 /**
- * Find a table by its ID in the document body.
+ * Find a table by its ID in the document body (including nested tables).
  */
 export function findTableById(
   id: string,
   doc: NormalizedDocument,
 ): NormalizedTable | undefined {
   for (const element of doc.body) {
-    if (element.kind === "table" && element.id === id) {
-      return element;
+    if (element.kind === "table") {
+      const found = searchTableInTable(id, element);
+      if (found) return found;
     }
   }
+  return undefined;
+}
+
+function searchTableInTable(
+  id: string,
+  table: NormalizedTable,
+): NormalizedTable | undefined {
+  if (table.id === id) return table;
+
+  // Search nested tables
+  for (const row of table.rows) {
+    for (const cell of row.cells) {
+      for (const nested of cell.nestedTables) {
+        const found = searchTableInTable(id, nested);
+        if (found) return found;
+      }
+    }
+  }
+
   return undefined;
 }
 
@@ -128,14 +168,27 @@ function searchParagraphInElement(
   }
 
   if (element.kind === "table") {
-    for (const row of element.rows) {
-      for (const cell of row.cells) {
-        for (const para of cell.paragraphs) {
-          if (para.id === id) return para;
-        }
+    return searchParagraphInTable(id, element);
+  }
+
+  return undefined;
+}
+
+function searchParagraphInTable(
+  id: string,
+  table: NormalizedTable,
+): NormalizedParagraph | undefined {
+  for (const row of table.rows) {
+    for (const cell of row.cells) {
+      for (const para of cell.paragraphs) {
+        if (para.id === id) return para;
+      }
+      // Search nested tables
+      for (const nested of cell.nestedTables) {
+        const found = searchParagraphInTable(id, nested);
+        if (found) return found;
       }
     }
   }
-
   return undefined;
 }

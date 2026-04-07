@@ -158,6 +158,36 @@ export function getAttrs(
 // =============================================================================
 
 /**
+ * Escape special XML characters in text content.
+ *
+ * Required because fast-xml-parser with processEntities: false does NOT
+ * auto-escape on build. Entities from the original XML survive as-is,
+ * but any NEW text we inject must be manually escaped.
+ */
+export function escapeXmlText(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+/**
+ * Unescape XML entities in text content for display/comparison.
+ *
+ * Since processEntities: false keeps entities as-is during parse,
+ * we unescape when extracting text for the normalized view so that
+ * the paragraph text reads naturally (e.g., "A & B" not "A &amp; B").
+ */
+export function unescapeXmlText(text: string): string {
+  return text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
+}
+
+/**
  * Get the text content of a text node.
  */
 export function getTextContent(node: FXPNode): string {
@@ -169,13 +199,16 @@ export function getTextContent(node: FXPNode): string {
 
 /**
  * Set the text content of a text node.
+ * Escapes XML special characters automatically.
  */
 export function setTextContent(node: FXPNode, text: string): void {
-  node["#text"] = text;
+  node["#text"] = escapeXmlText(text);
 }
 
 /**
  * Get all text from w:t elements inside a w:r run node.
+ * Unescapes XML entities so the returned text is natural.
+ * Converts w:br (line break) elements to \n characters.
  */
 export function getRunText(runNode: FXPNode): string {
   const children = getChildren(runNode);
@@ -186,10 +219,12 @@ export function getRunText(runNode: FXPNode): string {
       if (Array.isArray(tChildren)) {
         for (const tChild of tChildren) {
           if ("#text" in tChild) {
-            text += String(tChild["#text"]);
+            text += unescapeXmlText(String(tChild["#text"]));
           }
         }
       }
+    } else if ("w:br" in child) {
+      text += "\n";
     }
   }
   return text;
@@ -300,9 +335,10 @@ export function createElement(
 
 /**
  * Create a text node.
+ * Escapes XML special characters automatically.
  */
 export function createTextNode(text: string): FXPNode {
-  return { "#text": text } as unknown as FXPNode;
+  return { "#text": escapeXmlText(text) } as unknown as FXPNode;
 }
 
 /**
@@ -313,10 +349,18 @@ export function createWt(text: string): FXPNode {
     "w:t": [createTextNode(text)],
   };
   // Add xml:space="preserve" if text has leading/trailing whitespace
-  if (text !== text.trim() || text.includes("  ")) {
+  if (needsSpacePreserve(text)) {
     setAttr(node, "xml:space", "preserve");
   }
   return node;
+}
+
+/**
+ * Check if text needs xml:space="preserve" on a w:t element.
+ * Returns true if text has leading/trailing whitespace or double spaces.
+ */
+export function needsSpacePreserve(text: string): boolean {
+  return text.length > 0 && (text !== text.trim() || text.includes("  "));
 }
 
 /**

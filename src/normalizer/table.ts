@@ -5,6 +5,9 @@
  * Tables are containers — their text lives in paragraphs inside cells.
  * We normalize the structure and delegate paragraph normalization to
  * the paragraph normalizer.
+ *
+ * Supports nested tables: if a table cell contains another w:tbl,
+ * it is recursively normalized and included in the cell's nestedTables.
  */
 
 import type {
@@ -48,10 +51,20 @@ export function normalizeTable(
         ),
       );
 
+      // Normalize nested tables within this cell
+      const nestedTblNodes = findChildren(tcNode, "w:tbl");
+      const nestedTables = nestedTblNodes.map((tblNode, tblIdx) =>
+        normalizeTable(
+          tblNode,
+          `${id}.r${rowIdx}.c${colIdx}.tbl${tblIdx}`,
+        ),
+      );
+
       cells.push({
         rowIndex: rowIdx,
         colIndex: colIdx,
         paragraphs: normalizedParas,
+        nestedTables,
         xmlRef: tcNode,
       });
     }

@@ -157,6 +157,8 @@ export interface NormalizedTableCell {
   colIndex: number;
   /** Paragraphs inside this cell. */
   paragraphs: NormalizedParagraph[];
+  /** Nested tables inside this cell. */
+  nestedTables: NormalizedTable[];
   /** Direct reference to the w:tc FXP node. */
   xmlRef: FXPNode;
 }

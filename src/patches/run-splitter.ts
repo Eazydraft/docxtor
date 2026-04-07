@@ -22,8 +22,52 @@ import {
   findChild,
   cloneNode,
   getChildren,
+  getTagName,
   setAttr,
+  needsSpacePreserve,
+  escapeXmlText,
 } from "../xml/helpers.js";
+
+/**
+ * Result of splitting a run.
+ */
+export interface SplitResult {
+  /** The part before the matched range (may be undefined if start-aligned). */
+  before?: FXPNode;
+  /** The matched part (the run covering the matched text). */
+  matched: FXPNode;
+  /** The part after the matched range (may be undefined if end-aligned). */
+  after?: FXPNode;
+}
+
+/**
+ * Find the parent children array that directly contains a run node.
+ *
+ * Runs can be direct children of w:p, or nested inside w:hyperlink.
+ * We need the actual parent's children array to do splice operations.
+ */
+function findRunParentChildren(
+  paragraphNode: FXPNode,
+  runNode: FXPNode,
+): FXPNode[] | undefined {
+  // Check direct children first
+  const children = getChildren(paragraphNode);
+  if (children.includes(runNode)) {
+    return children;
+  }
+
+  // Check inside w:hyperlink elements
+  for (const child of children) {
+    if (getTagName(child) === "w:hyperlink") {
+      const hyperlinkChildren = getChildren(child);
+      if (hyperlinkChildren.includes(runNode)) {
+        return hyperlinkChildren;
+      }
+    }
+  }
+
+  return undefined;
+}
 
 /**
  * Result of splitting a run.
@@ -59,12 +103,13 @@ export function splitRun(
 
   const runNode = range.run.xmlRef;
   const fullText = range.run.text;
-  const children = getChildren(paragraphNode);
-  const runIndex = children.indexOf(runNode);
+  const parentChildren = findRunParentChildren(paragraphNode, runNode);
 
-  if (runIndex === -1) {
-    throw new Error("Run not found in paragraph children");
+  if (!parentChildren) {
+    throw new Error("Run not found in paragraph children or hyperlink children");
   }
+
+  const runIndex = parentChildren.indexOf(runNode);
 
   // Extract the w:rPr node (formatting) from the original run
   const rPrNode = findChild(runNode, "w:rPr");
@@ -98,7 +143,7 @@ export function splitRun(
   }
 
   // Replace the original run with the new runs in the parent
-  children.splice(runIndex, 1, ...newRuns);
+  parentChildren.splice(runIndex, 1, ...newRuns);
 
   return result;
 }
@@ -148,9 +193,7 @@ export function splitRunsForMatch(
   }
 
   // Now collect all matched runs in order
-  // After splitting, we need to re-find the runs in the paragraph
-  const children = getChildren(paragraphNode);
-
+  // After splitting, we need to re-find the runs
   for (let i = 0; i < ranges.length; i++) {
     const range = ranges[i]!;
     const result = results.find((r) => r.index === i);
@@ -159,8 +202,9 @@ export function splitRunsForMatch(
       matchedRuns.push(result.split.matched);
     } else {
       // Middle run or already-aligned run: use original xmlRef
-      // But we need to find it in the children since splits may have shifted indices
-      if (children.includes(range.run.xmlRef)) {
+      // Check the run still exists in its parent (splits may have shifted)
+      const parentChildren = findRunParentChildren(paragraphNode, range.run.xmlRef);
+      if (parentChildren && parentChildren.includes(range.run.xmlRef)) {
         matchedRuns.push(range.run.xmlRef);
       }
     }
@@ -184,11 +228,11 @@ function createRunWithText(
   }
 
   // Create w:t element with text
-  const textNode = { "#text": text } as unknown as FXPNode;
+  const textNode = { "#text": escapeXmlText(text) } as unknown as FXPNode;
   const wtNode: FXPNode = { "w:t": [textNode] };
 
   // Add xml:space="preserve" if text has leading/trailing whitespace
-  if (text !== text.trim() || text.includes("  ")) {
+  if (needsSpacePreserve(text)) {
     setAttr(wtNode, "xml:space", "preserve");
   }
 

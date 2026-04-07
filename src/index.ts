@@ -46,6 +46,11 @@ import { serializeXml } from "./xml/serializer.js";
 import { normalizeDocument } from "./normalizer/document.js";
 import { applyPatches } from "./patches/engine.js";
 import { project, type JsonProjection } from "./projection/llm.js";
+import {
+  findParagraphById as _findParagraphById,
+  findTableById as _findTableById,
+  validatePatch as _validatePatch,
+} from "./patches/validator.js";
 
 /**
  * The main entry point for docxtor.
@@ -73,7 +78,7 @@ export class Docxtor {
    */
   static async load(
     input: Buffer | ArrayBuffer | Uint8Array | string,
-    _options?: LoadOptions,
+    options?: LoadOptions,
   ): Promise<Docxtor> {
     let buffer: Buffer | ArrayBuffer | Uint8Array;
 
@@ -84,7 +89,7 @@ export class Docxtor {
     }
 
     const zipEntries = await readDocx(buffer);
-    const doc = normalizeDocument(zipEntries);
+    const doc = normalizeDocument(zipEntries, options);
 
     return new Docxtor(zipEntries, doc);
   }
@@ -210,6 +215,30 @@ export class Docxtor {
   getFooters(): Map<string, HeaderFooter> {
     return this.doc.footers;
   }
+
+  /**
+   * Find a paragraph by its ID anywhere in the document
+   * (body, tables, headers, footers, nested tables).
+   */
+  findParagraphById(id: string): NormalizedParagraph | undefined {
+    return _findParagraphById(id, this.doc);
+  }
+
+  /**
+   * Find a table by its ID anywhere in the document body
+   * (including nested tables).
+   */
+  findTableById(id: string): NormalizedTable | undefined {
+    return _findTableById(id, this.doc);
+  }
+
+  /**
+   * Validate patches without applying them.
+   * Returns validation results for each patch.
+   */
+  validatePatches(patches: Patch[]): { valid: boolean; error?: string }[] {
+    return patches.map((patch) => _validatePatch(patch, this.doc));
+  }
 }
 
 // Re-export types
@@ -247,3 +276,5 @@ export { normalizeDocument } from "./normalizer/document.js";
 export { applyPatches } from "./patches/engine.js";
 export { project, projectToJson, projectToMarkdown } from "./projection/llm.js";
 export type { JsonProjection } from "./projection/llm.js";
+export { validatePatch, findParagraphById, findTableById } from "./patches/validator.js";
+export type { ValidationResult } from "./patches/validator.js";

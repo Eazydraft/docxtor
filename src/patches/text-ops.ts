@@ -26,8 +26,28 @@ import {
   removeChild,
   getRunText,
   findTextNode,
+  getTagName,
   setAttr,
+  escapeXmlText,
+  needsSpacePreserve,
 } from "../xml/helpers.js";
+
+/**
+ * Find the parent node that directly contains a run, and remove the run.
+ * Handles runs that are direct children of w:p or nested inside w:hyperlink.
+ */
+function removeRunFromParagraph(paragraphNode: FXPNode, runNode: FXPNode): void {
+  // Try direct removal first
+  if (removeChild(paragraphNode, runNode)) return;
+
+  // Try inside hyperlink elements
+  const children = getChildren(paragraphNode);
+  for (const child of children) {
+    if (getTagName(child) === "w:hyperlink") {
+      if (removeChild(child, runNode)) return;
+    }
+  }
+}
 
 /**
  * Execute a replace_text patch on a paragraph.
@@ -78,7 +98,7 @@ export function executeReplaceText(
 
     // Remove the remaining matched runs (they're now empty / redundant)
     for (let i = 1; i < matchedRuns.length; i++) {
-      removeChild(paragraph.xmlRef, matchedRuns[i]!);
+      removeRunFromParagraph(paragraph.xmlRef, matchedRuns[i]!);
     }
   }
 }
@@ -170,8 +190,19 @@ export function executeDeleteText(
 /**
  * Set the text content of a w:r run node.
  * Finds or creates the w:t element and sets its text.
+ * Escapes XML special characters and manages xml:space="preserve".
+ *
+ * If the text contains newlines (\n), they are converted to w:br
+ * (soft line break) elements within the run. This allows replacement
+ * text to contain line breaks.
  */
 function setRunText(runNode: FXPNode, text: string): void {
+  if (text.includes("\n")) {
+    // Multi-line: rebuild the run's content children with w:t/w:br pairs
+    setRunTextWithBreaks(runNode, text);
+    return;
+  }
+
   const wtNode = findTextNode(runNode);
   if (wtNode) {
     const tChildren = (wtNode as Record<string, unknown>)["w:t"];
@@ -183,24 +214,57 @@ function setRunText(runNode: FXPNode, text: string): void {
       if (textNode) {
         setTextContent(textNode as FXPNode, text);
       } else {
-        tChildren.push({ "#text": text });
+        tChildren.push({ "#text": escapeXmlText(text) });
       }
     }
 
     // Update xml:space="preserve" if needed
-    if (text !== text.trim() || text.includes("  ")) {
+    if (needsSpacePreserve(text)) {
       setAttr(wtNode, "xml:space", "preserve");
     }
   } else {
     // No w:t exists — create one
     const children = getChildren(runNode);
-    const newWt: FXPNode = { "w:t": [{ "#text": text } as unknown as FXPNode] };
-    if (text !== text.trim() || text.includes("  ")) {
+    const newWt: FXPNode = {
+      "w:t": [{ "#text": escapeXmlText(text) } as unknown as FXPNode],
+    };
+    if (needsSpacePreserve(text)) {
       setAttr(newWt, "xml:space", "preserve");
     }
     children.push(newWt);
   }
+}
 
-  // If text is empty, remove the run entirely? No — let the caller decide.
-  // Empty runs are valid XML, and the caller may want to keep formatting.
+/**
+ * Replace a run's text content with text containing line breaks.
+ *
+ * Splits text on \n and interleaves w:t and w:br elements.
+ * Preserves the run's w:rPr formatting.
+ */
+function setRunTextWithBreaks(runNode: FXPNode, text: string): void {
+  const children = getChildren(runNode);
+
+  // Keep w:rPr (formatting), remove everything else (w:t, w:br, etc.)
+  const rPrNodes = children.filter((c) => "w:rPr" in c);
+  children.length = 0;
+  children.push(...rPrNodes);
+
+  const segments = text.split("\n");
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i]!;
+    if (seg.length > 0 || i === 0) {
+      // Add w:t element for this segment
+      const wt: FXPNode = {
+        "w:t": [{ "#text": escapeXmlText(seg) } as unknown as FXPNode],
+      };
+      if (needsSpacePreserve(seg)) {
+        setAttr(wt, "xml:space", "preserve");
+      }
+      children.push(wt);
+    }
+    // Add w:br between segments (not after the last one)
+    if (i < segments.length - 1) {
+      children.push({ "w:br": [] as FXPNode[] });
+    }
+  }
 }

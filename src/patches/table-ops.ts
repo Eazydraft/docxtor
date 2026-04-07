@@ -21,6 +21,8 @@ import {
   insertAfter,
   removeChild,
   findChild,
+  escapeXmlText,
+  needsSpacePreserve,
 } from "../xml/helpers.js";
 import { executeReplaceText } from "./text-ops.js";
 
@@ -78,10 +80,15 @@ export function executeAddTableRow(
       }
 
       // Add a new run with the cell text
+      const wtNode: Record<string, unknown> = {
+        "w:t": [{ "#text": escapeXmlText(cellText) } as any],
+      };
+      if (needsSpacePreserve(cellText)) {
+        if (!wtNode[":@"]) wtNode[":@"] = {};
+        (wtNode[":@"] as Record<string, string>)["@_xml:space"] = "preserve";
+      }
       const newRun = {
-        "w:r": [
-          { "w:t": [{ "#text": cellText } as any] } as any,
-        ],
+        "w:r": [wtNode as any],
       };
       pChildren.push(newRun);
     }

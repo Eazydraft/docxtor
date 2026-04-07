@@ -253,6 +253,93 @@ export async function createSplitRunDocx(): Promise<Buffer> {
   return buildDocx({ documentXml });
 }
 
+/**
+ * Create a DOCX with hyperlinks in a paragraph.
+ *
+ * Structure: "Visit our website for details."
+ * Where "our website" is a hyperlink with r:id="rId10".
+ */
+export async function createHyperlinkDocx(): Promise<Buffer> {
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:t xml:space="preserve">Visit </w:t>
+      </w:r>
+      <w:hyperlink r:id="rId10">
+        <w:r>
+          <w:rPr><w:color w:val="0000FF"/><w:u w:val="single"/></w:rPr>
+          <w:t>our website</w:t>
+        </w:r>
+      </w:hyperlink>
+      <w:r>
+        <w:t xml:space="preserve"> for details.</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>`;
+
+  return buildDocx({ documentXml });
+}
+
+/**
+ * Create a DOCX with a nested table (table inside a table cell).
+ */
+export async function createNestedTableDocx(): Promise<Buffer> {
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:tbl>
+      <w:tblPr>
+        <w:tblStyle w:val="TableGrid"/>
+      </w:tblPr>
+      <w:tr>
+        <w:tc>
+          <w:p>
+            <w:r>
+              <w:t>Outer cell text</w:t>
+            </w:r>
+          </w:p>
+          <w:tbl>
+            <w:tblPr>
+              <w:tblStyle w:val="TableGrid"/>
+            </w:tblPr>
+            <w:tr>
+              <w:tc>
+                <w:p>
+                  <w:r>
+                    <w:t>Inner cell A</w:t>
+                  </w:r>
+                </w:p>
+              </w:tc>
+              <w:tc>
+                <w:p>
+                  <w:r>
+                    <w:t>Inner cell B</w:t>
+                  </w:r>
+                </w:p>
+              </w:tc>
+            </w:tr>
+          </w:tbl>
+        </w:tc>
+        <w:tc>
+          <w:p>
+            <w:r>
+              <w:t>Regular cell</w:t>
+            </w:r>
+          </w:p>
+        </w:tc>
+      </w:tr>
+    </w:tbl>
+  </w:body>
+</w:document>`;
+
+  return buildDocx({ documentXml });
+}
+
 // =============================================================================
 // Internal helpers
 // =============================================================================

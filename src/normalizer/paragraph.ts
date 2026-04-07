@@ -9,6 +9,11 @@
  * - Captured formatting
  *
  * Patches use these mappings to find the right XML nodes to mutate.
+ *
+ * Hyperlink support: w:hyperlink elements wrap w:r runs. We collect
+ * runs from both direct children and from inside w:hyperlink wrappers,
+ * so hyperlink text participates in the paragraph's normalized text
+ * and can be targeted by patches.
  */
 
 import type {
@@ -23,10 +28,33 @@ import {
   findChildren,
   getAttr,
   getChildren,
+  getTagName,
   getRunText,
   findTextNode,
   isTag,
 } from "../xml/helpers.js";
+
+/**
+ * Collect all w:r run nodes from a paragraph, including those nested
+ * inside w:hyperlink elements. Preserves document order.
+ */
+function collectRuns(paragraphNode: FXPNode): FXPNode[] {
+  const children = getChildren(paragraphNode);
+  const runs: FXPNode[] = [];
+
+  for (const child of children) {
+    const tag = getTagName(child);
+    if (tag === "w:r") {
+      runs.push(child);
+    } else if (tag === "w:hyperlink") {
+      // Collect runs inside the hyperlink
+      const hyperlinkRuns = findChildren(child, "w:r");
+      runs.push(...hyperlinkRuns);
+    }
+  }
+
+  return runs;
+}
 
 /**
  * Normalize a single w:p FXP node into a NormalizedParagraph.
@@ -38,7 +66,7 @@ export function normalizeParagraph(
   paragraphNode: FXPNode,
   id: string,
 ): NormalizedParagraph {
-  const runs = findChildren(paragraphNode, "w:r");
+  const runs = collectRuns(paragraphNode);
   const runMappings: RunMapping[] = [];
   let offset = 0;
 
