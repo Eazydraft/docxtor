@@ -15,18 +15,10 @@
  *   /quit          — save and exit
  *
  * Anything else is sent to the LLM as an editing instruction.
- *
- * Architecture:
- *   The LLM receives a compact projection (truncated to ~80 chars per
- *   paragraph) injected fresh each turn — never accumulated in history.
- *   It calls `get_paragraphs` to fetch full text of specific paragraphs,
- *   then `apply_patches` to edit. Conversation history stores only the
- *   user instructions and edit summaries, keeping token usage bounded.
  */
 
 import * as readline from "node:readline";
 import OpenAI from "openai";
-import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import { Docxtor } from "../src/index.js";
 import type { Patch, PatchResult } from "../src/index.js";
 
@@ -35,115 +27,41 @@ import type { Patch, PatchResult } from "../src/index.js";
 // =============================================================================
 
 const MODEL = process.env.OPENROUTER_MODEL ?? "openai/gpt-4o";
-const COMPACT_TEXT_LENGTH = 80;
-/** Max number of prior turns to keep in conversation history. */
-const MAX_HISTORY_TURNS = 10;
 
-const TOOLS: ChatCompletionTool[] = [
-  {
-    type: "function",
-    function: {
-      name: "get_paragraphs",
-      description:
-        "Fetch the full untruncated text of one or more paragraphs by their IDs. " +
-        "Use this before writing patches so you can see the exact text to match against. " +
-        "You can also pass table IDs to get all cell paragraph texts.",
-      parameters: {
-        type: "object",
-        properties: {
-          ids: {
-            type: "array",
-            items: { type: "string" },
-            description:
-              'Array of paragraph or table IDs to fetch, e.g. ["p5", "p17", "tbl0.r1.c0.p0"]',
-          },
-        },
-        required: ["ids"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "apply_patches",
-      description:
-        "Apply an array of patches to the document. Call this once you have the full " +
-        "text of relevant paragraphs and are ready to make edits. Include an explanation field.",
-      parameters: {
-        type: "object",
-        properties: {
-          explanation: {
-            type: "string",
-            description: "Brief description of what you're changing and why",
-          },
-          patches: {
-            type: "array",
-            description: "Array of patch objects to apply",
-            items: {
-              type: "object",
-              properties: {
-                type: {
-                  type: "string",
-                  enum: [
-                    "replace_text",
-                    "insert_text",
-                    "delete_text",
-                    "replace_cell_text",
-                    "add_table_row",
-                    "delete_table_row",
-                  ],
-                },
-                target: { type: "string", description: "Paragraph or table ID" },
-                find: { type: "string", description: "Exact substring to find" },
-                replace: { type: "string", description: "Replacement text" },
-                position: { type: "string", enum: ["before", "after"] },
-                anchor: { type: "string", description: "Anchor text for insert_text" },
-                text: { type: "string", description: "Text to insert" },
-                occurrence: { type: "number", description: "1-based occurrence (default: 1)" },
-                afterRow: { type: "number", description: "Row index to insert after (-1 for beginning)" },
-                row: { type: "number", description: "Row index to delete (0-based)" },
-                cells: { type: "array", items: { type: "string" }, description: "Cell texts for new row" },
-              },
-              required: ["type", "target"],
-            },
-          },
-        },
-        required: ["explanation", "patches"],
-      },
-    },
-  },
-];
+const SYSTEM_PROMPT = `You are a precise document editor. You receive a DOCX document as a structured projection and the user asks you to make edits.
 
-const SYSTEM_PROMPT = `You are a precise document editor. You will receive:
-1. A compact projection of the DOCX document (each paragraph truncated to ~${COMPACT_TEXT_LENGTH} chars)
-2. The user's editing instruction
-
-You have two tools:
-
-1. **get_paragraphs** — Fetch the full untruncated text of paragraphs by ID. ALWAYS call this before writing patches so you can see the exact text to use in "find" fields.
-
-2. **apply_patches** — Apply edits to the document. Call this after you've fetched and reviewed the relevant paragraph texts.
+You MUST respond with a JSON object with two fields:
+- "explanation": a brief description of what you're changing and why
+- "patches": an array of patch objects to apply
 
 Patch types:
-- replace_text: { type, target, find, replace, occurrence? }
-- insert_text: { type, target, position ("before"|"after"), anchor, text, occurrence? }
-- delete_text: { type, target, find, occurrence? }
-- replace_cell_text: { type, target, find, replace, occurrence? }
-- add_table_row: { type, target, afterRow, cells }
-- delete_table_row: { type, target, row }
+
+1. replace_text — Replace a substring in a paragraph.
+   { "type": "replace_text", "target": "<paragraph_id>", "find": "<exact_text>", "replace": "<new_text>", "occurrence": 1 }
+
+2. insert_text — Insert text before or after an anchor string.
+   { "type": "insert_text", "target": "<paragraph_id>", "position": "before"|"after", "anchor": "<exact_text>", "text": "<text_to_insert>", "occurrence": 1 }
+
+3. delete_text — Delete a substring from a paragraph.
+   { "type": "delete_text", "target": "<paragraph_id>", "find": "<exact_text>", "occurrence": 1 }
+
+4. replace_cell_text — Replace text in a table cell paragraph.
+   { "type": "replace_cell_text", "target": "<cell_paragraph_id>", "find": "<exact_text>", "replace": "<new_text>", "occurrence": 1 }
+
+5. add_table_row — Add a row to a table.
+   { "type": "add_table_row", "target": "<table_id>", "afterRow": <row_index>, "cells": ["cell1", "cell2", ...] }
+
+6. delete_table_row — Delete a row from a table.
+   { "type": "delete_table_row", "target": "<table_id>", "row": <row_index> }
 
 Rules:
-- "find" / "anchor" must be an EXACT substring copied character-for-character from the full paragraph text.
-- "occurrence" is 1-based, default 1.
-- Paragraph IDs: p0, p1, tbl0.r0.c0.p0, hdr.default.p0, etc.
-- Table IDs: tbl0, tbl1, etc.
-- When replacing short words that could be substrings of other words, include surrounding context in "find" and "replace" (e.g. " the " not "the").
-- If the user asks for something patches can't do, explain why in apply_patches with an empty patches array.
-
-Workflow for each user request:
-1. Read the compact projection to identify relevant paragraph IDs
-2. Call get_paragraphs with those IDs to get full text
-3. Call apply_patches with precise patches based on the full text`;
+- "find" must be an EXACT substring of the paragraph text. Copy it character-for-character from the document.
+- "occurrence" is 1-based. Default is 1 (first occurrence). Use higher numbers only if there are duplicates within the same paragraph.
+- Paragraph IDs look like: p0, p1, tbl0.r0.c0.p0, hdr.default.p0, etc.
+- Table IDs look like: tbl0, tbl1, etc.
+- When replacing text that could be a substring of other words, include surrounding characters in "find" and "replace" to disambiguate (e.g., use " the " instead of "the" to avoid matching "other").
+- If the user asks for something you can't do with patches (e.g., add images), explain that in "explanation" and return an empty "patches" array.
+- ALWAYS respond with valid JSON. No markdown fences, no extra text.`;
 
 // =============================================================================
 // State
@@ -157,30 +75,17 @@ interface EditBatch {
   snapshotBuffer: Buffer;
 }
 
-/**
- * A lightweight record of a past turn for conversation context.
- * Does NOT contain the projection — just the user instruction and outcome.
- */
-interface TurnRecord {
-  instruction: string;
-  outcome: string; // short summary like "Replaced 3 instances of 'foo' with 'bar' in p5, p12, p17"
-}
-
 let doc: Docxtor;
 let inputPath: string;
 let defaultOutputPath: string;
 const history: EditBatch[] = [];
-const pastTurns: TurnRecord[] = [];
+const conversationMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
 
 // =============================================================================
 // Helpers
 // =============================================================================
 
-function getCompactProjection(): string {
-  return doc.project("markdown", { maxTextLength: COMPACT_TEXT_LENGTH });
-}
-
-function getFullProjection(): string {
+function getProjection(): string {
   return doc.project("markdown");
 }
 
@@ -239,233 +144,37 @@ function truncate(s: string, max: number): string {
 }
 
 // =============================================================================
-// Tool handlers
-// =============================================================================
-
-function handleGetParagraphs(ids: string[]): string {
-  const results: Record<string, string> = {};
-  for (const id of ids) {
-    const para = doc.findParagraphById(id);
-    if (para) {
-      results[id] = para.text;
-      continue;
-    }
-    const table = doc.findTableById(id);
-    if (table) {
-      for (const row of table.rows) {
-        for (const cell of row.cells) {
-          for (const p of cell.paragraphs) {
-            results[p.id] = p.text;
-          }
-        }
-      }
-      continue;
-    }
-    results[id] = "(not found)";
-  }
-  return JSON.stringify(results, null, 2);
-}
-
-function handleApplyPatches(
-  explanation: string,
-  patches: Patch[],
-  snapshotBuffer: Buffer,
-  userInstruction: string,
-): { results: PatchResult[]; succeeded: number; failed: number } {
-  const validations = doc.validatePatches(patches);
-  const invalid = validations.filter((v) => !v.valid);
-  if (invalid.length > 0) {
-    console.log(yellow(`\n  ${invalid.length} patch(es) failed validation:`));
-    for (let i = 0; i < validations.length; i++) {
-      if (!validations[i]!.valid) {
-        console.log(red(`    - patch ${i + 1}: ${validations[i]!.error}`));
-      }
-    }
-  }
-
-  const results = doc.applyPatches(patches);
-  const succeeded = results.filter((r) => r.success).length;
-  const failed = results.filter((r) => !r.success).length;
-
-  history.push({
-    instruction: userInstruction,
-    explanation,
-    patches,
-    results,
-    snapshotBuffer,
-  });
-
-  return { results, succeeded, failed };
-}
-
-// =============================================================================
-// Message construction
-// =============================================================================
-
-/**
- * Build the messages array for an API call.
- *
- * Structure:
- *   1. System prompt (static)
- *   2. Past turn summaries (lightweight, capped at MAX_HISTORY_TURNS)
- *   3. Current turn: projection + user instruction (injected fresh, not stored)
- *   4. Any tool call/response messages from the current turn's tool loop
- */
-function buildMessages(
-  userInstruction: string,
-  currentTurnMessages: ChatCompletionMessageParam[],
-): ChatCompletionMessageParam[] {
-  const messages: ChatCompletionMessageParam[] = [
-    { role: "system", content: SYSTEM_PROMPT },
-  ];
-
-  // Add lightweight summaries of recent turns for conversational context
-  const recentTurns = pastTurns.slice(-MAX_HISTORY_TURNS);
-  if (recentTurns.length > 0) {
-    const summaryLines = recentTurns.map(
-      (t) => `- User asked: "${t.instruction}" → ${t.outcome}`,
-    );
-    messages.push({
-      role: "user",
-      content: `Previous edits in this session:\n${summaryLines.join("\n")}`,
-    });
-    messages.push({
-      role: "assistant",
-      content: "Understood. I have context on the prior edits. What would you like to change next?",
-    });
-  }
-
-  // Current turn: fresh projection + instruction
-  const projection = getCompactProjection();
-  messages.push({
-    role: "user",
-    content: `Current document (compact, each paragraph truncated to ~${COMPACT_TEXT_LENGTH} chars):\n\n${projection}\n\n---\n\nUser instruction: ${userInstruction}`,
-  });
-
-  // Any in-progress tool call messages from the current turn
-  messages.push(...currentTurnMessages);
-
-  return messages;
-}
-
-// =============================================================================
-// LLM with tool loop
+// LLM
 // =============================================================================
 
 async function callLLM(
   client: OpenAI,
   userMessage: string,
-): Promise<void> {
-  const snapshotBuffer = await doc.toBuffer();
-  let editApplied = false;
-  let editExplanation = "";
-  let editSummary = "";
+): Promise<{ explanation: string; patches: Patch[] }> {
+  // Always include the latest projection in the user message
+  const projection = getProjection();
+  const fullMessage = `Current document:\n\n${projection}\n\n---\n\nUser instruction: ${userMessage}`;
 
-  // Messages accumulated within this single turn's tool loop only
-  const turnMessages: ChatCompletionMessageParam[] = [];
+  conversationMessages.push({ role: "user", content: fullMessage });
 
-  const MAX_ROUNDS = 10;
-  for (let round = 0; round < MAX_ROUNDS; round++) {
-    const messages = buildMessages(userMessage, turnMessages);
-
-    const response = await client.chat.completions.create({
-      model: MODEL,
-      messages,
-      tools: TOOLS,
-      temperature: 0,
-    });
-
-    const choice = response.choices[0]!;
-    const message = choice.message;
-
-    // Add to current turn's messages (NOT to persistent history)
-    turnMessages.push(message);
-
-    if (message.tool_calls && message.tool_calls.length > 0) {
-      for (const toolCall of message.tool_calls) {
-        const args = JSON.parse(toolCall.function.arguments);
-
-        if (toolCall.function.name === "get_paragraphs") {
-          const ids: string[] = args.ids ?? [];
-          process.stdout.write(dim(`  Fetching ${ids.length} paragraph(s): ${ids.join(", ")}\n`));
-          const result = handleGetParagraphs(ids);
-
-          turnMessages.push({
-            role: "tool",
-            tool_call_id: toolCall.id,
-            content: result,
-          });
-        } else if (toolCall.function.name === "apply_patches") {
-          const explanation: string = args.explanation ?? "";
-          const patches: Patch[] = args.patches ?? [];
-
-          console.log(`\n${bold("Agent:")} ${explanation}`);
-
-          if (patches.length === 0) {
-            console.log(dim("  (no patches to apply)"));
-            editExplanation = explanation;
-            editSummary = "No patches needed";
-            turnMessages.push({
-              role: "tool",
-              tool_call_id: toolCall.id,
-              content: JSON.stringify({ success: true, applied: 0 }),
-            });
-          } else {
-            const { results, succeeded, failed } = handleApplyPatches(
-              explanation,
-              patches,
-              snapshotBuffer,
-              userMessage,
-            );
-
-            console.log();
-            printPatches(results);
-            console.log();
-
-            if (failed > 0) {
-              console.log(yellow(`${succeeded}/${results.length} patches applied (${failed} failed)`));
-            } else {
-              console.log(green(`${succeeded}/${results.length} patches applied`));
-            }
-
-            editApplied = true;
-            editExplanation = explanation;
-
-            const targets = [...new Set(results.filter((r) => r.success).map((r) => r.patch.target))];
-            editSummary = `${succeeded}/${results.length} patches applied (${explanation}) in ${targets.join(", ")}`;
-
-            const summary = results.map((r) => ({
-              target: r.patch.target,
-              type: r.patch.type,
-              success: r.success,
-              error: r.error,
-            }));
-            turnMessages.push({
-              role: "tool",
-              tool_call_id: toolCall.id,
-              content: JSON.stringify({ success: true, applied: succeeded, failed, details: summary }),
-            });
-          }
-        }
-      }
-      continue;
-    }
-
-    // Plain text response (done with tools)
-    if (message.content) {
-      if (!editApplied) {
-        console.log(`\n${bold("Agent:")} ${message.content}`);
-        editSummary = editSummary || message.content.slice(0, 120);
-      }
-    }
-    break;
-  }
-
-  // Record a lightweight summary for future turns
-  pastTurns.push({
-    instruction: userMessage,
-    outcome: editSummary || editExplanation || "(no changes)",
+  const response = await client.chat.completions.create({
+    model: MODEL,
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      ...conversationMessages,
+    ],
+    temperature: 0,
+    response_format: { type: "json_object" },
   });
+
+  const content = response.choices[0]?.message?.content ?? "{}";
+  conversationMessages.push({ role: "assistant", content });
+
+  const parsed = JSON.parse(content);
+  return {
+    explanation: parsed.explanation ?? "",
+    patches: Array.isArray(parsed.patches) ? parsed.patches : [],
+  };
 }
 
 // =============================================================================
@@ -480,7 +189,7 @@ async function handleSave(args: string): Promise<void> {
 
 function handleShow(): void {
   console.log();
-  console.log(getFullProjection());
+  console.log(getProjection());
   console.log();
 }
 
@@ -490,11 +199,11 @@ async function handleUndo(): Promise<void> {
     return;
   }
   const last = history.pop()!;
+  // Reload from snapshot
   doc = await Docxtor.load(last.snapshotBuffer);
-  // Also remove the corresponding turn record
-  if (pastTurns.length > 0) {
-    pastTurns.pop();
-  }
+  // Also pop the conversation pair (user + assistant)
+  conversationMessages.pop();
+  conversationMessages.pop();
   console.log(green(`Undid: ${last.explanation}`));
 }
 
@@ -526,6 +235,7 @@ async function main(): Promise<void> {
   inputPath = args[0]!;
   defaultOutputPath = inputPath.replace(/\.docx$/i, ".edited.docx");
 
+  // Validate API key
   if (!process.env.OPENROUTER_API_KEY) {
     console.error(red("Error: OPENROUTER_API_KEY environment variable is not set."));
     process.exit(1);
@@ -536,6 +246,7 @@ async function main(): Promise<void> {
     apiKey: process.env.OPENROUTER_API_KEY,
   });
 
+  // Load document
   console.log(dim(`Loading ${inputPath}...`));
   doc = await Docxtor.load(inputPath);
 
@@ -545,9 +256,6 @@ async function main(): Promise<void> {
   const headerCount = doc.getHeaders().size;
   const footerCount = doc.getFooters().size;
 
-  const compactProjection = getCompactProjection();
-  const estimatedTokens = Math.ceil(compactProjection.length / 4);
-
   console.log();
   console.log(bold("docxtor") + dim(" interactive editor"));
   console.log(
@@ -556,12 +264,12 @@ async function main(): Promise<void> {
     ),
   );
   console.log(dim(`Model: ${MODEL}`));
-  console.log(dim(`Compact projection: ~${estimatedTokens} tokens`));
   console.log();
   console.log(dim("Commands: /save [path]  /show  /undo  /history  /quit"));
   console.log(dim("Type an editing instruction to get started."));
   console.log();
 
+  // REPL
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -576,6 +284,7 @@ async function main(): Promise<void> {
       }
 
       try {
+        // Handle commands
         if (trimmed.startsWith("/")) {
           const [cmd, ...rest] = trimmed.split(" ");
           const cmdArgs = rest.join(" ");
@@ -608,9 +317,57 @@ async function main(): Promise<void> {
           return;
         }
 
+        // Take a snapshot before edits (for undo)
+        const snapshotBuffer = await doc.toBuffer();
+
+        // Call LLM
         process.stdout.write(dim("Thinking...\r"));
-        await callLLM(client, trimmed);
+        const { explanation, patches } = await callLLM(client, trimmed);
+        // Clear "Thinking..."
         process.stdout.write("            \r");
+
+        console.log(`\n${bold("Agent:")} ${explanation}`);
+
+        if (patches.length === 0) {
+          console.log(dim("  (no patches to apply)"));
+        } else {
+          // Validate first
+          const validations = doc.validatePatches(patches);
+          const invalid = validations.filter((v) => !v.valid);
+          if (invalid.length > 0) {
+            console.log(yellow(`\n  ${invalid.length} patch(es) failed validation:`));
+            for (let i = 0; i < validations.length; i++) {
+              if (!validations[i]!.valid) {
+                console.log(red(`    - patch ${i + 1}: ${validations[i]!.error}`));
+              }
+            }
+          }
+
+          // Apply
+          const results = doc.applyPatches(patches);
+          const succeeded = results.filter((r) => r.success).length;
+          const failed = results.filter((r) => !r.success).length;
+
+          console.log();
+          printPatches(results);
+          console.log();
+
+          if (failed > 0) {
+            console.log(yellow(`${succeeded}/${results.length} patches applied (${failed} failed)`));
+          } else {
+            console.log(green(`${succeeded}/${results.length} patches applied`));
+          }
+
+          // Record in history
+          history.push({
+            instruction: trimmed,
+            explanation,
+            patches,
+            results,
+            snapshotBuffer,
+          });
+        }
+
         console.log();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

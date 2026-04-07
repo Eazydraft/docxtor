@@ -206,15 +206,14 @@ export function projectToMarkdown(
 ): string {
   const includeHeadersFooters = options.includeHeadersFooters ?? true;
   const includeTables = options.includeTables ?? true;
-  const maxLen = options.maxTextLength;
   const lines: string[] = [];
 
   for (const element of doc.body) {
     if (element.kind === "paragraph") {
-      lines.push(formatParagraphMarkdown(element, maxLen));
+      lines.push(formatParagraphMarkdown(element));
     } else if (element.kind === "table" && includeTables) {
       lines.push(""); // blank line before table
-      lines.push(...formatTableMarkdown(element, maxLen));
+      lines.push(...formatTableMarkdown(element));
       lines.push(""); // blank line after table
     }
   }
@@ -224,7 +223,7 @@ export function projectToMarkdown(
       lines.push("");
       lines.push(`--- Header (${header.variant}) ---`);
       for (const para of header.paragraphs) {
-        lines.push(formatParagraphMarkdown(para, maxLen));
+        lines.push(formatParagraphMarkdown(para));
       }
     }
 
@@ -232,7 +231,7 @@ export function projectToMarkdown(
       lines.push("");
       lines.push(`--- Footer (${footer.variant}) ---`);
       for (const para of footer.paragraphs) {
-        lines.push(formatParagraphMarkdown(para, maxLen));
+        lines.push(formatParagraphMarkdown(para));
       }
     }
   }
@@ -240,25 +239,18 @@ export function projectToMarkdown(
   return lines.join("\n").trim();
 }
 
-function formatParagraphMarkdown(para: NormalizedParagraph, maxLen?: number): string {
+function formatParagraphMarkdown(para: NormalizedParagraph): string {
   const styleHint = para.style ? ` (${para.style})` : "";
   const listHint = para.listInfo ? ` [list L${para.listInfo.level}]` : "";
-  let text = para.text;
-  if (maxLen !== undefined && text.length > maxLen) {
-    text = text.slice(0, maxLen) + "...";
-  }
-  return `[${para.id}]${styleHint}${listHint} ${text}`;
+  return `[${para.id}]${styleHint}${listHint} ${para.text}`;
 }
 
-function formatTableMarkdown(table: NormalizedTable, maxLen?: number): string[] {
+function formatTableMarkdown(table: NormalizedTable): string[] {
   const lines: string[] = [];
 
   for (const row of table.rows) {
     const cells = row.cells.map((cell) => {
-      let text = cell.paragraphs.map((p) => p.text).join(" ");
-      if (maxLen !== undefined && text.length > maxLen) {
-        text = text.slice(0, maxLen) + "...";
-      }
+      const text = cell.paragraphs.map((p) => p.text).join(" ");
       const id = cell.paragraphs[0]?.id ?? `${table.id}.r${row.index}.c${cell.colIndex}.p0`;
       return `[${id}] ${text}`;
     });
