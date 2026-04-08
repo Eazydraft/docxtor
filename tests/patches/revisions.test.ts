@@ -1021,3 +1021,126 @@ describe("Docxtor class applyPatches with revisions", () => {
     expect(para.text).toBe("Hello Earth");
   });
 });
+
+// =============================================================================
+// Nested w:del inside containers (w:hyperlink, w:ins)
+// =============================================================================
+
+describe("nested w:del inside containers", () => {
+  it("should detect w:del revision marks inside a w:hyperlink", async () => {
+    // "Visit our website for details." — "our website" is inside w:hyperlink
+    const { createHyperlinkDocx } = await import("../fixtures/create-docx.js");
+    const buffer = await createHyperlinkDocx();
+    const entries = await readDocx(buffer);
+    const doc = normalizeDocument(entries);
+
+    // Delete "website" which is inside the hyperlink
+    const results = applyPatches(doc, [
+      { type: "delete_text", target: "p0", find: "website" },
+    ], REV_OPTIONS);
+
+    expect(results[0]!.success).toBe(true);
+
+    const para = doc.body[0] as NormalizedParagraph;
+    expect(para.text).toBe("Visit our  for details.");
+
+    // The revision should be captured even though w:del is inside w:hyperlink
+    expect(para.revisions).toBeDefined();
+    const delRevisions = para.revisions!.filter((r) => r.type === "delete");
+    expect(delRevisions.length).toBeGreaterThanOrEqual(1);
+    expect(delRevisions.some((r) => r.text === "website")).toBe(true);
+  });
+
+  it("should detect w:del revision marks inside a w:ins (delete after insert)", async () => {
+    const buffer = await createSimpleDocx("Hello World");
+    const entries = await readDocx(buffer);
+    const doc = normalizeDocument(entries);
+
+    // First, insert text (produces w:ins), then delete part of the original
+    // which shares a parent with the w:ins
+    const results = applyPatches(doc, [
+      { type: "replace_text", target: "p0", find: "World", replace: "Earth" },
+      // Now "Hello" is a plain run, "Earth" is inside w:ins, "World" is inside w:del
+      // Delete "Hello" — this puts a w:del at the paragraph level
+      { type: "delete_text", target: "p0", find: "Hello " },
+    ], REV_OPTIONS);
+
+    expect(results[0]!.success).toBe(true);
+    expect(results[1]!.success).toBe(true);
+
+    const para = doc.body[0] as NormalizedParagraph;
+    expect(para.text).toBe("Earth");
+
+    // Both deletions ("World" from replace, "Hello " from delete) should be captured
+    expect(para.revisions).toBeDefined();
+    const delRevisions = para.revisions!.filter((r) => r.type === "delete");
+    expect(delRevisions.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// =============================================================================
+// w:br preservation in revision-tracked run splitting
+// =============================================================================
+
+describe("w:br preservation in split runs", () => {
+  it("should emit w:br elements when splitting a run containing line breaks", async () => {
+    // Create a DOCX with a run containing a w:br
+    const { createLineBreakDocx } = await import("../fixtures/create-docx.js");
+    const buffer = await createLineBreakDocx();
+    const entries = await readDocx(buffer);
+    const doc = normalizeDocument(entries);
+
+    // The paragraph text should be "Hello\nWorld" (w:br → \n)
+    const para = doc.body[0] as NormalizedParagraph;
+    expect(para.text).toBe("Hello\nWorld");
+
+    // Insert text in the middle (between "Hel" and "lo\nWorld") to trigger a split
+    const results = applyPatches(doc, [
+      {
+        type: "insert_text",
+        target: "p0",
+        position: "after",
+        anchor: "Hello",
+        text: "!",
+      },
+    ], REV_OPTIONS);
+
+    expect(results[0]!.success).toBe(true);
+
+    const updatedPara = doc.body[0] as NormalizedParagraph;
+    expect(updatedPara.text).toBe("Hello!\nWorld");
+
+    // The XML should contain w:br, NOT a literal newline in w:t
+    const xml = getDocXml(doc);
+    expect(xml).toContain("w:br");
+    // Ensure no w:t contains a literal newline character
+    const tMatches = xml.match(/<w:t[^>]*>[^<]*\n[^<]*<\/w:t>/);
+    expect(tMatches).toBeNull();
+  });
+
+  it("should produce proper w:br when splitting mid-run at a line break boundary", async () => {
+    const { createLineBreakDocx } = await import("../fixtures/create-docx.js");
+    const buffer = await createLineBreakDocx();
+    const entries = await readDocx(buffer);
+    const doc = normalizeDocument(entries);
+
+    // Insert right before the newline (after "Hello", before "\n")
+    const results = applyPatches(doc, [
+      {
+        type: "insert_text",
+        target: "p0",
+        position: "before",
+        anchor: "\nWorld",
+        text: " Goodbye",
+      },
+    ], REV_OPTIONS);
+
+    expect(results[0]!.success).toBe(true);
+
+    const para = doc.body[0] as NormalizedParagraph;
+    expect(para.text).toBe("Hello Goodbye\nWorld");
+
+    const xml = getDocXml(doc);
+    expect(xml).toContain("w:br");
+  });
+});

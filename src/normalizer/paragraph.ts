@@ -337,29 +337,46 @@ function containsRun(node: FXPNode, runNode: FXPNode): boolean {
  * For each w:del, we need to figure out its position in the normalized text.
  * Since deleted runs are excluded from .text, the position is zero-width
  * and falls at the boundary where the deletion occurred.
+ *
+ * This walker recurses into containers (w:hyperlink, w:ins) to find
+ * w:del elements nested inside them — e.g., when a deletion occurs inside
+ * a hyperlink or inside a previous insertion.
  */
 function collectDelRevisionMarks(
   paragraphNode: FXPNode,
   runMappings: RunMapping[],
   revisions: RevisionMark[],
 ): void {
-  const children = getChildren(paragraphNode);
-  let currentTextOffset = 0;
+  // Build a constant-time lookup map: xmlRef → RunMapping
+  // Avoids O(n²) linear scans when walking many runs
+  const runMap = new Map<FXPNode, RunMapping>();
+  for (const mapping of runMappings) {
+    runMap.set(mapping.xmlRef, mapping);
+  }
 
-  // Walk children in order, tracking position
-  for (let i = 0; i < children.length; i++) {
-    const child = children[i]!;
+  walkForDeletions(getChildren(paragraphNode), runMap, revisions, 0);
+}
+
+/**
+ * Recursively walk children, advancing the text offset through runs,
+ * recording w:del revision marks, and recursing into containers.
+ *
+ * Returns the text offset after processing all children.
+ */
+function walkForDeletions(
+  children: FXPNode[],
+  runMap: Map<FXPNode, RunMapping>,
+  revisions: RevisionMark[],
+  offset: number,
+): number {
+  for (const child of children) {
     const tag = getTagName(child);
 
     if (tag === "w:r") {
-      // Find this run in mappings to advance the offset
-      const mapping = runMappings.find((m) => m.xmlRef === child);
+      const mapping = runMap.get(child);
       if (mapping) {
-        currentTextOffset = mapping.endOffset;
+        offset = mapping.endOffset;
       }
-    } else if (tag === "w:hyperlink" || tag === "w:ins") {
-      // Advance through contained runs
-      currentTextOffset = advanceThroughContainer(child, runMappings, currentTextOffset);
     } else if (tag === "w:del") {
       // Collect deleted text from this w:del
       const delText = getDeletedText(child);
@@ -367,31 +384,15 @@ function collectDelRevisionMarks(
         revisions.push({
           type: "delete",
           text: delText,
-          startOffset: currentTextOffset,
-          endOffset: currentTextOffset,
+          startOffset: offset,
+          endOffset: offset,
           author: getAttr(child, "w:author") ?? "",
           date: getAttr(child, "w:date") ?? "",
         });
       }
-    }
-  }
-}
-
-function advanceThroughContainer(
-  node: FXPNode,
-  runMappings: RunMapping[],
-  offset: number,
-): number {
-  const children = getChildren(node);
-  for (const child of children) {
-    const tag = getTagName(child);
-    if (tag === "w:r") {
-      const mapping = runMappings.find((m) => m.xmlRef === child);
-      if (mapping) {
-        offset = mapping.endOffset;
-      }
     } else if (tag === "w:hyperlink" || tag === "w:ins") {
-      offset = advanceThroughContainer(child, runMappings, offset);
+      // Recurse into containers — they may contain w:r, w:del, or further nesting
+      offset = walkForDeletions(getChildren(child), runMap, revisions, offset);
     }
   }
   return offset;

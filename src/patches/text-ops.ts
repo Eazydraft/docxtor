@@ -370,6 +370,11 @@ function executeInsertTextRevision(
 
 /**
  * Create a w:r run node with text and optional formatting (for splitting).
+ *
+ * Handles \n in text by emitting w:br elements (matching the behavior
+ * of getRunText which converts w:br → \n). Without this, splitting a
+ * run containing line breaks would produce literal \n in w:t instead
+ * of proper w:br elements.
  */
 function createRunWithTextAndFormatting(
   text: string,
@@ -379,12 +384,34 @@ function createRunWithTextAndFormatting(
   if (rPrNode) {
     children.push(cloneNode(rPrNode));
   }
-  const textNode = { "#text": escapeXmlText(text) } as unknown as FXPNode;
-  const wtNode: FXPNode = { "w:t": [textNode] };
-  if (needsSpacePreserve(text)) {
-    setAttr(wtNode, "xml:space", "preserve");
+
+  if (text.includes("\n")) {
+    // Multi-line: interleave w:t and w:br
+    const segments = text.split("\n");
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i]!;
+      if (seg.length > 0 || i === 0) {
+        const textNode = { "#text": escapeXmlText(seg) } as unknown as FXPNode;
+        const wtNode: FXPNode = { "w:t": [textNode] };
+        if (needsSpacePreserve(seg)) {
+          setAttr(wtNode, "xml:space", "preserve");
+        }
+        children.push(wtNode);
+      }
+      if (i < segments.length - 1) {
+        children.push({ "w:br": [] as FXPNode[] });
+      }
+    }
+  } else {
+    // Single line
+    const textNode = { "#text": escapeXmlText(text) } as unknown as FXPNode;
+    const wtNode: FXPNode = { "w:t": [textNode] };
+    if (needsSpacePreserve(text)) {
+      setAttr(wtNode, "xml:space", "preserve");
+    }
+    children.push(wtNode);
   }
-  children.push(wtNode);
+
   return { "w:r": children };
 }
 

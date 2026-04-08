@@ -511,3 +511,27 @@ function escapeXml(text: string): string {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
 }
+
+/**
+ * Create a DOCX with a single paragraph containing a w:br (line break).
+ *
+ * Structure: a single w:r with "Hello", w:br, "World"
+ * Normalized text: "Hello\nWorld"
+ */
+export async function createLineBreakDocx(): Promise<Buffer> {
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:t>Hello</w:t>
+        <w:br/>
+        <w:t>World</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>`;
+
+  return buildDocx({ documentXml });
+}

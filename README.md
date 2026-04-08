@@ -43,16 +43,17 @@ const markdown = doc.project("markdown");
 // ...
 
 // Apply patches
-const results = doc.applyPatches([
+const patches = [
   { type: "replace_text", target: "p1", find: "valid", replace: "enforceable" },
   { type: "insert_text", target: "p2", position: "after", anchor: "terms:", text: " and conditions:" },
   { type: "delete_text", target: "p5", find: "DRAFT - " },
   { type: "apply_formatting", target: "p1", find: "enforceable", formatting: { bold: true, color: "FF0000" } },
   { type: "apply_style", target: "p0", style: "Heading1" },
-]);
+];
+const results = doc.applyPatches(patches);
 
 // Or with tracked changes (produces w:ins/w:del markup that Word shows as redlines)
-const results = doc.applyPatches(patches, {
+const trackedResults = doc.applyPatches(patches, {
   trackRevisions: true,
   revisionAuthor: "AI Editor",
 });
@@ -482,7 +483,7 @@ pnpm build         # build ESM + CJS + DTS (tsup)
 pnpm lint          # type-check
 ```
 
-260 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style), revision tracking (tracked changes), integration flows, hyperlinks, entity escaping, newlines, nested tables, projection, and API surface.
+264 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style), revision tracking (tracked changes), integration flows, hyperlinks, entity escaping, newlines, nested tables, projection, and API surface.
 
 ## License
 
