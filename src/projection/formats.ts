@@ -8,6 +8,7 @@ import type {
   NormalizedDocument,
   NormalizedParagraph,
   NormalizedTable,
+  RevisionMark,
   RunFormatting,
   StyleInfo,
   ProjectionOptions,
@@ -23,6 +24,7 @@ interface JsonProjectionParagraph {
   style?: string;
   listLevel?: number;
   formatting?: RunFormatting[];
+  revisions?: RevisionMark[];
 }
 
 interface JsonProjectionTableCell {
@@ -61,14 +63,15 @@ export function projectToJson(
   const includeFormatting = options.includeFormatting ?? false;
   const includeHeadersFooters = options.includeHeadersFooters ?? true;
   const includeTables = options.includeTables ?? true;
+  const includeRevisions = options.includeRevisions ?? false;
 
   const body: (JsonProjectionParagraph | JsonProjectionTable)[] = [];
 
   for (const element of doc.body) {
     if (element.kind === "paragraph") {
-      body.push(projectParagraphToJson(element, includeFormatting));
+      body.push(projectParagraphToJson(element, includeFormatting, includeRevisions));
     } else if (element.kind === "table" && includeTables) {
-      body.push(projectTableToJson(element, includeFormatting));
+      body.push(projectTableToJson(element, includeFormatting, includeRevisions));
     }
   }
 
@@ -87,7 +90,7 @@ export function projectToJson(
           type: "header",
           variant: header.variant,
           paragraphs: header.paragraphs.map((p) =>
-            projectParagraphToJson(p, includeFormatting),
+            projectParagraphToJson(p, includeFormatting, includeRevisions),
           ),
         });
       }
@@ -99,7 +102,7 @@ export function projectToJson(
           type: "footer",
           variant: footer.variant,
           paragraphs: footer.paragraphs.map((p) =>
-            projectParagraphToJson(p, includeFormatting),
+            projectParagraphToJson(p, includeFormatting, includeRevisions),
           ),
         });
       }
@@ -112,6 +115,7 @@ export function projectToJson(
 function projectParagraphToJson(
   para: NormalizedParagraph,
   includeFormatting: boolean,
+  includeRevisions: boolean = false,
 ): JsonProjectionParagraph {
   const result: JsonProjectionParagraph = {
     id: para.id,
@@ -141,12 +145,17 @@ function projectParagraphToJson(
     });
   }
 
+  if (includeRevisions && para.revisions && para.revisions.length > 0) {
+    result.revisions = para.revisions;
+  }
+
   return result;
 }
 
 function projectTableToJson(
   table: NormalizedTable,
   includeFormatting: boolean = false,
+  includeRevisions: boolean = false,
 ): JsonProjectionTable {
   const result: JsonProjectionTable = {
     id: table.id,
@@ -160,7 +169,7 @@ function projectTableToJson(
         // Include individual paragraph details for multi-paragraph cells
         if (cell.paragraphs.length > 1) {
           cellResult.paragraphs = cell.paragraphs.map((p) =>
-            projectParagraphToJson(p, includeFormatting),
+            projectParagraphToJson(p, includeFormatting, includeRevisions),
           );
         }
         return cellResult;
@@ -173,7 +182,7 @@ function projectTableToJson(
   for (const row of table.rows) {
     for (const cell of row.cells) {
       for (const nested of cell.nestedTables) {
-        allNested.push(projectTableToJson(nested, includeFormatting));
+        allNested.push(projectTableToJson(nested, includeFormatting, includeRevisions));
       }
     }
   }
@@ -213,14 +222,15 @@ export function projectToMarkdown(
 ): string {
   const includeHeadersFooters = options.includeHeadersFooters ?? true;
   const includeTables = options.includeTables ?? true;
+  const includeRevisions = options.includeRevisions ?? false;
   const lines: string[] = [];
 
   for (const element of doc.body) {
     if (element.kind === "paragraph") {
-      lines.push(formatParagraphMarkdown(element));
+      lines.push(formatParagraphMarkdown(element, includeRevisions));
     } else if (element.kind === "table" && includeTables) {
       lines.push(""); // blank line before table
-      lines.push(...formatTableMarkdown(element));
+      lines.push(...formatTableMarkdown(element, includeRevisions));
       lines.push(""); // blank line after table
     }
   }
@@ -230,7 +240,7 @@ export function projectToMarkdown(
       lines.push("");
       lines.push(`--- Header (${header.variant}) ---`);
       for (const para of header.paragraphs) {
-        lines.push(formatParagraphMarkdown(para));
+        lines.push(formatParagraphMarkdown(para, includeRevisions));
       }
     }
 
@@ -238,7 +248,7 @@ export function projectToMarkdown(
       lines.push("");
       lines.push(`--- Footer (${footer.variant}) ---`);
       for (const para of footer.paragraphs) {
-        lines.push(formatParagraphMarkdown(para));
+        lines.push(formatParagraphMarkdown(para, includeRevisions));
       }
     }
   }
@@ -255,18 +265,74 @@ export function projectToMarkdown(
   return lines.join("\n").trim();
 }
 
-function formatParagraphMarkdown(para: NormalizedParagraph): string {
+function formatParagraphMarkdown(
+  para: NormalizedParagraph,
+  includeRevisions: boolean = false,
+): string {
   const styleHint = para.style ? ` (${para.style})` : "";
   const listHint = para.listInfo ? ` [list L${para.listInfo.level}]` : "";
-  return `[${para.id}]${styleHint}${listHint} ${para.text}`;
+
+  let text = para.text;
+  if (includeRevisions && para.revisions && para.revisions.length > 0) {
+    text = annotateTextWithRevisions(para.text, para.revisions);
+  }
+
+  return `[${para.id}]${styleHint}${listHint} ${text}`;
 }
 
-function formatTableMarkdown(table: NormalizedTable): string[] {
+/**
+ * Annotate paragraph text with revision markers.
+ *
+ * Inserts are shown as `{+text+}` and deletes as `{-text-}`.
+ * Revisions are applied from right-to-left to avoid offset shifting.
+ */
+function annotateTextWithRevisions(
+  text: string,
+  revisions: RevisionMark[],
+): string {
+  // Sort by startOffset descending so we can splice from right-to-left
+  const sorted = [...revisions].sort((a, b) => b.startOffset - a.startOffset);
+
+  let result = text;
+  for (const rev of sorted) {
+    if (rev.type === "insert") {
+      // The inserted text is already in .text at [startOffset, endOffset)
+      // Wrap it with {+...+}
+      const before = result.slice(0, rev.startOffset);
+      const inserted = result.slice(rev.startOffset, rev.endOffset);
+      const after = result.slice(rev.endOffset);
+      result = `${before}{+${inserted}+}${after}`;
+    } else if (rev.type === "delete") {
+      // Deleted text is NOT in .text (startOffset === endOffset is a zero-width position)
+      // Insert the deleted text marker at that position
+      const before = result.slice(0, rev.startOffset);
+      const after = result.slice(rev.startOffset);
+      result = `${before}{-${rev.text}-}${after}`;
+    }
+  }
+
+  return result;
+}
+
+function formatTableMarkdown(
+  table: NormalizedTable,
+  includeRevisions: boolean = false,
+): string[] {
   const lines: string[] = [];
 
   for (const row of table.rows) {
     const cells = row.cells.map((cell) => {
-      const text = cell.paragraphs.map((p) => p.text).join(" ");
+      let text = cell.paragraphs.map((p) => p.text).join(" ");
+      if (includeRevisions) {
+        // Annotate each paragraph's revisions in the concatenated text
+        const annotated = cell.paragraphs.map((p) => {
+          if (p.revisions && p.revisions.length > 0) {
+            return annotateTextWithRevisions(p.text, p.revisions);
+          }
+          return p.text;
+        });
+        text = annotated.join(" ");
+      }
       const id = cell.paragraphs[0]?.id ?? `${table.id}.r${row.index}.c${cell.colIndex}.p0`;
       return `[${id}] ${text}`;
     });

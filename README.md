@@ -51,6 +51,12 @@ const results = doc.applyPatches([
   { type: "apply_style", target: "p0", style: "Heading1" },
 ]);
 
+// Or with tracked changes (produces w:ins/w:del markup that Word shows as redlines)
+const results = doc.applyPatches(patches, {
+  trackRevisions: true,
+  revisionAuthor: "AI Editor",
+});
+
 // Check results
 for (const r of results) {
   if (!r.success) console.error(`Patch failed: ${r.error}`);
@@ -112,10 +118,11 @@ const json = doc.project("json", {
   includeFormatting: true,      // include bold/italic/underline/etc per run
   includeHeadersFooters: true,  // include headers and footers (default: true)
   includeTables: true,          // include tables (default: true)
+  includeRevisions: true,       // include revision marks from tracked changes (default: false)
 });
 ```
 
-### `doc.applyPatches(patches)`
+### `doc.applyPatches(patches, options?)`
 
 Apply an array of patches sequentially. After each patch, the affected paragraph is re-normalized so subsequent patches see updated text. Returns a `PatchResult[]`.
 
@@ -123,6 +130,17 @@ Apply an array of patches sequentially. After each patch, the affected paragraph
 const results = doc.applyPatches(patches);
 // [{ success: true, patch: ... }, { success: false, patch: ..., error: "..." }]
 ```
+
+With revision tracking enabled, patches produce OOXML tracked-change markup (`w:ins`, `w:del`, `w:rPrChange`, `w:pPrChange`) instead of destructive edits:
+
+```ts
+const results = doc.applyPatches(patches, {
+  trackRevisions: true,          // enable tracked changes (default: false)
+  revisionAuthor: "AI Editor",   // author name shown in Word's review pane (default: "docxtor")
+});
+```
+
+See [Revision Tracking](#revision-tracking-tracked-changes) below for details.
 
 ### `doc.validatePatches(patches)`
 
@@ -307,6 +325,60 @@ Available styles are listed in the markdown projection under "Available Styles" 
 
 IDs are positional and stable within a single editing session. They are reassigned if you re-load the document.
 
+## Revision Tracking (Tracked Changes)
+
+When `trackRevisions: true` is passed to `applyPatches()`, every edit produces OOXML tracked-change markup instead of destructive modifications. The resulting `.docx` opens in Word with redline marks that a human reviewer can accept or reject.
+
+```ts
+const results = doc.applyPatches(
+  [
+    { type: "replace_text", target: "p1", find: "valid", replace: "enforceable" },
+    { type: "delete_text", target: "p3", find: "DRAFT - " },
+    { type: "insert_text", target: "p2", position: "after", anchor: "terms:", text: " and conditions" },
+    { type: "apply_formatting", target: "p1", find: "enforceable", formatting: { bold: true } },
+    { type: "apply_style", target: "p0", style: "Heading2" },
+    { type: "add_table_row", target: "tbl0", afterRow: 1, cells: ["A", "B"] },
+    { type: "delete_table_row", target: "tbl0", row: 2 },
+  ],
+  { trackRevisions: true, revisionAuthor: "AI Editor" },
+);
+```
+
+### What each patch type produces
+
+| Patch type | OOXML markup |
+|---|---|
+| `replace_text` | `w:del` wrapping the original runs + `w:ins` wrapping the replacement runs |
+| `insert_text` | `w:ins` wrapping the new runs |
+| `delete_text` | `w:del` wrapping the deleted runs (text preserved in XML) |
+| `apply_formatting` | `w:rPrChange` inside each affected run's `w:rPr` (captures old formatting) |
+| `apply_style` (paragraph) | `w:pPrChange` inside `w:pPr` (captures old paragraph style) |
+| `apply_style` (character) | `w:rPrChange` inside each affected run's `w:rPr` |
+| `add_table_row` | `w:ins` element inside the new row's `w:trPr` |
+| `delete_table_row` | Row is kept; `w:del` element added to `w:trPr` |
+
+### Revision IDs
+
+Each revision element gets a unique `w:id`. IDs start from `max(existing w:id values in the document) + 1` so they never collide with pre-existing tracked changes.
+
+### Reading revision marks
+
+The normalizer captures revision marks when present. Use `includeRevisions` in projections to surface them:
+
+```ts
+// JSON -- each paragraph gains a `revisions` array
+const json = doc.project("json", { includeRevisions: true });
+
+// Markdown -- inline annotations like {+inserted+} and {-deleted-}
+const md = doc.project("markdown", { includeRevisions: true });
+```
+
+### Behavior notes
+
+- Without `trackRevisions`, all patches work exactly as before (destructive edits). The option is fully backward-compatible.
+- Sequential patches within the same `applyPatches()` call share a single revision context: IDs auto-increment, and re-normalization between patches correctly handles the `w:ins`/`w:del` wrappers.
+- The normalizer's `collectRuns()` recurses into `w:ins` (treats the content as current text) and skips `w:del` (excludes deleted text from `.text`). This means subsequent patches in the same batch correctly see the post-edit text.
+
 ## LLM integration pattern
 
 docxtor is LLM-agnostic. The typical integration:
@@ -361,7 +433,7 @@ import {
   parseXml,             // XML string -> FXP ordered array
   serializeXml,         // FXP ordered array -> XML string
   normalizeDocument,    // DocxZipEntries -> NormalizedDocument
-  applyPatches,         // Direct patch application
+  applyPatches,         // Direct patch application (accepts PatchOptions)
   project,              // Direct projection
   projectToJson,
   projectToMarkdown,
@@ -369,6 +441,9 @@ import {
   findParagraphById,
   findTableById,
 } from "docxtor";
+
+// Types
+import type { PatchOptions, RevisionMark } from "docxtor";
 ```
 
 ## What it handles
@@ -382,6 +457,7 @@ import {
 - Inline formatting patches (bold, italic, underline, strikethrough, fontSize, fontFamily, color, highlight)
 - Style application (paragraph styles like Heading1, character styles like Strong)
 - Style validation against the document's `styles.xml`
+- Tracked changes / revision tracking (`w:ins`, `w:del`, `w:rPrChange`, `w:pPrChange`)
 - XML entity escaping (`&amp;`, `&lt;`, `&gt;`)
 - Newlines (`\n` maps to `w:br` elements)
 - List/numbering info in projections
@@ -389,7 +465,6 @@ import {
 
 ## What it does not handle (yet)
 
-- Tracked changes (revisions)
 - Merged cells (`gridSpan` / `vMerge`)
 - Numbered list renumbering
 - Image manipulation
@@ -407,7 +482,7 @@ pnpm build         # build ESM + CJS + DTS (tsup)
 pnpm lint          # type-check
 ```
 
-220 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style), integration flows, hyperlinks, entity escaping, newlines, nested tables, projection, and API surface.
+260 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style), revision tracking (tracked changes), integration flows, hyperlinks, entity escaping, newlines, nested tables, projection, and API surface.
 
 ## License
 

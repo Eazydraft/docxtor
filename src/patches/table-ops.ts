@@ -21,10 +21,13 @@ import {
   insertAfter,
   removeChild,
   findChild,
+  createElement,
   escapeXmlText,
   needsSpacePreserve,
 } from "../xml/helpers.js";
 import { executeReplaceText } from "./text-ops.js";
+import type { RevisionContext } from "./revision.js";
+import { createTrPrIns, createTrPrDel } from "./revision.js";
 
 /**
  * Execute an add_table_row patch.
@@ -34,6 +37,7 @@ import { executeReplaceText } from "./text-ops.js";
 export function executeAddTableRow(
   table: NormalizedTable,
   patch: AddTableRowPatch,
+  revCtx?: RevisionContext,
 ): void {
   if (table.rows.length === 0) {
     throw new Error(`Table "${table.id}" has no rows to clone from`);
@@ -108,6 +112,19 @@ export function executeAddTableRow(
   } else {
     insertAfter(table.xmlRef, sourceRow.xmlRef, newRowNode);
   }
+
+  // If tracking revisions, add w:ins to the new row's w:trPr
+  if (revCtx) {
+    const rowChildren = getChildren(newRowNode);
+    let trPr = rowChildren.find((c) => "w:trPr" in c);
+    if (!trPr) {
+      // Create w:trPr and insert at the beginning
+      trPr = createElement("w:trPr", []);
+      rowChildren.unshift(trPr);
+    }
+    const trPrChildren = getChildren(trPr);
+    trPrChildren.push(createTrPrIns(revCtx));
+  }
 }
 
 /**
@@ -116,6 +133,7 @@ export function executeAddTableRow(
 export function executeDeleteTableRow(
   table: NormalizedTable,
   patch: DeleteTableRowPatch,
+  revCtx?: RevisionContext,
 ): void {
   if (patch.row < 0 || patch.row >= table.rows.length) {
     throw new Error(
@@ -124,7 +142,21 @@ export function executeDeleteTableRow(
   }
 
   const row = table.rows[patch.row]!;
-  removeChild(table.xmlRef, row.xmlRef);
+
+  if (revCtx) {
+    // With revision tracking: keep the row, add w:del to w:trPr
+    const rowChildren = getChildren(row.xmlRef);
+    let trPr = rowChildren.find((c) => "w:trPr" in c);
+    if (!trPr) {
+      trPr = createElement("w:trPr", []);
+      rowChildren.unshift(trPr);
+    }
+    const trPrChildren = getChildren(trPr);
+    trPrChildren.push(createTrPrDel(revCtx));
+  } else {
+    // Without revision tracking: remove the row from XML
+    removeChild(table.xmlRef, row.xmlRef);
+  }
 }
 
 /**
@@ -135,6 +167,7 @@ export function executeDeleteTableRow(
 export function executeReplaceCellText(
   paragraph: NormalizedParagraph,
   patch: ReplaceCellTextPatch,
+  revCtx?: RevisionContext,
 ): void {
   executeReplaceText(paragraph, {
     type: "replace_text",
@@ -142,5 +175,5 @@ export function executeReplaceCellText(
     find: patch.find,
     replace: patch.replace,
     occurrence: patch.occurrence,
-  });
+  }, revCtx);
 }

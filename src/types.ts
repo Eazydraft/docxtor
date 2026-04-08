@@ -95,6 +95,25 @@ export interface NormalizedParagraph {
   style?: string;
   /** List/numbering info (if any). */
   listInfo?: ListInfo;
+  /** Revision marks captured from w:ins / w:del elements (for projection use). */
+  revisions?: RevisionMark[];
+}
+
+/**
+ * A revision mark captured during normalization, representing
+ * a tracked insert or delete in the paragraph.
+ */
+export interface RevisionMark {
+  type: "insert" | "delete";
+  /** The text that was inserted or deleted. */
+  text: string;
+  /** For inserts: position in .text. For deletes: position where deletion occurred (zero-width). */
+  startOffset: number;
+  endOffset: number;
+  /** The revision author. */
+  author: string;
+  /** The revision date (ISO 8601). */
+  date: string;
 }
 
 export interface RunMapping {
@@ -351,6 +370,24 @@ export interface ProjectionOptions {
   includeHeadersFooters?: boolean;
   /** Include table structure. Default: true. */
   includeTables?: boolean;
+  /** Include revision marks (tracked changes) in the projection. Default: false. */
+  includeRevisions?: boolean;
+}
+
+// =============================================================================
+// Patch Options (Revision Tracking)
+// =============================================================================
+
+/**
+ * Options for controlling revision tracking when applying patches.
+ */
+export interface PatchOptions {
+  /** Whether to generate OOXML tracked changes (w:ins, w:del, etc.). Default: false. */
+  trackRevisions?: boolean;
+  /** The author name for revision marks. Default: "docxtor". */
+  revisionAuthor?: string;
+  /** The revision date (ISO 8601). Default: current time. */
+  revisionDate?: string;
 }
 
 // =============================================================================

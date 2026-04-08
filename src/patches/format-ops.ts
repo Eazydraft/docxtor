@@ -31,7 +31,10 @@ import {
   removeAttr,
   getAttrs,
   removeChild,
+  cloneNode,
 } from "../xml/helpers.js";
+import type { RevisionContext } from "./revision.js";
+import { createRPrChange } from "./revision.js";
 
 // =============================================================================
 // Public API
@@ -43,11 +46,12 @@ import {
 export function executeApplyFormatting(
   paragraph: NormalizedParagraph,
   patch: ApplyFormattingPatch,
+  revCtx?: RevisionContext,
 ): void {
   if (patch.find !== undefined && patch.find.length > 0) {
-    applyFormattingToSubstring(paragraph, patch.find, patch.occurrence ?? 1, patch.formatting);
+    applyFormattingToSubstring(paragraph, patch.find, patch.occurrence ?? 1, patch.formatting, revCtx);
   } else {
-    applyFormattingToAllRuns(paragraph, patch.formatting);
+    applyFormattingToAllRuns(paragraph, patch.formatting, revCtx);
   }
 }
 
@@ -64,6 +68,7 @@ function applyFormattingToSubstring(
   find: string,
   occurrence: number,
   formatting: FormattingUpdate,
+  revCtx?: RevisionContext,
 ): void {
   const matchStart = findOccurrence(paragraph.text, find, occurrence);
   if (matchStart === -1) {
@@ -84,7 +89,7 @@ function applyFormattingToSubstring(
   // Split runs to isolate the matched text, then apply formatting to each
   const matchedRunNodes = splitRunsForMatch(paragraph.xmlRef, ranges);
   for (const runNode of matchedRunNodes) {
-    applyFormattingToRunNode(runNode, formatting);
+    applyFormattingToRunNode(runNode, formatting, revCtx);
   }
 }
 
@@ -94,9 +99,10 @@ function applyFormattingToSubstring(
 function applyFormattingToAllRuns(
   paragraph: NormalizedParagraph,
   formatting: FormattingUpdate,
+  revCtx?: RevisionContext,
 ): void {
   for (const run of paragraph.runs) {
-    applyFormattingToRunNode(run.xmlRef, formatting);
+    applyFormattingToRunNode(run.xmlRef, formatting, revCtx);
   }
 }
 
@@ -106,10 +112,14 @@ function applyFormattingToAllRuns(
 
 /**
  * Apply a FormattingUpdate to a single w:r run node's w:rPr.
+ *
+ * When revCtx is provided, clones the original w:rPr before modifying,
+ * then adds w:rPrChange with the old snapshot.
  */
 function applyFormattingToRunNode(
   runNode: FXPNode,
   formatting: FormattingUpdate,
+  revCtx?: RevisionContext,
 ): void {
   // Only create w:rPr if we're actually adding properties
   const hasAdds = Object.entries(formatting).some(
@@ -120,6 +130,9 @@ function applyFormattingToRunNode(
 
   // If we only have removes and there's no rPr, nothing to do
   if (!rPr && !hasAdds) return;
+
+  // Snapshot the old rPr before modifications (for revision tracking)
+  const oldRPr = revCtx && rPr ? cloneNode(rPr) : undefined;
 
   // Create rPr if needed (must be first child of w:r)
   if (!rPr) {
@@ -152,6 +165,19 @@ function applyFormattingToRunNode(
   }
   if (formatting.highlight !== undefined) {
     applyAttrProp(rPr, "w:highlight", "w:val", formatting.highlight);
+  }
+
+  // Add w:rPrChange with the old snapshot (revision tracking)
+  if (revCtx) {
+    // Remove any existing w:rPrChange first
+    const existingChange = findChild(rPr, "w:rPrChange");
+    if (existingChange) {
+      removeChild(rPr, existingChange);
+    }
+
+    const oldRPrForChange = oldRPr ?? createElement("w:rPr");
+    const rPrChange = createRPrChange(revCtx, oldRPrForChange);
+    getChildren(rPr).push(rPrChange);
   }
 }
 
