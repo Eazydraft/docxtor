@@ -9,6 +9,9 @@
  *
  * After execution, the FXP object reflects the edit, and the
  * paragraph should be re-normalized to update mappings.
+ *
+ * When a RevisionContext is provided, operations produce OOXML tracked
+ * changes (w:ins, w:del) instead of direct mutations.
  */
 
 import type {
@@ -19,7 +22,7 @@ import type {
   FXPNode,
 } from "../types.js";
 import { findOccurrence, resolveRunRanges } from "../mapping/text-to-runs.js";
-import { splitRun, splitRunsForMatch } from "./run-splitter.js";
+import { splitRun, splitRunsForMatch, findRunParentChildren } from "./run-splitter.js";
 import {
   getChildren,
   setTextContent,
@@ -30,33 +33,58 @@ import {
   setAttr,
   escapeXmlText,
   needsSpacePreserve,
+  findChild,
+  cloneNode,
 } from "../xml/helpers.js";
+import type { RevisionContext } from "./revision.js";
+import {
+  createInsElement,
+  createDelElement,
+  convertRunToDeleted,
+  createRevisionRun,
+} from "./revision.js";
 
 /**
  * Find the parent node that directly contains a run, and remove the run.
- * Handles runs that are direct children of w:p or nested inside w:hyperlink.
+ * Handles runs that are direct children of w:p or nested inside
+ * w:hyperlink, w:ins, or w:del containers.
  */
 function removeRunFromParagraph(paragraphNode: FXPNode, runNode: FXPNode): void {
   // Try direct removal first
   if (removeChild(paragraphNode, runNode)) return;
 
-  // Try inside hyperlink elements
+  // Try inside container elements (w:hyperlink, w:ins, w:del)
   const children = getChildren(paragraphNode);
   for (const child of children) {
-    if (getTagName(child) === "w:hyperlink") {
+    const tag = getTagName(child);
+    if (tag === "w:hyperlink" || tag === "w:ins" || tag === "w:del") {
       if (removeChild(child, runNode)) return;
+      // Check nested containers
+      const containerChildren = getChildren(child);
+      for (const nested of containerChildren) {
+        const nestedTag = getTagName(nested);
+        if (nestedTag === "w:hyperlink" || nestedTag === "w:ins" || nestedTag === "w:del") {
+          if (removeChild(nested, runNode)) return;
+        }
+      }
     }
   }
 }
+
+// =============================================================================
+// Replace text
+// =============================================================================
 
 /**
  * Execute a replace_text patch on a paragraph.
  *
  * Finds the target text, maps to runs, splits if needed, and replaces.
+ * When revCtx is provided, wraps old text in w:del and new text in w:ins.
  */
 export function executeReplaceText(
   paragraph: NormalizedParagraph,
   patch: ReplaceTextPatch,
+  revCtx?: RevisionContext,
 ): void {
   const occurrence = patch.occurrence ?? 1;
   const matchStart = findOccurrence(paragraph.text, patch.find, occurrence);
@@ -76,15 +104,26 @@ export function executeReplaceText(
     );
   }
 
+  if (revCtx) {
+    executeReplaceTextRevision(paragraph, patch, ranges, revCtx);
+  } else {
+    executeReplaceTextDirect(paragraph, patch, ranges);
+  }
+}
+
+/**
+ * Direct (non-revision) replacement.
+ */
+function executeReplaceTextDirect(
+  paragraph: NormalizedParagraph,
+  patch: ReplaceTextPatch,
+  ranges: ReturnType<typeof resolveRunRanges>,
+): void {
   if (ranges.length === 1) {
-    // Single run match — split if needed, then replace text
     const range = ranges[0]!;
     const splitResult = splitRun(paragraph.xmlRef, range);
-
-    // Set the text on the matched run
     setRunText(splitResult.matched, patch.replace);
   } else {
-    // Multi-run match — split edges, then consolidate
     const matchedRuns = splitRunsForMatch(paragraph.xmlRef, ranges);
 
     if (matchedRuns.length === 0) {
@@ -93,15 +132,92 @@ export function executeReplaceText(
       );
     }
 
-    // Put all replacement text in the first matched run
     setRunText(matchedRuns[0]!, patch.replace);
 
-    // Remove the remaining matched runs (they're now empty / redundant)
     for (let i = 1; i < matchedRuns.length; i++) {
       removeRunFromParagraph(paragraph.xmlRef, matchedRuns[i]!);
     }
   }
 }
+
+/**
+ * Revision-tracked replacement:
+ * 1. Split runs to isolate matched text
+ * 2. Wrap matched runs in w:del (converting w:t → w:delText)
+ * 3. Create new run(s) with replacement text wrapped in w:ins
+ * 4. Insert w:ins immediately after w:del
+ */
+function executeReplaceTextRevision(
+  paragraph: NormalizedParagraph,
+  patch: ReplaceTextPatch,
+  ranges: ReturnType<typeof resolveRunRanges>,
+  revCtx: RevisionContext,
+): void {
+  // Split runs to isolate the matched text
+  let matchedRuns: FXPNode[];
+  if (ranges.length === 1) {
+    const range = ranges[0]!;
+    const splitResult = splitRun(paragraph.xmlRef, range);
+    matchedRuns = [splitResult.matched];
+  } else {
+    matchedRuns = splitRunsForMatch(paragraph.xmlRef, ranges);
+  }
+
+  if (matchedRuns.length === 0) {
+    throw new Error(
+      `Failed to isolate matched runs in paragraph "${paragraph.id}"`,
+    );
+  }
+
+  // Get formatting from the first matched run for the replacement
+  const rPrNode = findChild(matchedRuns[0]!, "w:rPr");
+
+  // Find the parent children array for the first matched run
+  const parentChildren = findRunParentChildren(paragraph.xmlRef, matchedRuns[0]!);
+  if (!parentChildren) {
+    throw new Error("Matched run not found in paragraph");
+  }
+
+  // Clone matched runs and convert to deleted runs
+  const deletedRuns: FXPNode[] = [];
+  for (const run of matchedRuns) {
+    const cloned = cloneNode(run);
+    convertRunToDeleted(cloned);
+    deletedRuns.push(cloned);
+  }
+
+  // Create the w:del element wrapping deleted runs
+  const delElement = createDelElement(revCtx, deletedRuns);
+
+  // Create the replacement run wrapped in w:ins
+  let insElement: FXPNode | undefined;
+  if (patch.replace.length > 0) {
+    const newRun = createRevisionRun(patch.replace, rPrNode);
+    insElement = createInsElement(revCtx, [newRun]);
+  }
+
+  // Find the position of the first matched run in the parent
+  const firstRunIndex = parentChildren.indexOf(matchedRuns[0]!);
+
+  // Remove all matched runs from the parent
+  for (const run of matchedRuns) {
+    const idx = parentChildren.indexOf(run);
+    if (idx !== -1) {
+      parentChildren.splice(idx, 1);
+    }
+  }
+
+  // Insert w:del and w:ins at the position of the first matched run
+  if (insElement) {
+    parentChildren.splice(firstRunIndex, 0, delElement, insElement);
+  } else {
+    parentChildren.splice(firstRunIndex, 0, delElement);
+  }
+}
+
+// =============================================================================
+// Insert text
+// =============================================================================
 
 /**
  * Execute an insert_text patch on a paragraph.
@@ -110,12 +226,13 @@ export function executeReplaceText(
  * which run contains that offset. Insert the text directly into that run's
  * w:t node at the correct position.
  *
- * If the offset falls between two runs, we append to the preceding run
- * or prepend to the following run.
+ * With revision tracking, the inserted text goes into a new run wrapped
+ * in w:ins, and the target run is split if needed.
  */
 export function executeInsertText(
   paragraph: NormalizedParagraph,
   patch: InsertTextPatch,
+  revCtx?: RevisionContext,
 ): void {
   const occurrence = patch.occurrence ?? 1;
   const anchorStart = findOccurrence(paragraph.text, patch.anchor, occurrence);
@@ -132,11 +249,22 @@ export function executeInsertText(
       ? anchorStart
       : anchorStart + patch.anchor.length;
 
-  // Find the run that contains the insertion point.
-  // We look for the run whose [startOffset, endOffset) range includes insertOffset,
-  // or the run boundary where insertOffset sits exactly at a run edge.
+  if (revCtx) {
+    executeInsertTextRevision(paragraph, patch, insertOffset, revCtx);
+  } else {
+    executeInsertTextDirect(paragraph, patch, insertOffset);
+  }
+}
+
+/**
+ * Direct (non-revision) insertion — modifies the run's text in-place.
+ */
+function executeInsertTextDirect(
+  paragraph: NormalizedParagraph,
+  patch: InsertTextPatch,
+  insertOffset: number,
+): void {
   let targetRun: typeof paragraph.runs[number] | undefined;
-  let localInsertOffset: number;
 
   for (const run of paragraph.runs) {
     if (insertOffset >= run.startOffset && insertOffset <= run.endOffset) {
@@ -146,8 +274,6 @@ export function executeInsertText(
   }
 
   if (!targetRun) {
-    // Insertion is past all runs (shouldn't happen for valid anchors)
-    // but handle gracefully by appending to the last run
     const lastRun = paragraph.runs[paragraph.runs.length - 1];
     if (!lastRun) {
       throw new Error(
@@ -157,9 +283,8 @@ export function executeInsertText(
     targetRun = lastRun;
   }
 
-  localInsertOffset = insertOffset - targetRun.startOffset;
+  const localInsertOffset = insertOffset - targetRun.startOffset;
 
-  // Build the new text for this run
   const currentText = getRunText(targetRun.xmlRef);
   const newText =
     currentText.slice(0, localInsertOffset) +
@@ -170,22 +295,234 @@ export function executeInsertText(
 }
 
 /**
+ * Revision-tracked insertion:
+ * 1. Find the target run containing the insertion offset
+ * 2. Split the run at the insertion point if needed
+ * 3. Create a new w:r wrapped in w:ins
+ * 4. Insert between the split halves (or at boundary)
+ */
+function executeInsertTextRevision(
+  paragraph: NormalizedParagraph,
+  patch: InsertTextPatch,
+  insertOffset: number,
+  revCtx: RevisionContext,
+): void {
+  let targetRun: typeof paragraph.runs[number] | undefined;
+
+  for (const run of paragraph.runs) {
+    if (insertOffset >= run.startOffset && insertOffset <= run.endOffset) {
+      targetRun = run;
+      break;
+    }
+  }
+
+  if (!targetRun) {
+    const lastRun = paragraph.runs[paragraph.runs.length - 1];
+    if (!lastRun) {
+      throw new Error(
+        `No runs found in paragraph "${paragraph.id}" for insertion`,
+      );
+    }
+    targetRun = lastRun;
+  }
+
+  const localInsertOffset = insertOffset - targetRun.startOffset;
+
+  // Get formatting from the target run to clone onto the new run
+  const rPrNode = findChild(targetRun.xmlRef, "w:rPr");
+
+  // Create the new run with inserted text wrapped in w:ins
+  const newRun = createRevisionRun(patch.text, rPrNode);
+  const insElement = createInsElement(revCtx, [newRun]);
+
+  // Find the parent children array containing the target run
+  const parentChildren = findRunParentChildren(paragraph.xmlRef, targetRun.xmlRef);
+  if (!parentChildren) {
+    throw new Error("Target run not found in paragraph");
+  }
+
+  const runIndex = parentChildren.indexOf(targetRun.xmlRef);
+
+  // Determine if we need to split the run
+  const atStart = localInsertOffset === 0;
+  const atEnd = localInsertOffset === targetRun.text.length;
+
+  if (atStart) {
+    // Insert before the target run (no splitting needed)
+    parentChildren.splice(runIndex, 0, insElement);
+  } else if (atEnd) {
+    // Insert after the target run (no splitting needed)
+    parentChildren.splice(runIndex + 1, 0, insElement);
+  } else {
+    // Split the run at the insertion point
+    const fullText = targetRun.text;
+    const beforeText = fullText.slice(0, localInsertOffset);
+    const afterText = fullText.slice(localInsertOffset);
+
+    // Create two halves preserving formatting
+    const beforeRun = createRunWithTextAndFormatting(beforeText, rPrNode);
+    const afterRun = createRunWithTextAndFormatting(afterText, rPrNode);
+
+    // Replace the original run with: beforeRun, insElement, afterRun
+    parentChildren.splice(runIndex, 1, beforeRun, insElement, afterRun);
+  }
+}
+
+/**
+ * Create a w:r run node with text and optional formatting (for splitting).
+ *
+ * Handles \n in text by emitting w:br elements (matching the behavior
+ * of getRunText which converts w:br → \n). Without this, splitting a
+ * run containing line breaks would produce literal \n in w:t instead
+ * of proper w:br elements.
+ */
+function createRunWithTextAndFormatting(
+  text: string,
+  rPrNode: FXPNode | undefined,
+): FXPNode {
+  const children: FXPNode[] = [];
+  if (rPrNode) {
+    children.push(cloneNode(rPrNode));
+  }
+
+  if (text.includes("\n")) {
+    // Multi-line: interleave w:t and w:br
+    const segments = text.split("\n");
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i]!;
+      if (seg.length > 0 || i === 0) {
+        const textNode = { "#text": escapeXmlText(seg) } as unknown as FXPNode;
+        const wtNode: FXPNode = { "w:t": [textNode] };
+        if (needsSpacePreserve(seg)) {
+          setAttr(wtNode, "xml:space", "preserve");
+        }
+        children.push(wtNode);
+      }
+      if (i < segments.length - 1) {
+        children.push({ "w:br": [] as FXPNode[] });
+      }
+    }
+  } else {
+    // Single line
+    const textNode = { "#text": escapeXmlText(text) } as unknown as FXPNode;
+    const wtNode: FXPNode = { "w:t": [textNode] };
+    if (needsSpacePreserve(text)) {
+      setAttr(wtNode, "xml:space", "preserve");
+    }
+    children.push(wtNode);
+  }
+
+  return { "w:r": children };
+}
+
+// =============================================================================
+// Delete text
+// =============================================================================
+
+/**
  * Execute a delete_text patch on a paragraph.
  *
- * This is equivalent to replace_text with an empty replacement.
+ * Without revisions: equivalent to replace_text with an empty replacement.
+ * With revisions: wraps matched runs in w:del (text stays in XML but is marked as deleted).
  */
 export function executeDeleteText(
   paragraph: NormalizedParagraph,
   patch: DeleteTextPatch,
+  revCtx?: RevisionContext,
 ): void {
-  executeReplaceText(paragraph, {
-    type: "replace_text",
-    target: patch.target,
-    find: patch.find,
-    replace: "",
-    occurrence: patch.occurrence,
-  });
+  if (revCtx) {
+    executeDeleteTextRevision(paragraph, patch, revCtx);
+  } else {
+    executeReplaceText(paragraph, {
+      type: "replace_text",
+      target: patch.target,
+      find: patch.find,
+      replace: "",
+      occurrence: patch.occurrence,
+    });
+  }
 }
+
+/**
+ * Revision-tracked deletion:
+ * 1. Split runs to isolate the matched text
+ * 2. Wrap matched runs in w:del, converting w:t → w:delText
+ * 3. Text stays in XML but is marked as deleted
+ */
+function executeDeleteTextRevision(
+  paragraph: NormalizedParagraph,
+  patch: DeleteTextPatch,
+  revCtx: RevisionContext,
+): void {
+  const occurrence = patch.occurrence ?? 1;
+  const matchStart = findOccurrence(paragraph.text, patch.find, occurrence);
+
+  if (matchStart === -1) {
+    throw new Error(
+      `Text "${patch.find}" not found in paragraph "${paragraph.id}" (occurrence ${occurrence})`,
+    );
+  }
+
+  const matchEnd = matchStart + patch.find.length;
+  const ranges = resolveRunRanges(paragraph.runs, matchStart, matchEnd);
+
+  if (ranges.length === 0) {
+    throw new Error(
+      `No runs found for text range [${matchStart}, ${matchEnd}] in paragraph "${paragraph.id}"`,
+    );
+  }
+
+  // Split runs to isolate the matched text
+  let matchedRuns: FXPNode[];
+  if (ranges.length === 1) {
+    const range = ranges[0]!;
+    const splitResult = splitRun(paragraph.xmlRef, range);
+    matchedRuns = [splitResult.matched];
+  } else {
+    matchedRuns = splitRunsForMatch(paragraph.xmlRef, ranges);
+  }
+
+  if (matchedRuns.length === 0) {
+    throw new Error(
+      `Failed to isolate matched runs in paragraph "${paragraph.id}"`,
+    );
+  }
+
+  // Find the parent children array for the first matched run
+  const parentChildren = findRunParentChildren(paragraph.xmlRef, matchedRuns[0]!);
+  if (!parentChildren) {
+    throw new Error("Matched run not found in paragraph");
+  }
+
+  // Clone matched runs and convert to deleted runs
+  const deletedRuns: FXPNode[] = [];
+  for (const run of matchedRuns) {
+    const cloned = cloneNode(run);
+    convertRunToDeleted(cloned);
+    deletedRuns.push(cloned);
+  }
+
+  // Create the w:del element
+  const delElement = createDelElement(revCtx, deletedRuns);
+
+  // Find the position of the first matched run in the parent
+  const firstRunIndex = parentChildren.indexOf(matchedRuns[0]!);
+
+  // Remove all matched runs from the parent
+  for (const run of matchedRuns) {
+    const idx = parentChildren.indexOf(run);
+    if (idx !== -1) {
+      parentChildren.splice(idx, 1);
+    }
+  }
+
+  // Insert w:del at the position of the first matched run
+  parentChildren.splice(firstRunIndex, 0, delElement);
+}
+
+// =============================================================================
+// Internal: run text manipulation
+// =============================================================================
 
 /**
  * Set the text content of a w:r run node.

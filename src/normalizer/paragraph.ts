@@ -22,21 +22,27 @@ import type {
   RunMapping,
   RunFormatting,
   ListInfo,
+  RevisionMark,
 } from "../types.js";
 import {
   findChild,
-  findChildren,
   getAttr,
   getChildren,
   getTagName,
   getRunText,
   findTextNode,
   isTag,
+  unescapeXmlText,
 } from "../xml/helpers.js";
 
 /**
  * Collect all w:r run nodes from a paragraph, including those nested
- * inside w:hyperlink elements. Preserves document order.
+ * inside w:hyperlink and w:ins elements. Skips w:del entirely.
+ * Preserves document order.
+ *
+ * This ensures:
+ * - Inserted text (w:ins) is included in .text — subsequent patches see it
+ * - Deleted text (w:del) is excluded from .text — subsequent patches don't see it
  */
 function collectRuns(paragraphNode: FXPNode): FXPNode[] {
   const children = getChildren(paragraphNode);
@@ -47,13 +53,33 @@ function collectRuns(paragraphNode: FXPNode): FXPNode[] {
     if (tag === "w:r") {
       runs.push(child);
     } else if (tag === "w:hyperlink") {
-      // Collect runs inside the hyperlink
-      const hyperlinkRuns = findChildren(child, "w:r");
-      runs.push(...hyperlinkRuns);
+      // Collect runs inside the hyperlink (recurse for nested w:ins within hyperlink)
+      collectRunsFromContainer(child, runs);
+    } else if (tag === "w:ins") {
+      // Inserted runs are "current content" — recurse into them
+      collectRunsFromContainer(child, runs);
     }
+    // w:del is intentionally skipped — deleted text is excluded from normalized text
   }
 
   return runs;
+}
+
+/**
+ * Recursively collect runs from a container element (w:hyperlink, w:ins).
+ * Handles nested containers (e.g., w:ins inside w:hyperlink or vice versa).
+ */
+function collectRunsFromContainer(containerNode: FXPNode, runs: FXPNode[]): void {
+  const children = getChildren(containerNode);
+  for (const child of children) {
+    const tag = getTagName(child);
+    if (tag === "w:r") {
+      runs.push(child);
+    } else if (tag === "w:hyperlink" || tag === "w:ins") {
+      collectRunsFromContainer(child, runs);
+    }
+    // w:del inside containers is also skipped
+  }
 }
 
 /**
@@ -93,7 +119,10 @@ export function normalizeParagraph(
 
   const fullText = runMappings.map((r) => r.text).join("");
 
-  return {
+  // Capture revision marks from w:ins / w:del elements
+  const revisions = collectRevisionMarks(paragraphNode, runMappings);
+
+  const result: NormalizedParagraph = {
     kind: "paragraph",
     id,
     text: fullText,
@@ -102,6 +131,12 @@ export function normalizeParagraph(
     style: extractStyle(paragraphNode),
     listInfo: extractListInfo(paragraphNode),
   };
+
+  if (revisions.length > 0) {
+    result.revisions = revisions;
+  }
+
+  return result;
 }
 
 /**
@@ -177,4 +212,225 @@ function extractListInfo(paragraphNode: FXPNode): ListInfo | undefined {
     numId,
     level: level ? parseInt(level, 10) : 0,
   };
+}
+
+// =============================================================================
+// Revision mark extraction
+// =============================================================================
+
+/**
+ * Collect revision marks (w:ins, w:del) from a paragraph's XML.
+ *
+ * - For w:ins runs: startOffset/endOffset point into the .text (runs are included in normalized text)
+ * - For w:del runs: startOffset === endOffset (zero-width position) since deleted text is excluded
+ *   from .text; the deleted content is stored in the RevisionMark.text field
+ */
+function collectRevisionMarks(
+  paragraphNode: FXPNode,
+  runMappings: RunMapping[],
+): RevisionMark[] {
+  const revisions: RevisionMark[] = [];
+
+  // Build a set of xmlRefs for quick lookup of which runs are "ins" runs
+  // We need to track which runs came from w:ins to annotate their offsets
+  const insRunRefs = new Set<FXPNode>();
+  collectInsRunRefs(paragraphNode, insRunRefs);
+
+  // Track revision marks for w:ins runs
+  for (const mapping of runMappings) {
+    if (insRunRefs.has(mapping.xmlRef)) {
+      // Find the parent w:ins element to get author/date
+      const insInfo = findParentInsInfo(paragraphNode, mapping.xmlRef);
+      revisions.push({
+        type: "insert",
+        text: mapping.text,
+        startOffset: mapping.startOffset,
+        endOffset: mapping.endOffset,
+        author: insInfo?.author ?? "",
+        date: insInfo?.date ?? "",
+      });
+    }
+  }
+
+  // Track revision marks for w:del (zero-width in normalized text)
+  collectDelRevisionMarks(paragraphNode, runMappings, revisions);
+
+  return revisions;
+}
+
+/**
+ * Recursively collect xmlRef pointers for runs inside w:ins elements.
+ */
+function collectInsRunRefs(node: FXPNode, refs: Set<FXPNode>): void {
+  const children = getChildren(node);
+  for (const child of children) {
+    const tag = getTagName(child);
+    if (tag === "w:ins") {
+      // All runs inside this w:ins are "inserted"
+      markAllRunsInContainer(child, refs);
+    } else if (tag === "w:hyperlink") {
+      collectInsRunRefs(child, refs);
+    }
+    // Don't recurse into w:del — those are excluded
+  }
+}
+
+function markAllRunsInContainer(node: FXPNode, refs: Set<FXPNode>): void {
+  const children = getChildren(node);
+  for (const child of children) {
+    const tag = getTagName(child);
+    if (tag === "w:r") {
+      refs.add(child);
+    } else if (tag === "w:hyperlink" || tag === "w:ins") {
+      markAllRunsInContainer(child, refs);
+    }
+  }
+}
+
+/**
+ * Find the w:ins parent element's author and date for a given run node.
+ */
+function findParentInsInfo(
+  paragraphNode: FXPNode,
+  runNode: FXPNode,
+): { author: string; date: string } | undefined {
+  return findInsInfoInChildren(getChildren(paragraphNode), runNode);
+}
+
+function findInsInfoInChildren(
+  children: FXPNode[],
+  runNode: FXPNode,
+): { author: string; date: string } | undefined {
+  for (const child of children) {
+    const tag = getTagName(child);
+    if (tag === "w:ins") {
+      // Check if this w:ins contains the run
+      if (containsRun(child, runNode)) {
+        return {
+          author: getAttr(child, "w:author") ?? "",
+          date: getAttr(child, "w:date") ?? "",
+        };
+      }
+    } else if (tag === "w:hyperlink") {
+      const result = findInsInfoInChildren(getChildren(child), runNode);
+      if (result) return result;
+    }
+  }
+  return undefined;
+}
+
+function containsRun(node: FXPNode, runNode: FXPNode): boolean {
+  const children = getChildren(node);
+  for (const child of children) {
+    if (child === runNode) return true;
+    const tag = getTagName(child);
+    if (tag && tag !== "w:del") {
+      if (containsRun(child, runNode)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Collect deletion revision marks from w:del elements.
+ *
+ * For each w:del, we need to figure out its position in the normalized text.
+ * Since deleted runs are excluded from .text, the position is zero-width
+ * and falls at the boundary where the deletion occurred.
+ *
+ * This walker recurses into containers (w:hyperlink, w:ins) to find
+ * w:del elements nested inside them — e.g., when a deletion occurs inside
+ * a hyperlink or inside a previous insertion.
+ */
+function collectDelRevisionMarks(
+  paragraphNode: FXPNode,
+  runMappings: RunMapping[],
+  revisions: RevisionMark[],
+): void {
+  // Build a constant-time lookup map: xmlRef → RunMapping
+  // Avoids O(n²) linear scans when walking many runs
+  const runMap = new Map<FXPNode, RunMapping>();
+  for (const mapping of runMappings) {
+    runMap.set(mapping.xmlRef, mapping);
+  }
+
+  walkForDeletions(getChildren(paragraphNode), runMap, revisions, 0);
+}
+
+/**
+ * Recursively walk children, advancing the text offset through runs,
+ * recording w:del revision marks, and recursing into containers.
+ *
+ * Returns the text offset after processing all children.
+ */
+function walkForDeletions(
+  children: FXPNode[],
+  runMap: Map<FXPNode, RunMapping>,
+  revisions: RevisionMark[],
+  offset: number,
+): number {
+  for (const child of children) {
+    const tag = getTagName(child);
+
+    if (tag === "w:r") {
+      const mapping = runMap.get(child);
+      if (mapping) {
+        offset = mapping.endOffset;
+      }
+    } else if (tag === "w:del") {
+      // Collect deleted text from this w:del
+      const delText = getDeletedText(child);
+      if (delText.length > 0) {
+        revisions.push({
+          type: "delete",
+          text: delText,
+          startOffset: offset,
+          endOffset: offset,
+          author: getAttr(child, "w:author") ?? "",
+          date: getAttr(child, "w:date") ?? "",
+        });
+      }
+    } else if (tag === "w:hyperlink" || tag === "w:ins") {
+      // Recurse into containers — they may contain w:r, w:del, or further nesting
+      offset = walkForDeletions(getChildren(child), runMap, revisions, offset);
+    }
+  }
+  return offset;
+}
+
+/**
+ * Extract text content from runs inside a w:del element.
+ * Reads from both w:delText and w:t elements (some docs use w:t inside w:del).
+ */
+function getDeletedText(delNode: FXPNode): string {
+  const children = getChildren(delNode);
+  let text = "";
+  for (const child of children) {
+    const tag = getTagName(child);
+    if (tag === "w:r") {
+      const runChildren = getChildren(child);
+      for (const rc of runChildren) {
+        if ("w:delText" in rc) {
+          const dtChildren = rc["w:delText"];
+          if (Array.isArray(dtChildren)) {
+            for (const dtChild of dtChildren as FXPNode[]) {
+              if ("#text" in dtChild) {
+                text += unescapeXmlText(String(dtChild["#text"]));
+              }
+            }
+          }
+        } else if ("w:t" in rc) {
+          const tChildren = rc["w:t"];
+          if (Array.isArray(tChildren)) {
+            for (const tChild of tChildren as FXPNode[]) {
+              if ("#text" in tChild) {
+                text += unescapeXmlText(String(tChild["#text"]));
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return text;
 }

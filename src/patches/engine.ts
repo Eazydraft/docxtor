@@ -15,6 +15,7 @@ import type {
   NormalizedTable,
   Patch,
   PatchResult,
+  PatchOptions,
 } from "../types.js";
 import {
   validatePatch,
@@ -35,6 +36,7 @@ import { executeApplyFormatting } from "./format-ops.js";
 import { executeApplyStyle } from "./style-ops.js";
 import { normalizeParagraph } from "../normalizer/paragraph.js";
 import { normalizeTable } from "../normalizer/table.js";
+import { createRevisionContext, type RevisionContext } from "./revision.js";
 
 /**
  * Apply a list of patches to a NormalizedDocument.
@@ -43,16 +45,23 @@ import { normalizeTable } from "../normalizer/table.js";
  * the affected elements are re-normalized so subsequent patches
  * operate on updated text/mappings.
  *
+ * @param options - Optional patch options (e.g., revision tracking)
  * @returns Array of PatchResult for each patch
  */
 export function applyPatches(
   doc: NormalizedDocument,
   patches: Patch[],
+  options?: PatchOptions,
 ): PatchResult[] {
   const results: PatchResult[] = [];
 
+  // Create revision context if tracking revisions
+  const revCtx = options?.trackRevisions
+    ? createRevisionContext(doc, options)
+    : undefined;
+
   for (const patch of patches) {
-    const result = applySinglePatch(doc, patch);
+    const result = applySinglePatch(doc, patch, revCtx);
     results.push(result);
   }
 
@@ -65,6 +74,7 @@ export function applyPatches(
 function applySinglePatch(
   doc: NormalizedDocument,
   patch: Patch,
+  revCtx?: RevisionContext,
 ): PatchResult {
   // Validate
   const validation = validatePatch(patch, doc);
@@ -76,49 +86,49 @@ function applySinglePatch(
     switch (patch.type) {
       case "replace_text": {
         const para = findParagraphById(patch.target, doc)!;
-        executeReplaceText(para, patch);
+        executeReplaceText(para, patch, revCtx);
         reNormalizeParagraph(doc, para);
         break;
       }
       case "insert_text": {
         const para = findParagraphById(patch.target, doc)!;
-        executeInsertText(para, patch);
+        executeInsertText(para, patch, revCtx);
         reNormalizeParagraph(doc, para);
         break;
       }
       case "delete_text": {
         const para = findParagraphById(patch.target, doc)!;
-        executeDeleteText(para, patch);
+        executeDeleteText(para, patch, revCtx);
         reNormalizeParagraph(doc, para);
         break;
       }
       case "replace_cell_text": {
         const para = findParagraphById(patch.target, doc)!;
-        executeReplaceCellText(para, patch);
+        executeReplaceCellText(para, patch, revCtx);
         reNormalizeParagraph(doc, para);
         break;
       }
       case "add_table_row": {
         const table = findTableById(patch.target, doc)!;
-        executeAddTableRow(table, patch);
+        executeAddTableRow(table, patch, revCtx);
         reNormalizeTable(doc, table);
         break;
       }
       case "delete_table_row": {
         const table = findTableById(patch.target, doc)!;
-        executeDeleteTableRow(table, patch);
+        executeDeleteTableRow(table, patch, revCtx);
         reNormalizeTable(doc, table);
         break;
       }
       case "apply_formatting": {
         const para = findParagraphById(patch.target, doc)!;
-        executeApplyFormatting(para, patch);
+        executeApplyFormatting(para, patch, revCtx);
         reNormalizeParagraph(doc, para);
         break;
       }
       case "apply_style": {
         const para = findParagraphById(patch.target, doc)!;
-        executeApplyStyle(para, patch, doc);
+        executeApplyStyle(para, patch, doc, revCtx);
         reNormalizeParagraph(doc, para);
         break;
       }
@@ -149,6 +159,7 @@ function reNormalizeParagraph(
   paragraph.runs = fresh.runs;
   paragraph.style = fresh.style;
   paragraph.listInfo = fresh.listInfo;
+  paragraph.revisions = fresh.revisions;
 }
 
 /**

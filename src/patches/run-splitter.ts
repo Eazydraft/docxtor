@@ -43,10 +43,11 @@ export interface SplitResult {
 /**
  * Find the parent children array that directly contains a run node.
  *
- * Runs can be direct children of w:p, or nested inside w:hyperlink.
- * We need the actual parent's children array to do splice operations.
+ * Runs can be direct children of w:p, or nested inside w:hyperlink,
+ * w:ins, or w:del. We need the actual parent's children array to do
+ * splice operations.
  */
-function findRunParentChildren(
+export function findRunParentChildren(
   paragraphNode: FXPNode,
   runNode: FXPNode,
 ): FXPNode[] | undefined {
@@ -56,29 +57,30 @@ function findRunParentChildren(
     return children;
   }
 
-  // Check inside w:hyperlink elements
-  for (const child of children) {
-    if (getTagName(child) === "w:hyperlink") {
-      const hyperlinkChildren = getChildren(child);
-      if (hyperlinkChildren.includes(runNode)) {
-        return hyperlinkChildren;
-      }
-    }
-  }
-
-  return undefined;
+  // Check inside container elements (w:hyperlink, w:ins, w:del)
+  return findRunInContainers(children, runNode);
 }
 
 /**
- * Result of splitting a run.
+ * Recursively search container elements for a run node.
  */
-export interface SplitResult {
-  /** The part before the matched range (may be undefined if start-aligned). */
-  before?: FXPNode;
-  /** The matched part (the run covering the matched text). */
-  matched: FXPNode;
-  /** The part after the matched range (may be undefined if end-aligned). */
-  after?: FXPNode;
+function findRunInContainers(
+  children: FXPNode[],
+  runNode: FXPNode,
+): FXPNode[] | undefined {
+  for (const child of children) {
+    const tag = getTagName(child);
+    if (tag === "w:hyperlink" || tag === "w:ins" || tag === "w:del") {
+      const containerChildren = getChildren(child);
+      if (containerChildren.includes(runNode)) {
+        return containerChildren;
+      }
+      // Recurse deeper (e.g., w:ins inside w:hyperlink)
+      const found = findRunInContainers(containerChildren, runNode);
+      if (found) return found;
+    }
+  }
+  return undefined;
 }
 
 /**

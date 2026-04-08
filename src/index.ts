@@ -34,6 +34,7 @@ import type {
   NormalizedTable,
   Patch,
   PatchResult,
+  PatchOptions,
   ProjectionFormat,
   ProjectionOptions,
   LoadOptions,
@@ -124,10 +125,12 @@ export class Docxtor {
    * Patches are applied sequentially. After each patch, affected elements
    * are re-normalized so subsequent patches see updated text/mappings.
    *
+   * @param patches - Array of patches to apply
+   * @param options - Optional options (e.g., revision tracking)
    * @returns Array of results, one per patch
    */
-  applyPatches(patches: Patch[]): PatchResult[] {
-    return applyPatches(this.doc, patches);
+  applyPatches(patches: Patch[], options?: PatchOptions): PatchResult[] {
+    return applyPatches(this.doc, patches, options);
   }
 
   // ===========================================================================
@@ -274,6 +277,8 @@ export type {
   FormattingUpdate,
   StyleInfo,
   PatchResult,
+  PatchOptions,
+  RevisionMark,
   ProjectionFormat,
   ProjectionOptions,
   LoadOptions,

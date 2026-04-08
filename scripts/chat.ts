@@ -154,12 +154,16 @@ function printPatches(results: PatchResult[]): void {
         break;
       case "apply_formatting": {
         const props = Object.keys(r.patch.formatting).join(", ");
-        const findHint = r.patch.find ? ` on "${truncate(r.patch.find, 20)}"` : " (whole paragraph)";
+        const findHint = r.patch.find
+          ? ` on "${truncate(r.patch.find, 20)}"`
+          : " (whole paragraph)";
         desc = `format {${props}}${findHint}`;
         break;
       }
       case "apply_style": {
-        const findHint = r.patch.find ? ` on "${truncate(r.patch.find, 20)}"` : "";
+        const findHint = r.patch.find
+          ? ` on "${truncate(r.patch.find, 20)}"`
+          : "";
         desc = `style "${r.patch.style}"${findHint}`;
         break;
       }
@@ -392,7 +396,10 @@ async function main(): Promise<void> {
           }
 
           // Apply
-          const results = doc.applyPatches(patches);
+          const results = doc.applyPatches(patches, {
+            trackRevisions: true,
+            revisionAuthor: "docxtor-agent",
+          });
           const succeeded = results.filter((r) => r.success).length;
           const failed = results.filter((r) => !r.success).length;
 
