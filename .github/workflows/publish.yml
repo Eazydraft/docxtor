@@ -35,6 +35,9 @@ jobs:
           registry-url: https://npm.pkg.github.com
           scope: "@eazydraft"
 
+      - name: Install PNPM
+        run: npm install -g pnpm
+
       - name: Install dependencies
         run: pnpm i --frozen-lockfile
 
