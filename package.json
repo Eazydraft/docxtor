@@ -1,8 +1,31 @@
 {
-  "name": "docxtor",
-  "version": "0.1.0",
+  "name": "@eazydraft/docxtor",
   "description": "Surgical, LLM-friendly DOCX editing through normalized AST with direct XML mutation",
+  "version": "0.0.0",
+  "author": {
+    "name": "Randeep Singh",
+    "email": "randeep@lucioai.com"
+  },
   "type": "module",
+  "private": false,
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Eazydraft/docxtor.git"
+  },
+  "keywords": [
+    "docx",
+    "word",
+    "document",
+    "editing",
+    "llm",
+    "patch",
+    "ooxml"
+  ],
+  "license": "UNLICENSED",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -23,16 +46,6 @@
     "lint": "tsc --noEmit",
     "prepublishOnly": "pnpm build"
   },
-  "keywords": [
-    "docx",
-    "word",
-    "document",
-    "editing",
-    "llm",
-    "patch",
-    "ooxml"
-  ],
-  "license": "UNLICENSED",
   "engines": {
     "node": ">=20"
   },
