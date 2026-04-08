@@ -4,14 +4,6 @@ on:
   release:
     types: [published]
 
-  # Allow manual publish from the Actions tab
-  workflow_dispatch:
-    inputs:
-      version_bump:
-        description: "Version bump type (patch | minor | major)"
-        required: false
-        default: patch
-
 jobs:
   publish:
     name: Publish package
@@ -40,15 +32,6 @@ jobs:
 
       - name: Install dependencies
         run: pnpm i --frozen-lockfile
-
-      # Only bump the version on manual dispatch; releases already carry a tag
-      - name: Bump version (manual dispatch only)
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          npm version ${{ github.event.inputs.version_bump }} -m "chore(release): v%s [skip ci]"
-          git push --follow-tags
 
       - name: Publish package
         run: npm publish
