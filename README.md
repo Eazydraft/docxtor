@@ -47,6 +47,8 @@ const results = doc.applyPatches([
   { type: "replace_text", target: "p1", find: "valid", replace: "enforceable" },
   { type: "insert_text", target: "p2", position: "after", anchor: "terms:", text: " and conditions:" },
   { type: "delete_text", target: "p5", find: "DRAFT - " },
+  { type: "apply_formatting", target: "p1", find: "enforceable", formatting: { bold: true, color: "FF0000" } },
+  { type: "apply_style", target: "p0", style: "Heading1" },
 ]);
 
 // Check results
@@ -92,6 +94,11 @@ const md = doc.project("markdown");
 
 --- Footer (default) ---
 [ftr.default.p0] Page 1
+
+--- Available Styles ---
+[paragraph] Normal — Normal
+[paragraph] Heading1 — heading 1
+[character] Strong — Strong
 ```
 
 Every element has a stable ID (`p0`, `tbl0.r1.c0.p0`, `hdr.default.p0`, etc.) that patches use as targets.
@@ -146,6 +153,7 @@ doc.getHeaders();                // Map<string, HeaderFooter>
 doc.getFooters();                // Map<string, HeaderFooter>
 doc.findParagraphById("p5");     // Search everywhere (body, tables, headers, footers)
 doc.findTableById("tbl0");       // Search body + nested tables
+doc.getStyles();                 // StyleInfo[] from styles.xml
 ```
 
 ## Patch types
@@ -230,6 +238,61 @@ Delete a row from a table.
 }
 ```
 
+### `apply_formatting`
+
+Apply inline formatting to a substring or an entire paragraph. Only touches `w:rPr` on targeted runs -- never modifies global styles, paragraph properties, or theme definitions.
+
+```ts
+{
+  type: "apply_formatting",
+  target: "p1",
+  find: "important",       // exact substring; omit to format the entire paragraph
+  occurrence: 1,           // which occurrence (1-based, default: 1)
+  formatting: {
+    bold: true,            // true = add, false/null = remove, undefined = leave unchanged
+    italic: true,
+    underline: "single",   // "single", "double", "wave", "dash", etc. or null to remove
+    strikethrough: false,
+    fontSize: 28,          // in half-points (28 = 14pt); null to remove
+    fontFamily: "Arial",   // sets w:rFonts w:ascii + w:hAnsi; null to remove
+    color: "FF0000",       // hex color; null to remove
+    highlight: "yellow",   // "yellow", "green", "cyan", etc.; null to remove
+  },
+}
+```
+
+Properties not mentioned in `formatting` are left unchanged on the run. This means you can add bold without affecting an existing color, or remove underline without touching font size.
+
+When `find` is provided, runs are split to isolate exactly the matched text, and formatting is applied only to those runs. When `find` is omitted, formatting is applied to every run in the paragraph.
+
+### `apply_style`
+
+Re-point a paragraph or substring to a pre-existing style defined in the document's `styles.xml`. This is the equivalent of clicking a style in Word's ribbon -- it never creates or modifies style definitions.
+
+**Paragraph style** (no `find`): sets `w:pPr > w:pStyle`. The style must be type `"paragraph"`.
+
+```ts
+{
+  type: "apply_style",
+  target: "p3",
+  style: "Heading1",      // style ID from styles.xml
+}
+```
+
+**Character style** (with `find`): isolates matched runs and sets `w:rPr > w:rStyle`. The style must be type `"character"`.
+
+```ts
+{
+  type: "apply_style",
+  target: "p1",
+  find: "important term",
+  style: "Strong",        // character style ID
+  occurrence: 1,
+}
+```
+
+Available styles are listed in the markdown projection under "Available Styles" and in the JSON projection's `styles` array. Use `doc.getStyles()` to inspect them programmatically.
+
 ## ID scheme
 
 | Location | Pattern | Example |
@@ -265,11 +328,13 @@ Patch types:
 - replace_text: { type: "replace_text", target: "<id>", find: "<text>", replace: "<text>" }
 - insert_text: { type: "insert_text", target: "<id>", position: "before"|"after", anchor: "<text>", text: "<text>" }
 - delete_text: { type: "delete_text", target: "<id>", find: "<text>" }
+- apply_formatting: { type: "apply_formatting", target: "<id>", find: "<text>", formatting: { bold: true, color: "FF0000" } }
+- apply_style: { type: "apply_style", target: "<id>", style: "Heading1" }
 
 Document:
 ${projection}`,
   },
-  { role: "user", content: "Change all mentions of 'Provider' to 'Vendor'" },
+  { role: "user", content: "Change all mentions of 'Provider' to 'Vendor' and make them bold" },
 ]);
 
 const patches = JSON.parse(response);
@@ -314,6 +379,9 @@ import {
 - Headers and footers
 - Hyperlinks (text inside `w:hyperlink` elements)
 - Run splitting with formatting preservation
+- Inline formatting patches (bold, italic, underline, strikethrough, fontSize, fontFamily, color, highlight)
+- Style application (paragraph styles like Heading1, character styles like Strong)
+- Style validation against the document's `styles.xml`
 - XML entity escaping (`&amp;`, `&lt;`, `&gt;`)
 - Newlines (`\n` maps to `w:br` elements)
 - List/numbering info in projections
@@ -325,7 +393,7 @@ import {
 - Merged cells (`gridSpan` / `vMerge`)
 - Numbered list renumbering
 - Image manipulation
-- Style creation
+- Style creation (can only apply pre-existing styles)
 - Comments and annotations
 - Math equations
 
@@ -339,7 +407,7 @@ pnpm build         # build ESM + CJS + DTS (tsup)
 pnpm lint          # type-check
 ```
 
-166 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations, integration flows, hyperlinks, entity escaping, newlines, nested tables, projection, and API surface.
+210 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style), integration flows, hyperlinks, entity escaping, newlines, nested tables, projection, and API surface.
 
 ## License
 
