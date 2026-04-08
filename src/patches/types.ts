@@ -12,5 +12,9 @@ export type {
   AddTableRowPatch,
   DeleteTableRowPatch,
   ReplaceCellTextPatch,
+  ApplyFormattingPatch,
+  ApplyStylePatch,
+  FormattingUpdate,
+  StyleInfo,
   PatchResult,
 } from "../types.js";
