@@ -1,4 +1,4 @@
-# docxtor
+<img src="logo.png" style="margin-bottom:30px" alt="FXP logo"/>
 
 Surgical, LLM-friendly DOCX editing. Load a `.docx`, get a normalized view an LLM can read, apply patches the LLM produces, and write out a valid `.docx` -- all without destroying formatting, styles, headers, or tables.
 
