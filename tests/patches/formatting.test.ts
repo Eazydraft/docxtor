@@ -17,7 +17,8 @@ import type {
   NormalizedTable,
   Patch,
 } from "../../src/types.js";
-import { findChild, findChildren, getChildren, getAttr, getTagName } from "../../src/xml/helpers.js";
+import { validatePatch } from "../../src/patches/validator.js";
+import { findChild, findChildren, getChildren, getAttr, getAttrs, getTagName } from "../../src/xml/helpers.js";
 
 // =============================================================================
 // Helpers
@@ -776,5 +777,197 @@ describe("mixed formatting and text patches", () => {
     // Bold should still be on the "Hello" run
     const helloRun = para.runs.find((r) => r.text === "Hello");
     expect(helloRun!.formatting.bold).toBe(true);
+  });
+});
+
+// =============================================================================
+// Bug fix tests — occurrence validation in whole-paragraph mode
+// =============================================================================
+
+describe("bug fix — occurrence ignored in whole-paragraph mode", () => {
+  it("should accept apply_formatting with invalid occurrence when find is omitted", async () => {
+    const buffer = await createSimpleDocx("Hello World");
+    const entries = await readDocx(buffer);
+    const doc = normalizeDocument(entries);
+
+    // occurrence: 0 is invalid, but should be ignored when find is omitted
+    const result = validatePatch(
+      { type: "apply_formatting", target: "p0", occurrence: 0, formatting: { bold: true } } as Patch,
+      doc,
+    );
+    expect(result.valid).toBe(true);
+  });
+
+  it("should still reject apply_formatting with invalid occurrence when find is provided", async () => {
+    const buffer = await createSimpleDocx("Hello World");
+    const entries = await readDocx(buffer);
+    const doc = normalizeDocument(entries);
+
+    const result = validatePatch(
+      { type: "apply_formatting", target: "p0", find: "Hello", occurrence: 0, formatting: { bold: true } } as Patch,
+      doc,
+    );
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("Invalid occurrence");
+  });
+
+  it("should accept apply_style with invalid occurrence when find is omitted", async () => {
+    const buffer = await createStyledDocx();
+    const entries = await readDocx(buffer);
+    const doc = normalizeDocument(entries);
+
+    const result = validatePatch(
+      { type: "apply_style", target: "p2", occurrence: -1, style: "Heading2" } as Patch,
+      doc,
+    );
+    expect(result.valid).toBe(true);
+  });
+
+  it("should still reject apply_style with invalid occurrence when find is provided", async () => {
+    const buffer = await createStyledDocx();
+    const entries = await readDocx(buffer);
+    const doc = normalizeDocument(entries);
+
+    const result = validatePatch(
+      { type: "apply_style", target: "p1", find: "bold", occurrence: 0, style: "Strong" } as Patch,
+      doc,
+    );
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("Invalid occurrence");
+  });
+});
+
+// =============================================================================
+// Bug fix tests — all-undefined formatting rejected
+// =============================================================================
+
+describe("bug fix — all-undefined formatting rejected", () => {
+  it("should reject { bold: undefined } as empty formatting", async () => {
+    const buffer = await createSimpleDocx("Hello");
+    const entries = await readDocx(buffer);
+    const doc = normalizeDocument(entries);
+
+    const result = validatePatch(
+      { type: "apply_formatting", target: "p0", formatting: { bold: undefined } } as Patch,
+      doc,
+    );
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("Empty formatting");
+  });
+
+  it("should reject { bold: undefined, italic: undefined } as empty formatting", async () => {
+    const buffer = await createSimpleDocx("Hello");
+    const entries = await readDocx(buffer);
+    const doc = normalizeDocument(entries);
+
+    const result = validatePatch(
+      { type: "apply_formatting", target: "p0", formatting: { bold: undefined, italic: undefined } } as Patch,
+      doc,
+    );
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("Empty formatting");
+  });
+
+  it("should accept { bold: null } (removal is a meaningful action)", async () => {
+    const buffer = await createSimpleDocx("Hello");
+    const entries = await readDocx(buffer);
+    const doc = normalizeDocument(entries);
+
+    const result = validatePatch(
+      { type: "apply_formatting", target: "p0", formatting: { bold: null } } as Patch,
+      doc,
+    );
+    expect(result.valid).toBe(true);
+  });
+
+  it("should accept { bold: false } (removal is a meaningful action)", async () => {
+    const buffer = await createSimpleDocx("Hello");
+    const entries = await readDocx(buffer);
+    const doc = normalizeDocument(entries);
+
+    const result = validatePatch(
+      { type: "apply_formatting", target: "p0", formatting: { bold: false } } as Patch,
+      doc,
+    );
+    expect(result.valid).toBe(true);
+  });
+});
+
+// =============================================================================
+// Bug fix tests — fontFamily removal preserves other w:rFonts attributes
+// =============================================================================
+
+describe("bug fix — fontFamily removal preserves other rFonts attributes", () => {
+  it("should preserve w:eastAsia when removing fontFamily", async () => {
+    // Create a DOCX where a run has w:rFonts with w:ascii, w:hAnsi, AND w:eastAsia
+    const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="MS Mincho"/>
+        </w:rPr>
+        <w:t>Mixed fonts text</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>`;
+
+    // Build DOCX manually using the same JSZip approach
+    const JSZip = (await import("jszip")).default;
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`);
+    zip.file("_rels/.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`);
+    zip.file("word/document.xml", documentXml);
+    const buffer = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }) as Buffer;
+
+    const { doc, results } = await loadAndPatch(buffer, [
+      { type: "apply_formatting", target: "p0", find: "Mixed fonts text", formatting: { fontFamily: null } },
+    ]);
+
+    expect(results[0]!.success).toBe(true);
+    const para = doc.body[0] as NormalizedParagraph;
+
+    // fontFamily (w:ascii/w:hAnsi) should be removed
+    expect(para.runs[0]!.formatting.fontFamily).toBeUndefined();
+
+    // But w:rFonts element should still exist with w:eastAsia
+    const rPr = findChild(para.runs[0]!.xmlRef, "w:rPr");
+    expect(rPr).toBeDefined();
+    const rFonts = findChild(rPr!, "w:rFonts");
+    expect(rFonts).toBeDefined();
+    const attrs = getAttrs(rFonts!);
+    expect(attrs["w:eastAsia"]).toBe("MS Mincho");
+    expect(attrs["w:ascii"]).toBeUndefined();
+    expect(attrs["w:hAnsi"]).toBeUndefined();
+  });
+
+  it("should remove w:rFonts entirely when no other attributes remain", async () => {
+    const buffer = await createSimpleDocx("Font test");
+    // Add fontFamily then remove it — should remove the whole element since it only has w:ascii and w:hAnsi
+    const { doc } = await loadAndPatch(buffer, [
+      { type: "apply_formatting", target: "p0", find: "Font", formatting: { fontFamily: "Arial" } },
+      { type: "apply_formatting", target: "p0", find: "Font", formatting: { fontFamily: null } },
+    ]);
+
+    const para = doc.body[0] as NormalizedParagraph;
+    expect(para.runs[0]!.formatting.fontFamily).toBeUndefined();
+
+    // The w:rFonts element should be completely gone since it had no other attributes
+    const rPr = findChild(para.runs[0]!.xmlRef, "w:rPr");
+    if (rPr) {
+      const rFonts = findChild(rPr, "w:rFonts");
+      expect(rFonts).toBeUndefined();
+    }
   });
 });

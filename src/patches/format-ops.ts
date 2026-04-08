@@ -28,6 +28,8 @@ import {
   getChildren,
   createElement,
   setAttr,
+  removeAttr,
+  getAttrs,
   removeChild,
 } from "../xml/helpers.js";
 
@@ -213,7 +215,8 @@ function applyAttrProp(
  *   <w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>
  *
  * - non-null string → create/update w:rFonts with w:ascii and w:hAnsi
- * - `null` → remove w:rFonts entirely
+ * - `null` → remove only w:ascii and w:hAnsi attributes (preserving w:eastAsia,
+ *   w:cs, theme attributes, etc.). If no attributes remain, remove the element.
  */
 function applyFontFamily(rPr: FXPNode, value: string | null): void {
   const existing = findChild(rPr, "w:rFonts");
@@ -231,7 +234,12 @@ function applyFontFamily(rPr: FXPNode, value: string | null): void {
     }
   } else {
     if (existing) {
-      removeChild(rPr, existing);
+      removeAttr(existing, "w:ascii");
+      removeAttr(existing, "w:hAnsi");
+      // Only remove the element entirely if no attributes remain
+      if (Object.keys(getAttrs(existing)).length === 0) {
+        removeChild(rPr, existing);
+      }
     }
   }
 }

@@ -8,15 +8,24 @@
 
 import JSZip from "jszip";
 
-/** Content types XML required by every DOCX. */
-const CONTENT_TYPES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
+/** Build content types XML, conditionally including styles.xml override. */
+function buildContentTypes(options: { stylesXml?: string }): string {
+  let overrides = `
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
-  <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
+  <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>`;
+
+  if (options.stylesXml) {
+    overrides += `
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>`;
+  }
+
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>${overrides}
 </Types>`;
+}
 
 /** Top-level relationships. */
 const TOP_RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -355,7 +364,7 @@ interface BuildDocxOptions {
 async function buildDocx(options: BuildDocxOptions): Promise<Buffer> {
   const zip = new JSZip();
 
-  zip.file("[Content_Types].xml", CONTENT_TYPES);
+  zip.file("[Content_Types].xml", buildContentTypes(options));
   zip.file("_rels/.rels", TOP_RELS);
   zip.file("word/document.xml", options.documentXml);
 

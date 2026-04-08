@@ -96,16 +96,23 @@ export function validatePatch(
       if (patch.find !== undefined && patch.find.length === 0) {
         return { valid: false, error: "Empty find string" };
       }
-      if (patch.occurrence !== undefined) {
-        if (patch.occurrence < 1 || !Number.isInteger(patch.occurrence)) {
-          return {
-            valid: false,
-            error: `Invalid occurrence: ${patch.occurrence} (must be a positive integer)`,
-          };
+      // Only validate occurrence when find is provided (it's ignored otherwise)
+      if (patch.find !== undefined && patch.find.length > 0) {
+        if (patch.occurrence !== undefined) {
+          if (patch.occurrence < 1 || !Number.isInteger(patch.occurrence)) {
+            return {
+              valid: false,
+              error: `Invalid occurrence: ${patch.occurrence} (must be a positive integer)`,
+            };
+          }
         }
       }
-      // Must have at least one formatting property
-      if (!patch.formatting || Object.keys(patch.formatting).length === 0) {
+      // Must have at least one formatting property with a meaningful value
+      // (undefined values are ignored, so { bold: undefined } is effectively empty)
+      if (
+        !patch.formatting ||
+        !Object.values(patch.formatting).some((v) => v !== undefined)
+      ) {
         return { valid: false, error: "Empty formatting object" };
       }
       return { valid: true };
@@ -121,12 +128,15 @@ export function validatePatch(
       if (patch.find !== undefined && patch.find.length === 0) {
         return { valid: false, error: "Empty find string" };
       }
-      if (patch.occurrence !== undefined) {
-        if (patch.occurrence < 1 || !Number.isInteger(patch.occurrence)) {
-          return {
-            valid: false,
-            error: `Invalid occurrence: ${patch.occurrence} (must be a positive integer)`,
-          };
+      // Only validate occurrence when find is provided (it's ignored otherwise)
+      if (patch.find !== undefined && patch.find.length > 0) {
+        if (patch.occurrence !== undefined) {
+          if (patch.occurrence < 1 || !Number.isInteger(patch.occurrence)) {
+            return {
+              valid: false,
+              error: `Invalid occurrence: ${patch.occurrence} (must be a positive integer)`,
+            };
+          }
         }
       }
       if (!patch.style || patch.style.length === 0) {
