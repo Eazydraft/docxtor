@@ -170,7 +170,13 @@ async function callLLM(
   const content = response.choices[0]?.message?.content ?? "{}";
   conversationMessages.push({ role: "assistant", content });
 
-  const parsed = JSON.parse(content);
+  // remove "```" and/or "json" if the model wrapped the JSON in a code block
+  const cleaned = content
+    .trim()
+    .replace(/^```json\s*/, "")
+    .replace(/```\s*$/, "");
+
+  const parsed = JSON.parse(cleaned);
   return {
     explanation: parsed.explanation ?? "",
     patches: Array.isArray(parsed.patches) ? parsed.patches : [],
@@ -237,7 +243,9 @@ async function main(): Promise<void> {
 
   // Validate API key
   if (!process.env.OPENROUTER_API_KEY) {
-    console.error(red("Error: OPENROUTER_API_KEY environment variable is not set."));
+    console.error(
+      red("Error: OPENROUTER_API_KEY environment variable is not set."),
+    );
     process.exit(1);
   }
 
@@ -310,7 +318,9 @@ async function main(): Promise<void> {
               return;
             default:
               console.log(yellow(`Unknown command: ${cmd}`));
-              console.log(dim("Commands: /save [path]  /show  /undo  /history  /quit"));
+              console.log(
+                dim("Commands: /save [path]  /show  /undo  /history  /quit"),
+              );
           }
 
           prompt();
@@ -335,10 +345,14 @@ async function main(): Promise<void> {
           const validations = doc.validatePatches(patches);
           const invalid = validations.filter((v) => !v.valid);
           if (invalid.length > 0) {
-            console.log(yellow(`\n  ${invalid.length} patch(es) failed validation:`));
+            console.log(
+              yellow(`\n  ${invalid.length} patch(es) failed validation:`),
+            );
             for (let i = 0; i < validations.length; i++) {
               if (!validations[i]!.valid) {
-                console.log(red(`    - patch ${i + 1}: ${validations[i]!.error}`));
+                console.log(
+                  red(`    - patch ${i + 1}: ${validations[i]!.error}`),
+                );
               }
             }
           }
@@ -353,9 +367,15 @@ async function main(): Promise<void> {
           console.log();
 
           if (failed > 0) {
-            console.log(yellow(`${succeeded}/${results.length} patches applied (${failed} failed)`));
+            console.log(
+              yellow(
+                `${succeeded}/${results.length} patches applied (${failed} failed)`,
+              ),
+            );
           } else {
-            console.log(green(`${succeeded}/${results.length} patches applied`));
+            console.log(
+              green(`${succeeded}/${results.length} patches applied`),
+            );
           }
 
           // Record in history
@@ -383,6 +403,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error(red(`Fatal: ${err instanceof Error ? err.message : String(err)}`));
+  console.error(
+    red(`Fatal: ${err instanceof Error ? err.message : String(err)}`),
+  );
   process.exit(1);
 });
