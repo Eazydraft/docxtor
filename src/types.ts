@@ -44,6 +44,11 @@ export interface NormalizedDocument {
    * These are the mutable structures that patches operate on.
    */
   xmlParts: DocxXmlParts;
+  /**
+   * Style definitions extracted from word/styles.xml (read-only).
+   * Empty array if styles.xml is not present.
+   */
+  styles: StyleInfo[];
 }
 
 export interface DocxXmlParts {
@@ -164,6 +169,23 @@ export interface NormalizedTableCell {
 }
 
 // =============================================================================
+// Style Info (extracted from styles.xml)
+// =============================================================================
+
+/**
+ * A style definition extracted from word/styles.xml.
+ * Read-only — we never create or modify style definitions.
+ */
+export interface StyleInfo {
+  /** The style ID used in w:pStyle or w:rStyle (e.g., "Heading1"). */
+  id: string;
+  /** The human-readable name (e.g., "heading 1"). */
+  name: string;
+  /** OOXML style type. */
+  type: "paragraph" | "character" | "table" | "numbering";
+}
+
+// =============================================================================
 // Patch Types
 // =============================================================================
 
@@ -173,7 +195,9 @@ export type Patch =
   | DeleteTextPatch
   | AddTableRowPatch
   | DeleteTableRowPatch
-  | ReplaceCellTextPatch;
+  | ReplaceCellTextPatch
+  | ApplyFormattingPatch
+  | ApplyStylePatch;
 
 export interface ReplaceTextPatch {
   type: "replace_text";
@@ -239,6 +263,66 @@ export interface ReplaceCellTextPatch {
   replace: string;
   /** Which occurrence (1-based). Default: 1. */
   occurrence?: number;
+}
+
+export interface ApplyFormattingPatch {
+  type: "apply_formatting";
+  /** Target paragraph ID. */
+  target: string;
+  /**
+   * Exact substring to apply formatting to.
+   * If omitted, formatting is applied to all runs in the paragraph.
+   */
+  find?: string;
+  /** Which occurrence of `find` (1-based). Default: 1. Ignored when `find` is omitted. */
+  occurrence?: number;
+  /** The formatting properties to set or remove. */
+  formatting: FormattingUpdate;
+}
+
+/**
+ * Inline formatting properties to set or remove on run(s).
+ *
+ * - `true` / string / number → set the property (add or update w:rPr child element)
+ * - `false` / `null` → remove the property element from w:rPr
+ * - Property not mentioned → leave unchanged
+ *
+ * Only touches inline w:rPr on targeted runs. Never modifies global styles.
+ */
+export interface FormattingUpdate {
+  bold?: boolean | null;
+  italic?: boolean | null;
+  /** Underline style: "single", "double", "wave", "thick", "dash", "dotted", etc. */
+  underline?: string | null;
+  strikethrough?: boolean | null;
+  /** Font size in half-points (e.g., 24 = 12pt). */
+  fontSize?: number | null;
+  /** Font family name (e.g., "Arial"). Sets both w:ascii and w:hAnsi on w:rFonts. */
+  fontFamily?: string | null;
+  /** Hex color (e.g., "FF0000" for red). */
+  color?: string | null;
+  /** Highlight color name (e.g., "yellow", "green", "cyan"). */
+  highlight?: string | null;
+}
+
+export interface ApplyStylePatch {
+  type: "apply_style";
+  /** Target paragraph ID. */
+  target: string;
+  /**
+   * Exact substring to apply a character style to.
+   * If omitted, a paragraph style is applied (w:pStyle in w:pPr).
+   * If provided, a character style is applied (w:rStyle in w:rPr) to matched runs.
+   */
+  find?: string;
+  /** Which occurrence of `find` (1-based). Default: 1. Ignored when `find` is omitted. */
+  occurrence?: number;
+  /**
+   * Style ID that must already exist in the document's styles.xml.
+   * For paragraph styles (no find): must be a "paragraph" type style.
+   * For character styles (with find): must be a "character" type style.
+   */
+  style: string;
 }
 
 // =============================================================================

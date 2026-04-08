@@ -8,15 +8,24 @@
 
 import JSZip from "jszip";
 
-/** Content types XML required by every DOCX. */
-const CONTENT_TYPES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
+/** Build content types XML, conditionally including styles.xml override. */
+function buildContentTypes(options: { stylesXml?: string }): string {
+  let overrides = `
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
-  <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
+  <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>`;
+
+  if (options.stylesXml) {
+    overrides += `
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>`;
+  }
+
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>${overrides}
 </Types>`;
+}
 
 /** Top-level relationships. */
 const TOP_RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -348,13 +357,14 @@ interface BuildDocxOptions {
   documentXml: string;
   headerXml?: string;
   footerXml?: string;
+  stylesXml?: string;
   includeDocRels?: boolean;
 }
 
 async function buildDocx(options: BuildDocxOptions): Promise<Buffer> {
   const zip = new JSZip();
 
-  zip.file("[Content_Types].xml", CONTENT_TYPES);
+  zip.file("[Content_Types].xml", buildContentTypes(options));
   zip.file("_rels/.rels", TOP_RELS);
   zip.file("word/document.xml", options.documentXml);
 
@@ -370,10 +380,127 @@ async function buildDocx(options: BuildDocxOptions): Promise<Buffer> {
     zip.file("word/footer1.xml", options.footerXml);
   }
 
+  if (options.stylesXml) {
+    zip.file("word/styles.xml", options.stylesXml);
+  }
+
   return zip.generateAsync({
     type: "nodebuffer",
     compression: "DEFLATE",
   }) as Promise<Buffer>;
+}
+
+/**
+ * A minimal styles.xml with common styles for testing.
+ */
+export const TEST_STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal">
+    <w:name w:val="Normal"/>
+    <w:rPr>
+      <w:sz w:val="24"/>
+    </w:rPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="Heading1">
+    <w:name w:val="heading 1"/>
+    <w:basedOn w:val="Normal"/>
+    <w:pPr>
+      <w:spacing w:before="240" w:after="0"/>
+    </w:pPr>
+    <w:rPr>
+      <w:b/>
+      <w:sz w:val="32"/>
+      <w:color w:val="2F5496"/>
+    </w:rPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="Heading2">
+    <w:name w:val="heading 2"/>
+    <w:basedOn w:val="Normal"/>
+    <w:rPr>
+      <w:b/>
+      <w:sz w:val="26"/>
+      <w:color w:val="2F5496"/>
+    </w:rPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="Title">
+    <w:name w:val="Title"/>
+    <w:basedOn w:val="Normal"/>
+    <w:rPr>
+      <w:sz w:val="56"/>
+    </w:rPr>
+  </w:style>
+  <w:style w:type="character" w:styleId="Strong">
+    <w:name w:val="Strong"/>
+    <w:rPr>
+      <w:b/>
+    </w:rPr>
+  </w:style>
+  <w:style w:type="character" w:styleId="Emphasis">
+    <w:name w:val="Emphasis"/>
+    <w:rPr>
+      <w:i/>
+    </w:rPr>
+  </w:style>
+  <w:style w:type="character" w:styleId="Hyperlink">
+    <w:name w:val="Hyperlink"/>
+    <w:rPr>
+      <w:color w:val="0563C1"/>
+      <w:u w:val="single"/>
+    </w:rPr>
+  </w:style>
+  <w:style w:type="table" w:styleId="TableGrid">
+    <w:name w:val="Table Grid"/>
+  </w:style>
+</w:styles>`;
+
+/**
+ * Create a DOCX with styles.xml included for testing style patches.
+ *
+ * Contains two paragraphs: one with Heading1 style, one plain.
+ * Includes multi-run formatting on the second paragraph (bold/italic).
+ */
+export async function createStyledDocx(): Promise<Buffer> {
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="Heading1"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr><w:b/><w:sz w:val="32"/><w:color w:val="2F5496"/></w:rPr>
+        <w:t>Document Title</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:r>
+        <w:t xml:space="preserve">This is </w:t>
+      </w:r>
+      <w:r>
+        <w:rPr><w:b/></w:rPr>
+        <w:t>bold</w:t>
+      </w:r>
+      <w:r>
+        <w:t xml:space="preserve"> and </w:t>
+      </w:r>
+      <w:r>
+        <w:rPr><w:i/></w:rPr>
+        <w:t>italic</w:t>
+      </w:r>
+      <w:r>
+        <w:t xml:space="preserve"> text here.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:r>
+        <w:t>Plain paragraph for testing.</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>`;
+
+  return buildDocx({ documentXml, stylesXml: TEST_STYLES_XML });
 }
 
 function escapeXml(text: string): string {

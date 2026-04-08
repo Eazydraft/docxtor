@@ -14,6 +14,7 @@ import type {
   HeaderFooter,
   DocxXmlParts,
   LoadOptions,
+  StyleInfo,
 } from "../types.js";
 import type { DocxZipEntries } from "../zip/reader.js";
 import { parseXml } from "../xml/parser.js";
@@ -57,6 +58,11 @@ export function normalizeDocument(
   // Parse document relationships to map rId → filename
   const relMap = parseRelationships(zipEntries.documentRels);
 
+  // Parse styles.xml if present
+  const styles = zipEntries.stylesXml
+    ? parseStyles(zipEntries.stylesXml)
+    : [];
+
   // Normalize body elements
   const body = normalizeBody(documentFxp);
 
@@ -96,7 +102,7 @@ export function normalizeDocument(
     footers: footersFxp,
   };
 
-  return { body, headers, footers, xmlParts };
+  return { body, headers, footers, xmlParts, styles };
 }
 
 /**
@@ -211,4 +217,43 @@ function findHeaderFooterRefs(documentFxp: FXPNode[]): HeaderFooterRef[] {
   }
 
   return refs;
+}
+
+// =============================================================================
+// Styles
+// =============================================================================
+
+/**
+ * Parse word/styles.xml and extract style definitions.
+ *
+ * We only extract the style ID, human-readable name, and type.
+ * We never modify styles.xml — this is read-only metadata used for
+ * validation and projection.
+ */
+function parseStyles(stylesXml: string): StyleInfo[] {
+  const parsed = parseXml(stylesXml);
+  const styles: StyleInfo[] = [];
+
+  // Find w:styles root
+  const stylesNode = parsed.find((n) => getTagName(n) === "w:styles");
+  if (!stylesNode) return styles;
+
+  const styleNodes = findChildren(stylesNode, "w:style");
+  for (const styleNode of styleNodes) {
+    const id = getAttr(styleNode, "w:styleId");
+    const type = getAttr(styleNode, "w:type") as StyleInfo["type"] | undefined;
+
+    if (!id || !type) continue;
+
+    // Valid types: paragraph, character, table, numbering
+    if (!["paragraph", "character", "table", "numbering"].includes(type)) continue;
+
+    // Get the human-readable name from w:name
+    const nameNode = findChild(styleNode, "w:name");
+    const name = nameNode ? (getAttr(nameNode, "w:val") ?? id) : id;
+
+    styles.push({ id, name, type });
+  }
+
+  return styles;
 }

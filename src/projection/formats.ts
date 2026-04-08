@@ -9,6 +9,7 @@ import type {
   NormalizedParagraph,
   NormalizedTable,
   RunFormatting,
+  StyleInfo,
   ProjectionOptions,
 } from "../types.js";
 
@@ -47,6 +48,7 @@ export interface JsonProjection {
   body: (JsonProjectionParagraph | JsonProjectionTable)[];
   headers?: JsonProjectionHeaderFooter[];
   footers?: JsonProjectionHeaderFooter[];
+  styles?: StyleInfo[];
 }
 
 /**
@@ -71,6 +73,11 @@ export function projectToJson(
   }
 
   const result: JsonProjection = { body };
+
+  // Include available styles if present
+  if (doc.styles.length > 0) {
+    result.styles = doc.styles;
+  }
 
   if (includeHeadersFooters) {
     if (doc.headers.size > 0) {
@@ -233,6 +240,15 @@ export function projectToMarkdown(
       for (const para of footer.paragraphs) {
         lines.push(formatParagraphMarkdown(para));
       }
+    }
+  }
+
+  // Include available styles
+  if (doc.styles.length > 0) {
+    lines.push("");
+    lines.push("--- Available Styles ---");
+    for (const style of doc.styles) {
+      lines.push(`[${style.type}] ${style.id} — ${style.name}`);
     }
   }
 

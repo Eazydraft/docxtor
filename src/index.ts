@@ -39,6 +39,7 @@ import type {
   LoadOptions,
   BodyElement,
   HeaderFooter,
+  StyleInfo,
 } from "./types.js";
 import { readDocx, type DocxZipEntries } from "./zip/reader.js";
 import { writeDocx } from "./zip/writer.js";
@@ -233,6 +234,14 @@ export class Docxtor {
   }
 
   /**
+   * Get available styles from the document's styles.xml.
+   * Useful for knowing which styles can be applied via apply_style patches.
+   */
+  getStyles(): StyleInfo[] {
+    return this.doc.styles;
+  }
+
+  /**
    * Validate patches without applying them.
    * Returns validation results for each patch.
    */
@@ -260,6 +269,10 @@ export type {
   AddTableRowPatch,
   DeleteTableRowPatch,
   ReplaceCellTextPatch,
+  ApplyFormattingPatch,
+  ApplyStylePatch,
+  FormattingUpdate,
+  StyleInfo,
   PatchResult,
   ProjectionFormat,
   ProjectionOptions,

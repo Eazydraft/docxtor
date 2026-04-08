@@ -31,6 +31,8 @@ import {
   executeDeleteTableRow,
   executeReplaceCellText,
 } from "./table-ops.js";
+import { executeApplyFormatting } from "./format-ops.js";
+import { executeApplyStyle } from "./style-ops.js";
 import { normalizeParagraph } from "../normalizer/paragraph.js";
 import { normalizeTable } from "../normalizer/table.js";
 
@@ -106,6 +108,18 @@ function applySinglePatch(
         const table = findTableById(patch.target, doc)!;
         executeDeleteTableRow(table, patch);
         reNormalizeTable(doc, table);
+        break;
+      }
+      case "apply_formatting": {
+        const para = findParagraphById(patch.target, doc)!;
+        executeApplyFormatting(para, patch);
+        reNormalizeParagraph(doc, para);
+        break;
+      }
+      case "apply_style": {
+        const para = findParagraphById(patch.target, doc)!;
+        executeApplyStyle(para, patch, doc);
+        reNormalizeParagraph(doc, para);
         break;
       }
     }

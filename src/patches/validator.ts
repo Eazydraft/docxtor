@@ -85,6 +85,90 @@ export function validatePatch(
       }
       return { valid: true };
     }
+    case "apply_formatting": {
+      const para = findParagraphById(patch.target, doc);
+      if (!para) {
+        return {
+          valid: false,
+          error: `Paragraph "${patch.target}" not found`,
+        };
+      }
+      if (patch.find !== undefined && patch.find.length === 0) {
+        return { valid: false, error: "Empty find string" };
+      }
+      // Only validate occurrence when find is provided (it's ignored otherwise)
+      if (patch.find !== undefined && patch.find.length > 0) {
+        if (patch.occurrence !== undefined) {
+          if (patch.occurrence < 1 || !Number.isInteger(patch.occurrence)) {
+            return {
+              valid: false,
+              error: `Invalid occurrence: ${patch.occurrence} (must be a positive integer)`,
+            };
+          }
+        }
+      }
+      // Must have at least one formatting property with a meaningful value
+      // (undefined values are ignored, so { bold: undefined } is effectively empty)
+      if (
+        !patch.formatting ||
+        !Object.values(patch.formatting).some((v) => v !== undefined)
+      ) {
+        return { valid: false, error: "Empty formatting object" };
+      }
+      return { valid: true };
+    }
+    case "apply_style": {
+      const para = findParagraphById(patch.target, doc);
+      if (!para) {
+        return {
+          valid: false,
+          error: `Paragraph "${patch.target}" not found`,
+        };
+      }
+      if (patch.find !== undefined && patch.find.length === 0) {
+        return { valid: false, error: "Empty find string" };
+      }
+      // Only validate occurrence when find is provided (it's ignored otherwise)
+      if (patch.find !== undefined && patch.find.length > 0) {
+        if (patch.occurrence !== undefined) {
+          if (patch.occurrence < 1 || !Number.isInteger(patch.occurrence)) {
+            return {
+              valid: false,
+              error: `Invalid occurrence: ${patch.occurrence} (must be a positive integer)`,
+            };
+          }
+        }
+      }
+      if (!patch.style || patch.style.length === 0) {
+        return { valid: false, error: "Empty style ID" };
+      }
+      // Validate style exists and is correct type
+      const styleInfo = doc.styles.find((s) => s.id === patch.style);
+      if (!styleInfo) {
+        return {
+          valid: false,
+          error: `Style "${patch.style}" not found in document styles`,
+        };
+      }
+      if (patch.find !== undefined && patch.find.length > 0) {
+        // Character style mode
+        if (styleInfo.type !== "character") {
+          return {
+            valid: false,
+            error: `Style "${patch.style}" is type "${styleInfo.type}", expected "character" when "find" is specified`,
+          };
+        }
+      } else {
+        // Paragraph style mode
+        if (styleInfo.type !== "paragraph") {
+          return {
+            valid: false,
+            error: `Style "${patch.style}" is type "${styleInfo.type}", expected "paragraph" when "find" is omitted`,
+          };
+        }
+      }
+      return { valid: true };
+    }
     default:
       return {
         valid: false,

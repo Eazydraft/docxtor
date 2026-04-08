@@ -54,12 +54,34 @@ Patch types:
 6. delete_table_row — Delete a row from a table.
    { "type": "delete_table_row", "target": "<table_id>", "row": <row_index> }
 
+7. apply_formatting — Apply inline formatting to a substring or entire paragraph.
+   { "type": "apply_formatting", "target": "<paragraph_id>", "find": "<exact_text>", "occurrence": 1, "formatting": { ... } }
+   Omit "find" to format the entire paragraph. The "formatting" object supports:
+   - bold: true/false/null (true=add, false/null=remove)
+   - italic: true/false/null
+   - underline: "single"/"double"/"wave"/null (string=add, null=remove)
+   - strikethrough: true/false/null
+   - fontSize: number/null (in half-points, e.g. 24 = 12pt)
+   - fontFamily: "Arial"/null (string=set, null=remove)
+   - color: "FF0000"/null (hex color, null=remove)
+   - highlight: "yellow"/"green"/"cyan"/null (color name, null=remove)
+   Only properties you include are changed; omitted properties are left unchanged.
+
+8. apply_style — Apply a pre-existing style to a paragraph or substring.
+   { "type": "apply_style", "target": "<paragraph_id>", "style": "<style_id>" }
+   Omit "find" to apply a paragraph style (e.g. "Heading1", "Title").
+   Include "find" to apply a character style (e.g. "Strong", "Emphasis") to matched text:
+   { "type": "apply_style", "target": "<paragraph_id>", "find": "<exact_text>", "style": "<character_style_id>", "occurrence": 1 }
+   The style must already exist in the document (listed under "Available Styles" in the projection).
+
 Rules:
 - "find" must be an EXACT substring of the paragraph text. Copy it character-for-character from the document.
 - "occurrence" is 1-based. Default is 1 (first occurrence). Use higher numbers only if there are duplicates within the same paragraph.
 - Paragraph IDs look like: p0, p1, tbl0.r0.c0.p0, hdr.default.p0, etc.
 - Table IDs look like: tbl0, tbl1, etc.
 - When replacing text that could be a substring of other words, include surrounding characters in "find" and "replace" to disambiguate (e.g., use " the " instead of "the" to avoid matching "other").
+- For formatting changes, prefer apply_formatting over apply_style unless the user specifically asks for a style.
+- For structural changes like "make this a heading", use apply_style with the appropriate paragraph style.
 - If the user asks for something you can't do with patches (e.g., add images), explain that in "explanation" and return an empty "patches" array.
 - ALWAYS respond with valid JSON. No markdown fences, no extra text.`;
 
@@ -130,6 +152,17 @@ function printPatches(results: PatchResult[]): void {
       case "delete_table_row":
         desc = `delete row ${r.patch.row}`;
         break;
+      case "apply_formatting": {
+        const props = Object.keys(r.patch.formatting).join(", ");
+        const findHint = r.patch.find ? ` on "${truncate(r.patch.find, 20)}"` : " (whole paragraph)";
+        desc = `format {${props}}${findHint}`;
+        break;
+      }
+      case "apply_style": {
+        const findHint = r.patch.find ? ` on "${truncate(r.patch.find, 20)}"` : "";
+        desc = `style "${r.patch.style}"${findHint}`;
+        break;
+      }
     }
     console.log(`  ${status} [${target}] ${desc}`);
     if (!r.success && r.error) {
@@ -263,12 +296,13 @@ async function main(): Promise<void> {
   const tableCount = body.filter((e) => e.kind === "table").length;
   const headerCount = doc.getHeaders().size;
   const footerCount = doc.getFooters().size;
+  const styleCount = doc.getStyles().length;
 
   console.log();
   console.log(bold("docxtor") + dim(" interactive editor"));
   console.log(
     dim(
-      `Loaded: ${paraCount} paragraphs, ${tableCount} tables, ${headerCount} headers, ${footerCount} footers`,
+      `Loaded: ${paraCount} paragraphs, ${tableCount} tables, ${headerCount} headers, ${footerCount} footers, ${styleCount} styles`,
     ),
   );
   console.log(dim(`Model: ${MODEL}`));
