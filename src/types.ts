@@ -59,10 +59,11 @@ export interface DocxXmlParts {
   [key: string]: FXPNode[] | Map<string, FXPNode[]> | undefined;
 }
 
-/** A body element is either a paragraph or a table. */
+/** A body element is a paragraph, table, or page break. */
 export type BodyElement =
   | NormalizedParagraph
-  | NormalizedTable;
+  | NormalizedTable
+  | NormalizedPageBreak;
 
 /** Header or footer content. */
 export interface HeaderFooter {
@@ -75,6 +76,27 @@ export interface HeaderFooter {
   paragraphs: NormalizedParagraph[];
   /** The FXP object for this header/footer XML file. */
   xmlRef: FXPNode[];
+}
+
+// =============================================================================
+// Page Break
+// =============================================================================
+
+/**
+ * A page break element in the document body.
+ *
+ * Surfaces paragraphs whose only purpose is a page break as a distinct
+ * body element for clean projection output. Detects three OOXML mechanisms:
+ * - `<w:br w:type="page"/>` — explicit page break inserted by the user
+ * - `<w:lastRenderedPageBreak/>` — Word rendering hint
+ * - `<w:pageBreakBefore/>` in `w:pPr` — paragraph-level "page break before"
+ */
+export interface NormalizedPageBreak {
+  kind: "page_break";
+  /** Stable ID, e.g., "pb0", "pb1" */
+  id: string;
+  /** Direct reference to the w:p FXP node containing the page break. */
+  xmlRef: FXPNode;
 }
 
 // =============================================================================
@@ -97,6 +119,26 @@ export interface NormalizedParagraph {
   listInfo?: ListInfo;
   /** Revision marks captured from w:ins / w:del elements (for projection use). */
   revisions?: RevisionMark[];
+  /**
+   * True if this paragraph contains a page break.
+   * Detects `w:br w:type="page"`, `w:lastRenderedPageBreak`, and
+   * `w:pageBreakBefore` in `w:pPr`.
+   * Only set when the paragraph has text AND a page break — paragraphs
+   * that consist solely of a page break are surfaced as NormalizedPageBreak instead.
+   */
+  hasPageBreak?: boolean;
+  /**
+   * Character offset within `.text` where the page break occurs.
+   * Only set when `hasPageBreak` is true.
+   *
+   * - For `w:pageBreakBefore`: always `0` (the entire paragraph starts on a new page).
+   * - For `w:br w:type="page"` or `w:lastRenderedPageBreak`: the character position
+   *   in the concatenated paragraph text where the break element appears.
+   *
+   * In an ingestion pipeline, text before this offset is on the previous page,
+   * and text from this offset onward is on the next page.
+   */
+  pageBreakOffset?: number;
 }
 
 /**
@@ -372,6 +414,8 @@ export interface ProjectionOptions {
   includeTables?: boolean;
   /** Include revision marks (tracked changes) in the projection. Default: false. */
   includeRevisions?: boolean;
+  /** Include page break elements and hints in the projection. Default: false. */
+  includePageBreaks?: boolean;
 }
 
 // =============================================================================

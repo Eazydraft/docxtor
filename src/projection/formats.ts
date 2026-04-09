@@ -25,6 +25,8 @@ interface JsonProjectionParagraph {
   listLevel?: number;
   formatting?: RunFormatting[];
   revisions?: RevisionMark[];
+  hasPageBreak?: boolean;
+  pageBreakOffset?: number;
 }
 
 interface JsonProjectionTableCell {
@@ -46,8 +48,13 @@ interface JsonProjectionHeaderFooter {
   paragraphs: JsonProjectionParagraph[];
 }
 
+export interface JsonProjectionPageBreak {
+  id: string;
+  type: "page_break";
+}
+
 export interface JsonProjection {
-  body: (JsonProjectionParagraph | JsonProjectionTable)[];
+  body: (JsonProjectionParagraph | JsonProjectionTable | JsonProjectionPageBreak)[];
   headers?: JsonProjectionHeaderFooter[];
   footers?: JsonProjectionHeaderFooter[];
   styles?: StyleInfo[];
@@ -64,14 +71,17 @@ export function projectToJson(
   const includeHeadersFooters = options.includeHeadersFooters ?? true;
   const includeTables = options.includeTables ?? true;
   const includeRevisions = options.includeRevisions ?? false;
+  const includePageBreaks = options.includePageBreaks ?? false;
 
-  const body: (JsonProjectionParagraph | JsonProjectionTable)[] = [];
+  const body: (JsonProjectionParagraph | JsonProjectionTable | JsonProjectionPageBreak)[] = [];
 
   for (const element of doc.body) {
     if (element.kind === "paragraph") {
-      body.push(projectParagraphToJson(element, includeFormatting, includeRevisions));
+      body.push(projectParagraphToJson(element, includeFormatting, includeRevisions, includePageBreaks));
     } else if (element.kind === "table" && includeTables) {
       body.push(projectTableToJson(element, includeFormatting, includeRevisions));
+    } else if (element.kind === "page_break" && includePageBreaks) {
+      body.push({ id: element.id, type: "page_break" });
     }
   }
 
@@ -116,6 +126,7 @@ function projectParagraphToJson(
   para: NormalizedParagraph,
   includeFormatting: boolean,
   includeRevisions: boolean = false,
+  includePageBreaks: boolean = false,
 ): JsonProjectionParagraph {
   const result: JsonProjectionParagraph = {
     id: para.id,
@@ -147,6 +158,13 @@ function projectParagraphToJson(
 
   if (includeRevisions && para.revisions && para.revisions.length > 0) {
     result.revisions = para.revisions;
+  }
+
+  if (includePageBreaks && para.hasPageBreak) {
+    result.hasPageBreak = true;
+    if (para.pageBreakOffset !== undefined) {
+      result.pageBreakOffset = para.pageBreakOffset;
+    }
   }
 
   return result;
@@ -223,15 +241,20 @@ export function projectToMarkdown(
   const includeHeadersFooters = options.includeHeadersFooters ?? true;
   const includeTables = options.includeTables ?? true;
   const includeRevisions = options.includeRevisions ?? false;
+  const includePageBreaks = options.includePageBreaks ?? false;
   const lines: string[] = [];
 
   for (const element of doc.body) {
     if (element.kind === "paragraph") {
-      lines.push(formatParagraphMarkdown(element, includeRevisions));
+      lines.push(formatParagraphMarkdown(element, includeRevisions, includePageBreaks));
     } else if (element.kind === "table" && includeTables) {
       lines.push(""); // blank line before table
       lines.push(...formatTableMarkdown(element, includeRevisions));
       lines.push(""); // blank line after table
+    } else if (element.kind === "page_break" && includePageBreaks) {
+      lines.push("");
+      lines.push(`[${element.id}] --- PAGE BREAK ---`);
+      lines.push("");
     }
   }
 
@@ -268,6 +291,7 @@ export function projectToMarkdown(
 function formatParagraphMarkdown(
   para: NormalizedParagraph,
   includeRevisions: boolean = false,
+  includePageBreaks: boolean = false,
 ): string {
   const styleHint = para.style ? ` (${para.style})` : "";
   const listHint = para.listInfo ? ` [list L${para.listInfo.level}]` : "";
@@ -275,6 +299,20 @@ function formatParagraphMarkdown(
   let text = para.text;
   if (includeRevisions && para.revisions && para.revisions.length > 0) {
     text = annotateTextWithRevisions(para.text, para.revisions);
+  }
+
+  // Insert [PAGE BREAK] marker at the correct position in the text
+  if (includePageBreaks && para.hasPageBreak) {
+    const offset = para.pageBreakOffset ?? 0;
+    const before = text.slice(0, offset);
+    const after = text.slice(offset);
+    if (before.length === 0) {
+      text = `[PAGE BREAK] ${after}`;
+    } else if (after.length === 0) {
+      text = `${before} [PAGE BREAK]`;
+    } else {
+      text = `${before} [PAGE BREAK] ${after}`;
+    }
   }
 
   return `[${para.id}]${styleHint}${listHint} ${text}`;

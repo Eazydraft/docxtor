@@ -258,6 +258,7 @@ export type {
   NormalizedDocument,
   NormalizedParagraph,
   NormalizedTable,
+  NormalizedPageBreak,
   NormalizedTableRow,
   NormalizedTableCell,
   RunMapping,
@@ -293,6 +294,6 @@ export { serializeXml } from "./xml/serializer.js";
 export { normalizeDocument } from "./normalizer/document.js";
 export { applyPatches } from "./patches/engine.js";
 export { project, projectToJson, projectToMarkdown } from "./projection/llm.js";
-export type { JsonProjection } from "./projection/llm.js";
+export type { JsonProjection, JsonProjectionPageBreak } from "./projection/llm.js";
 export { validatePatch, findParagraphById, findTableById } from "./patches/validator.js";
 export type { ValidationResult } from "./patches/validator.js";

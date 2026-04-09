@@ -33,6 +33,9 @@ import {
   findTextNode,
   isTag,
   unescapeXmlText,
+  paragraphHasPageBreak,
+  runHasPageBreak,
+  getRunPageBreakOffset,
 } from "../xml/helpers.js";
 
 /**
@@ -95,9 +98,20 @@ export function normalizeParagraph(
   const runs = collectRuns(paragraphNode);
   const runMappings: RunMapping[] = [];
   let offset = 0;
+  let pageBreakOffset: number | undefined;
 
   for (const runNode of runs) {
     const text = getRunText(runNode);
+
+    // Check for page break in this run before skipping empty runs.
+    // A page-break-only run has text.length === 0 but still contains a break.
+    if (pageBreakOffset === undefined && runHasPageBreak(runNode)) {
+      const withinRun = getRunPageBreakOffset(runNode);
+      if (withinRun >= 0) {
+        pageBreakOffset = offset + withinRun;
+      }
+    }
+
     if (text.length === 0) continue; // Skip runs with no text (e.g., break-only runs)
 
     const textNode = findTextNode(runNode);
@@ -134,6 +148,29 @@ export function normalizeParagraph(
 
   if (revisions.length > 0) {
     result.revisions = revisions;
+  }
+
+  // Detect page breaks — check w:pageBreakBefore (always offset 0) and run-level breaks
+  if (paragraphHasPageBreak(paragraphNode)) {
+    result.hasPageBreak = true;
+
+    // w:pageBreakBefore is a paragraph-level property — always offset 0
+    const pPr = findChild(paragraphNode, "w:pPr");
+    if (pPr) {
+      const pbb = findChild(pPr, "w:pageBreakBefore");
+      if (pbb) {
+        const val = getAttr(pbb, "w:val");
+        if (val !== "0" && val !== "false") {
+          result.pageBreakOffset = 0;
+          return result;
+        }
+      }
+    }
+
+    // Run-level break — use the offset computed during the run loop
+    if (pageBreakOffset !== undefined) {
+      result.pageBreakOffset = pageBreakOffset;
+    }
   }
 
   return result;
