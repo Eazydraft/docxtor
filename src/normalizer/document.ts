@@ -15,6 +15,7 @@ import type {
   DocxXmlParts,
   LoadOptions,
   StyleInfo,
+  NormalizedPageBreak,
 } from "../types.js";
 import type { DocxZipEntries } from "../zip/reader.js";
 import { parseXml } from "../xml/parser.js";
@@ -121,11 +122,30 @@ function normalizeBody(documentFxp: FXPNode[]): BodyElement[] {
   const bodyChildren = getChildren(bodyNode);
   let paraIdx = 0;
   let tableIdx = 0;
+  let pageBreakIdx = 0;
 
   for (const child of bodyChildren) {
     const tag = getTagName(child);
     if (tag === "w:p") {
-      elements.push(normalizeParagraph(child, `p${paraIdx}`));
+      // Normalize once and reuse the result for both the page-break-only
+      // check and the final elements.push — avoids duplicating the full
+      // run mapping + revision scanning work.
+      const normalized = normalizeParagraph(child, `p${paraIdx}`);
+
+      if (normalized.hasPageBreak && normalized.text.trim().length === 0) {
+        // Page-break-only paragraph — emit as NormalizedPageBreak
+        const pb: NormalizedPageBreak = {
+          kind: "page_break",
+          id: `pb${pageBreakIdx}`,
+          xmlRef: child,
+        };
+        elements.push(pb);
+        pageBreakIdx++;
+        // Don't increment paraIdx — this isn't a paragraph in the projection
+        continue;
+      }
+
+      elements.push(normalized);
       paraIdx++;
     } else if (tag === "w:tbl") {
       elements.push(normalizeTable(child, `tbl${tableIdx}`));

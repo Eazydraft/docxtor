@@ -108,7 +108,7 @@ const conversationMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
 // =============================================================================
 
 function getProjection(): string {
-  return doc.project("markdown");
+  return doc.project("markdown", { includePageBreaks: true });
 }
 
 function dim(s: string): string {

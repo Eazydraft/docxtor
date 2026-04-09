@@ -6,6 +6,14 @@ import {
   createTableDocx,
   createHeaderFooterDocx,
   createSplitRunDocx,
+  createPageBreakDocx,
+  createInlinePageBreakDocx,
+  createLastRenderedPageBreakDocx,
+  createLastRenderedPageBreakOnlyDocx,
+  createPageBreakBeforeDocx,
+  createPageBreakBeforeDisabledDocx,
+  createMidTextPageBreakDocx,
+  createRevisionWithPageBreakDocx,
 } from "../fixtures/create-docx.js";
 
 // =============================================================================
@@ -159,6 +167,392 @@ describe("Docxtor.project — Markdown", () => {
     expect(markdown).toContain("[hdr.default.p0] Header text");
     expect(markdown).toContain("--- Footer (default) ---");
     expect(markdown).toContain("[ftr.default.p0] Footer text");
+  });
+});
+
+// =============================================================================
+// Projection — Page Breaks (JSON)
+// =============================================================================
+
+describe("Docxtor.project — Page Breaks (JSON)", () => {
+  it("should hide page breaks from JSON projection by default", async () => {
+    const buffer = await createPageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const projection = doc.project("json");
+
+    // Only the two text paragraphs should appear — page break is hidden
+    expect(projection.body).toHaveLength(2);
+    expect(projection.body[0]).toMatchObject({ id: "p0", text: "Before page break" });
+    expect(projection.body[1]).toMatchObject({ id: "p1", text: "After page break" });
+  });
+
+  it("should hide hasPageBreak from JSON projection by default", async () => {
+    const buffer = await createInlinePageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const projection = doc.project("json");
+
+    expect(projection.body).toHaveLength(2);
+    expect((projection.body[0] as any).hasPageBreak).toBeUndefined();
+  });
+
+  it("should include page_break elements when includePageBreaks is true", async () => {
+    const buffer = await createPageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const projection = doc.project("json", { includePageBreaks: true });
+
+    expect(projection.body).toHaveLength(3);
+    expect(projection.body[0]).toMatchObject({ id: "p0", text: "Before page break" });
+    expect(projection.body[1]).toEqual({ id: "pb0", type: "page_break" });
+    expect(projection.body[2]).toMatchObject({ id: "p1", text: "After page break" });
+  });
+
+  it("should include hasPageBreak and pageBreakOffset on paragraphs when includePageBreaks is true", async () => {
+    const buffer = await createInlinePageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const projection = doc.project("json", { includePageBreaks: true });
+
+    expect(projection.body).toHaveLength(2);
+    expect(projection.body[0]).toMatchObject({
+      id: "p0",
+      text: "Text with page break",
+      hasPageBreak: true,
+      pageBreakOffset: 20, // break is after "Text with page break"
+    });
+    expect(projection.body[1]).toMatchObject({
+      id: "p1",
+      text: "Next page content",
+    });
+    expect((projection.body[1] as any).hasPageBreak).toBeUndefined();
+    expect((projection.body[1] as any).pageBreakOffset).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// Projection — Page Breaks (Markdown)
+// =============================================================================
+
+describe("Docxtor.project — Page Breaks (Markdown)", () => {
+  it("should hide page breaks from Markdown projection by default", async () => {
+    const buffer = await createPageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const markdown = doc.project("markdown");
+
+    expect(markdown).toContain("[p0] Before page break");
+    expect(markdown).toContain("[p1] After page break");
+    expect(markdown).not.toContain("PAGE BREAK");
+  });
+
+  it("should hide [PAGE BREAK] hint from Markdown projection by default", async () => {
+    const buffer = await createInlinePageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const markdown = doc.project("markdown");
+
+    expect(markdown).toContain("[p0] Text with page break");
+    expect(markdown).not.toContain("[PAGE BREAK]");
+  });
+
+  it("should show --- PAGE BREAK --- when includePageBreaks is true", async () => {
+    const buffer = await createPageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const markdown = doc.project("markdown", { includePageBreaks: true });
+
+    expect(markdown).toContain("[p0] Before page break");
+    expect(markdown).toContain("[pb0] --- PAGE BREAK ---");
+    expect(markdown).toContain("[p1] After page break");
+  });
+
+  it("should show [PAGE BREAK] hint at end when break is after text", async () => {
+    const buffer = await createInlinePageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const markdown = doc.project("markdown", { includePageBreaks: true });
+
+    // Break is after "Text with page break", so marker goes at end
+    expect(markdown).toContain("[p0] Text with page break [PAGE BREAK]");
+    expect(markdown).toContain("[p1] Next page content");
+    expect(markdown).not.toContain("[p1] [PAGE BREAK]");
+  });
+});
+
+// =============================================================================
+// Page Break — AST Inspection
+// =============================================================================
+
+describe("Page Break AST", () => {
+  it("should normalize page-break-only paragraphs as NormalizedPageBreak", async () => {
+    const buffer = await createPageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const body = doc.getBody();
+    expect(body).toHaveLength(3);
+    expect(body[0]!.kind).toBe("paragraph");
+    expect(body[1]!.kind).toBe("page_break");
+    expect(body[1]!.id).toBe("pb0");
+    expect(body[2]!.kind).toBe("paragraph");
+  });
+
+  it("should set hasPageBreak and pageBreakOffset on paragraphs with text and page break", async () => {
+    const buffer = await createInlinePageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const body = doc.getBody();
+    expect(body).toHaveLength(2);
+    expect(body[0]!.kind).toBe("paragraph");
+    expect((body[0] as any).hasPageBreak).toBe(true);
+    expect((body[0] as any).pageBreakOffset).toBe(20); // after "Text with page break"
+    expect(body[1]!.kind).toBe("paragraph");
+    expect((body[1] as any).hasPageBreak).toBeUndefined();
+    expect((body[1] as any).pageBreakOffset).toBeUndefined();
+  });
+
+  it("page break paragraphs should not count toward paragraph IDs", async () => {
+    const buffer = await createPageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    // Paragraphs should be p0 and p1 (page break gets pb0, not p1)
+    const paragraphs = doc.getParagraphs();
+    expect(paragraphs).toHaveLength(2);
+    expect(paragraphs[0]!.id).toBe("p0");
+    expect(paragraphs[1]!.id).toBe("p1");
+  });
+});
+
+// =============================================================================
+// Page Break — lastRenderedPageBreak (real-world Word documents)
+// =============================================================================
+
+describe("Page Break — lastRenderedPageBreak", () => {
+  it("should detect lastRenderedPageBreak as inline page break (hasPageBreak)", async () => {
+    const buffer = await createLastRenderedPageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const body = doc.getBody();
+    expect(body).toHaveLength(2);
+    expect(body[0]!.kind).toBe("paragraph");
+    expect((body[0] as any).hasPageBreak).toBeUndefined();
+    expect(body[1]!.kind).toBe("paragraph");
+    expect((body[1] as any).hasPageBreak).toBe(true);
+    expect((body[1] as any).text).toBe("Second page content");
+  });
+
+  it("should show lastRenderedPageBreak in JSON with offset when includePageBreaks is true", async () => {
+    const buffer = await createLastRenderedPageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const projection = doc.project("json", { includePageBreaks: true });
+    expect(projection.body).toHaveLength(2);
+    expect(projection.body[1]).toMatchObject({
+      id: "p1",
+      text: "Second page content",
+      hasPageBreak: true,
+      pageBreakOffset: 0, // lastRenderedPageBreak appears before text in the run
+    });
+  });
+
+  it("should hide lastRenderedPageBreak from JSON by default", async () => {
+    const buffer = await createLastRenderedPageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const projection = doc.project("json");
+    expect(projection.body).toHaveLength(2);
+    expect((projection.body[1] as any).hasPageBreak).toBeUndefined();
+  });
+
+  it("should show [PAGE BREAK] in markdown when includePageBreaks is true", async () => {
+    const buffer = await createLastRenderedPageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const markdown = doc.project("markdown", { includePageBreaks: true });
+    expect(markdown).toContain("[p1] [PAGE BREAK] Second page content");
+  });
+
+  it("should normalize standalone lastRenderedPageBreak as NormalizedPageBreak", async () => {
+    const buffer = await createLastRenderedPageBreakOnlyDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const body = doc.getBody();
+    expect(body).toHaveLength(3);
+    expect(body[0]!.kind).toBe("paragraph");
+    expect(body[0]!.id).toBe("p0");
+    expect(body[1]!.kind).toBe("page_break");
+    expect(body[1]!.id).toBe("pb0");
+    expect(body[2]!.kind).toBe("paragraph");
+    expect(body[2]!.id).toBe("p1");
+  });
+
+  it("should show standalone lastRenderedPageBreak in markdown projection", async () => {
+    const buffer = await createLastRenderedPageBreakOnlyDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const markdown = doc.project("markdown", { includePageBreaks: true });
+    expect(markdown).toContain("[pb0] --- PAGE BREAK ---");
+    expect(markdown).toContain("[p0] Before break");
+    expect(markdown).toContain("[p1] After break");
+  });
+});
+
+// =============================================================================
+// Page Break — pageBreakBefore (paragraph property)
+// =============================================================================
+
+describe("Page Break — pageBreakBefore", () => {
+  it("should detect w:pageBreakBefore as hasPageBreak", async () => {
+    const buffer = await createPageBreakBeforeDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const body = doc.getBody();
+    expect(body).toHaveLength(2);
+    expect(body[0]!.kind).toBe("paragraph");
+    expect((body[0] as any).hasPageBreak).toBeUndefined();
+    expect(body[1]!.kind).toBe("paragraph");
+    expect((body[1] as any).hasPageBreak).toBe(true);
+    expect((body[1] as any).text).toBe("Starts on new page");
+  });
+
+  it("should show pageBreakBefore in JSON with offset 0 when includePageBreaks is true", async () => {
+    const buffer = await createPageBreakBeforeDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const projection = doc.project("json", { includePageBreaks: true });
+    expect(projection.body).toHaveLength(2);
+    expect(projection.body[1]).toMatchObject({
+      id: "p1",
+      text: "Starts on new page",
+      hasPageBreak: true,
+      pageBreakOffset: 0, // pageBreakBefore is always offset 0
+    });
+  });
+
+  it("should hide pageBreakBefore from JSON by default", async () => {
+    const buffer = await createPageBreakBeforeDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const projection = doc.project("json");
+    expect((projection.body[1] as any).hasPageBreak).toBeUndefined();
+  });
+
+  it("should show [PAGE BREAK] hint in markdown when includePageBreaks is true", async () => {
+    const buffer = await createPageBreakBeforeDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const markdown = doc.project("markdown", { includePageBreaks: true });
+    expect(markdown).toContain("[p1] [PAGE BREAK] Starts on new page");
+  });
+
+  it("should NOT detect w:pageBreakBefore w:val=0 as a page break", async () => {
+    const buffer = await createPageBreakBeforeDisabledDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const body = doc.getBody();
+    expect(body).toHaveLength(1);
+    expect(body[0]!.kind).toBe("paragraph");
+    expect((body[0] as any).hasPageBreak).toBeUndefined();
+    expect((body[0] as any).text).toBe("No page break here");
+  });
+});
+
+// =============================================================================
+// Page Break — positional offset (mid-text break)
+// =============================================================================
+
+describe("Page Break — positional offset", () => {
+  it("should place [PAGE BREAK] between text in markdown", async () => {
+    const buffer = await createMidTextPageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const markdown = doc.project("markdown", { includePageBreaks: true });
+    // "Before break" (12 chars) + [PAGE BREAK] + "After break"
+    expect(markdown).toContain("[p0] Before break [PAGE BREAK] After break");
+  });
+
+  it("should set pageBreakOffset to 12 in AST for mid-text break", async () => {
+    const buffer = await createMidTextPageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const body = doc.getBody();
+    expect(body).toHaveLength(1);
+    expect(body[0]!.kind).toBe("paragraph");
+    expect((body[0] as any).hasPageBreak).toBe(true);
+    expect((body[0] as any).pageBreakOffset).toBe(12); // "Before break" = 12 chars
+    expect((body[0] as any).text).toBe("Before breakAfter break");
+  });
+
+  it("should expose pageBreakOffset in JSON projection for mid-text break", async () => {
+    const buffer = await createMidTextPageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const projection = doc.project("json", { includePageBreaks: true });
+    expect(projection.body).toHaveLength(1);
+    expect(projection.body[0]).toMatchObject({
+      id: "p0",
+      text: "Before breakAfter break",
+      hasPageBreak: true,
+      pageBreakOffset: 12,
+    });
+  });
+
+  it("should hide pageBreakOffset from JSON when includePageBreaks is false", async () => {
+    const buffer = await createMidTextPageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const projection = doc.project("json");
+    expect((projection.body[0] as any).hasPageBreak).toBeUndefined();
+    expect((projection.body[0] as any).pageBreakOffset).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// Page Break + Revisions interaction
+// =============================================================================
+
+describe("Page Break — revision annotation interaction", () => {
+  it("should place [PAGE BREAK] marker at the correct position when revisions are also annotated", async () => {
+    const buffer = await createRevisionWithPageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const markdown = doc.project("markdown", {
+      includePageBreaks: true,
+      includeRevisions: true,
+    });
+
+    // Original text: "Hello worldAfter break" (pageBreakOffset = 11)
+    // With revisions: "Hello {+world+}After break"
+    // With page break: "Hello {+world+} [PAGE BREAK] After break"
+    expect(markdown).toContain("[p0] Hello {+world+} [PAGE BREAK] After break");
+  });
+
+  it("should place [PAGE BREAK] correctly without revisions even when revisions exist", async () => {
+    const buffer = await createRevisionWithPageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const markdown = doc.project("markdown", {
+      includePageBreaks: true,
+      includeRevisions: false,
+    });
+
+    // Without revision annotation, text is "Hello worldAfter break"
+    // pageBreakOffset = 11, so marker goes after "Hello world"
+    expect(markdown).toContain("[p0] Hello world [PAGE BREAK] After break");
+  });
+
+  it("should not show [PAGE BREAK] when only revisions are enabled", async () => {
+    const buffer = await createRevisionWithPageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const markdown = doc.project("markdown", {
+      includePageBreaks: false,
+      includeRevisions: true,
+    });
+
+    expect(markdown).toContain("[p0] Hello {+world+}After break");
+    expect(markdown).not.toContain("[PAGE BREAK]");
   });
 });
 

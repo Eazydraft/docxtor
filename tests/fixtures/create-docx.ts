@@ -535,3 +535,261 @@ export async function createLineBreakDocx(): Promise<Buffer> {
 
   return buildDocx({ documentXml });
 }
+
+/**
+ * Create a DOCX with a page break between two paragraphs.
+ *
+ * Structure:
+ * - Paragraph: "Before page break"
+ * - Paragraph with only a page break (w:br w:type="page")
+ * - Paragraph: "After page break"
+ *
+ * The middle paragraph should be normalized as a NormalizedPageBreak.
+ */
+export async function createPageBreakDocx(): Promise<Buffer> {
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:t>Before page break</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:r>
+        <w:br w:type="page"/>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:r>
+        <w:t>After page break</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>`;
+
+  return buildDocx({ documentXml });
+}
+
+/**
+ * Create a DOCX where a paragraph contains both text and a page break.
+ *
+ * Structure: a single paragraph with "Some text" followed by w:br w:type="page"
+ * This should be normalized as a NormalizedParagraph with hasPageBreak: true.
+ */
+export async function createInlinePageBreakDocx(): Promise<Buffer> {
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:t>Text with page break</w:t>
+        <w:br w:type="page"/>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:r>
+        <w:t>Next page content</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>`;
+
+  return buildDocx({ documentXml });
+}
+
+/**
+ * Create a DOCX with a w:lastRenderedPageBreak inside a run that also has text.
+ *
+ * This is the most common page break form in real Word documents —
+ * Word inserts it as a rendering hint to mark where the page broke
+ * when the document was last paginated.
+ *
+ * Structure:
+ * - Paragraph: "First page content"
+ * - Paragraph: w:lastRenderedPageBreak + "Second page content" (inline)
+ */
+export async function createLastRenderedPageBreakDocx(): Promise<Buffer> {
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:t>First page content</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:r>
+        <w:lastRenderedPageBreak/>
+        <w:t>Second page content</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>`;
+
+  return buildDocx({ documentXml });
+}
+
+/**
+ * Create a DOCX with a standalone w:lastRenderedPageBreak paragraph
+ * (a paragraph whose only run contains just the break hint, no text).
+ *
+ * This should be normalized as a NormalizedPageBreak (page-break-only paragraph).
+ */
+export async function createLastRenderedPageBreakOnlyDocx(): Promise<Buffer> {
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:t>Before break</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:r>
+        <w:lastRenderedPageBreak/>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:r>
+        <w:t>After break</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>`;
+
+  return buildDocx({ documentXml });
+}
+
+/**
+ * Create a DOCX with w:pageBreakBefore in a paragraph's properties.
+ *
+ * This is a paragraph-level setting that forces the paragraph to start
+ * on a new page. It should trigger hasPageBreak on the paragraph.
+ *
+ * Structure:
+ * - Paragraph: "First page content"
+ * - Paragraph with w:pageBreakBefore: "Starts on new page"
+ */
+export async function createPageBreakBeforeDocx(): Promise<Buffer> {
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:t>First page content</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pageBreakBefore/>
+      </w:pPr>
+      <w:r>
+        <w:t>Starts on new page</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>`;
+
+  return buildDocx({ documentXml });
+}
+
+/**
+ * Create a DOCX with w:pageBreakBefore w:val="0" (disabled).
+ *
+ * This should NOT trigger hasPageBreak since the property is explicitly off.
+ */
+export async function createPageBreakBeforeDisabledDocx(): Promise<Buffer> {
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:pPr>
+        <w:pageBreakBefore w:val="0"/>
+      </w:pPr>
+      <w:r>
+        <w:t>No page break here</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>`;
+
+  return buildDocx({ documentXml });
+}
+
+/**
+ * Create a DOCX with a page break between two text runs in the same paragraph.
+ *
+ * Structure: "Before break" + w:br w:type="page" + "After break" in a single paragraph.
+ * The page break offset should be 12 (length of "Before break").
+ */
+export async function createMidTextPageBreakDocx(): Promise<Buffer> {
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:t>Before break</w:t>
+      </w:r>
+      <w:r>
+        <w:br w:type="page"/>
+      </w:r>
+      <w:r>
+        <w:t>After break</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>`;
+
+  return buildDocx({ documentXml });
+}
+
+/**
+ * Create a DOCX with both a tracked insertion and a mid-text page break
+ * in the same paragraph.
+ *
+ * Structure:
+ *   "Hello " + w:ins["world"] + w:br w:type="page" + "After break"
+ *
+ * The normalized text is "Hello worldAfter break" with:
+ *   - An insert revision for "world" at [6, 11)
+ *   - pageBreakOffset = 11 (after "Hello world", before "After break")
+ *
+ * When both includeRevisions and includePageBreaks are enabled, the
+ * markdown should read:
+ *   "Hello {+world+} [PAGE BREAK] After break"
+ * (the [PAGE BREAK] marker must land after the revision annotation).
+ */
+export async function createRevisionWithPageBreakDocx(): Promise<Buffer> {
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:t xml:space="preserve">Hello </w:t>
+      </w:r>
+      <w:ins w:id="1" w:author="Test" w:date="2025-01-01T00:00:00Z">
+        <w:r>
+          <w:t>world</w:t>
+        </w:r>
+      </w:ins>
+      <w:r>
+        <w:br w:type="page"/>
+      </w:r>
+      <w:r>
+        <w:t>After break</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>`;
+
+  return buildDocx({ documentXml });
+}

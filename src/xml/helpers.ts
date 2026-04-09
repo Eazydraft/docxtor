@@ -209,6 +209,8 @@ export function setTextContent(node: FXPNode, text: string): void {
  * Get all text from w:t elements inside a w:r run node.
  * Unescapes XML entities so the returned text is natural.
  * Converts w:br (line break) elements to \n characters.
+ * Structural breaks — page breaks (w:br w:type="page") and column
+ * breaks (w:br w:type="column") — are skipped (not included in text).
  */
 export function getRunText(runNode: FXPNode): string {
   const children = getChildren(runNode);
@@ -224,7 +226,14 @@ export function getRunText(runNode: FXPNode): string {
         }
       }
     } else if ("w:br" in child) {
-      text += "\n";
+      // Page breaks (w:type="page") and column breaks (w:type="column")
+      // are structural breaks, not text — skip them
+      const brType = getAttr(child, "w:type");
+      if (!brType || brType === "textWrapping") {
+        // Regular line break
+        text += "\n";
+      }
+      // page/column breaks produce no text
     }
   }
   return text;
@@ -237,6 +246,107 @@ export function getRunText(runNode: FXPNode): string {
 export function findTextNode(runNode: FXPNode): FXPNode | undefined {
   const children = getChildren(runNode);
   return children.find((child) => "w:t" in child);
+}
+
+/**
+ * Check if a run contains a page break.
+ *
+ * Detects two OOXML mechanisms:
+ * - `<w:br w:type="page"/>` — explicit page break inserted by the user
+ * - `<w:lastRenderedPageBreak/>` — rendering hint marking where Word
+ *   paginated the document on last save
+ */
+export function runHasPageBreak(runNode: FXPNode): boolean {
+  const children = getChildren(runNode);
+  for (const child of children) {
+    if ("w:br" in child) {
+      const brType = getAttr(child, "w:type");
+      if (brType === "page") return true;
+    }
+    if ("w:lastRenderedPageBreak" in child) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Find the character offset within a run's text where a page break occurs.
+ *
+ * Walks the run's children in document order, accumulating text from w:t
+ * elements. When a page break element is found (w:br w:type="page" or
+ * w:lastRenderedPageBreak), returns the number of text characters seen so
+ * far — i.e., the break position relative to the run's own text.
+ *
+ * Returns -1 if no page break is found in this run.
+ */
+export function getRunPageBreakOffset(runNode: FXPNode): number {
+  const children = getChildren(runNode);
+  let charsSeen = 0;
+
+  for (const child of children) {
+    if ("w:t" in child) {
+      const tChildren = child["w:t"];
+      if (Array.isArray(tChildren)) {
+        for (const tChild of tChildren) {
+          if ("#text" in tChild) {
+            charsSeen += unescapeXmlText(String(tChild["#text"])).length;
+          }
+        }
+      }
+    } else if ("w:br" in child) {
+      const brType = getAttr(child, "w:type");
+      if (!brType || brType === "textWrapping") {
+        // Regular line break counts as one char (\n)
+        charsSeen += 1;
+      } else if (brType === "page") {
+        return charsSeen;
+      }
+    } else if ("w:lastRenderedPageBreak" in child) {
+      return charsSeen;
+    }
+  }
+
+  return -1;
+}
+
+/**
+ * Check if a paragraph contains a page break in any of its runs,
+ * or has the `w:pageBreakBefore` property in its `w:pPr`.
+ *
+ * Covers three OOXML mechanisms:
+ * 1. `<w:br w:type="page"/>` in a run — explicit page break
+ * 2. `<w:lastRenderedPageBreak/>` in a run — Word rendering hint
+ * 3. `<w:pageBreakBefore/>` in `w:pPr` — paragraph-level "page break before"
+ */
+export function paragraphHasPageBreak(paragraphNode: FXPNode): boolean {
+  // Check paragraph property: w:pPr > w:pageBreakBefore
+  const pPr = findChild(paragraphNode, "w:pPr");
+  if (pPr) {
+    const pbb = findChild(pPr, "w:pageBreakBefore");
+    if (pbb) {
+      // <w:pageBreakBefore/> means on; <w:pageBreakBefore w:val="0"/> means off
+      const val = getAttr(pbb, "w:val");
+      if (val !== "0" && val !== "false") {
+        return true;
+      }
+    }
+  }
+
+  // Check runs for w:br type="page" or w:lastRenderedPageBreak
+  return _scanForPageBreak(getChildren(paragraphNode));
+}
+
+function _scanForPageBreak(children: FXPNode[]): boolean {
+  for (const child of children) {
+    const tag = getTagName(child);
+    if (tag === "w:r") {
+      if (runHasPageBreak(child)) return true;
+    } else if (tag === "w:hyperlink" || tag === "w:ins") {
+      if (_scanForPageBreak(getChildren(child))) return true;
+    }
+  }
+  return false;
 }
 
 // =============================================================================

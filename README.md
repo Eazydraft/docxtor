@@ -120,7 +120,37 @@ const json = doc.project("json", {
   includeHeadersFooters: true,  // include headers and footers (default: true)
   includeTables: true,          // include tables (default: true)
   includeRevisions: true,       // include revision marks from tracked changes (default: false)
+  includePageBreaks: true,      // include page break elements and hints (default: false)
 });
+```
+
+When `includePageBreaks` is enabled, docxtor detects all three OOXML page break mechanisms:
+
+| Mechanism | Source | Typical use |
+|---|---|---|
+| `w:br w:type="page"` | User-inserted explicit break | "Insert Page Break" in Word |
+| `w:lastRenderedPageBreak` | Word rendering hint inside a run | Most common in real-world `.docx` files |
+| `w:pageBreakBefore` | Paragraph property in `w:pPr` | "Page break before" paragraph setting |
+
+There are two categories of page breaks:
+
+1. **Page-break-only paragraphs** — a `w:p` that contains only a break and no text. These become standalone `NormalizedPageBreak` elements with IDs like `pb0`, `pb1`, ... (they don't consume paragraph indices).
+2. **Inline page breaks** — a paragraph that has both text and a break. The paragraph keeps its normal ID (`p0`, `p1`, ...) and gains `hasPageBreak: true` plus `pageBreakOffset`, the exact character index where the break falls in the paragraph text.
+
+The offset is positionally accurate: it reflects where the break actually occurs — at the start, middle, or end of the text — not always at the beginning. This matters for ingestion pipelines that need to split text at page boundaries.
+
+**Markdown** — `[PAGE BREAK]` is spliced into the text at the exact character position:
+```
+[p0] First page content
+[pb0] --- PAGE BREAK ---
+[p1] Some text [PAGE BREAK] continues on next page
+[p2] [PAGE BREAK] Starts on new page
+[p3] All the text up to here [PAGE BREAK]
+```
+
+**JSON** — standalone page breaks are `{ id: "pb0", type: "page_break" }`. Inline breaks add `hasPageBreak` and `pageBreakOffset` (character index within `.text`):
+```json
+{ "id": "p1", "text": "Some text continues on next page", "hasPageBreak": true, "pageBreakOffset": 10 }
 ```
 
 ### `doc.applyPatches(patches, options?)`
@@ -318,6 +348,7 @@ Available styles are listed in the markdown projection under "Available Styles" 
 |---|---|---|
 | Body paragraph | `p{n}` | `p0`, `p1`, `p12` |
 | Body table | `tbl{n}` | `tbl0`, `tbl1` |
+| Page break | `pb{n}` | `pb0`, `pb1` |
 | Table cell paragraph | `tbl{t}.r{r}.c{c}.p{p}` | `tbl0.r0.c0.p0` |
 | Nested table | `tbl{t}.r{r}.c{c}.tbl{n}` | `tbl0.r2.c1.tbl0` |
 | Nested cell paragraph | `tbl0.r0.c0.tbl0.r0.c0.p0` | (recursive) |
@@ -444,7 +475,7 @@ import {
 } from "docxtor";
 
 // Types
-import type { PatchOptions, RevisionMark } from "docxtor";
+import type { PatchOptions, RevisionMark, NormalizedPageBreak, JsonProjectionPageBreak } from "docxtor";
 ```
 
 ## What it handles
@@ -459,6 +490,7 @@ import type { PatchOptions, RevisionMark } from "docxtor";
 - Style application (paragraph styles like Heading1, character styles like Strong)
 - Style validation against the document's `styles.xml`
 - Tracked changes / revision tracking (`w:ins`, `w:del`, `w:rPrChange`, `w:pPrChange`)
+- Page breaks — surfaced via `includePageBreaks` option with positional `pageBreakOffset` (see [projection options](#docprojectformat-options) for details)
 - XML entity escaping (`&amp;`, `&lt;`, `&gt;`)
 - Newlines (`\n` maps to `w:br` elements)
 - List/numbering info in projections
@@ -483,7 +515,7 @@ pnpm build         # build ESM + CJS + DTS (tsup)
 pnpm lint          # type-check
 ```
 
-264 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style), revision tracking (tracked changes), integration flows, hyperlinks, entity escaping, newlines, nested tables, projection, and API surface.
+293 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style), revision tracking (tracked changes), page breaks (explicit, lastRenderedPageBreak, pageBreakBefore, positional offset, revision interaction), integration flows, hyperlinks, entity escaping, newlines, nested tables, projection, and API surface.
 
 ## License
 
