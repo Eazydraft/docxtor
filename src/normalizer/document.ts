@@ -25,7 +25,6 @@ import {
   getChildren,
   getTagName,
   getAttr,
-  paragraphHasPageBreak,
 } from "../xml/helpers.js";
 import { normalizeParagraph } from "./paragraph.js";
 import { normalizeTable } from "./table.js";
@@ -128,26 +127,25 @@ function normalizeBody(documentFxp: FXPNode[]): BodyElement[] {
   for (const child of bodyChildren) {
     const tag = getTagName(child);
     if (tag === "w:p") {
-      // Check if this paragraph is a page-break-only paragraph:
-      // contains a page break and has no meaningful text content
-      if (paragraphHasPageBreak(child)) {
-        const normalized = normalizeParagraph(child, `p${paraIdx}`);
-        if (normalized.text.trim().length === 0) {
-          // Page-break-only paragraph — emit as NormalizedPageBreak
-          const pb: NormalizedPageBreak = {
-            kind: "page_break",
-            id: `pb${pageBreakIdx}`,
-            xmlRef: child,
-          };
-          elements.push(pb);
-          pageBreakIdx++;
-          // Don't increment paraIdx — this isn't a paragraph in the projection
-          continue;
-        }
-        // Paragraph has text AND a page break — emit as paragraph with hasPageBreak flag
-        // (hasPageBreak is already set by normalizeParagraph)
+      // Normalize once and reuse the result for both the page-break-only
+      // check and the final elements.push — avoids duplicating the full
+      // run mapping + revision scanning work.
+      const normalized = normalizeParagraph(child, `p${paraIdx}`);
+
+      if (normalized.hasPageBreak && normalized.text.trim().length === 0) {
+        // Page-break-only paragraph — emit as NormalizedPageBreak
+        const pb: NormalizedPageBreak = {
+          kind: "page_break",
+          id: `pb${pageBreakIdx}`,
+          xmlRef: child,
+        };
+        elements.push(pb);
+        pageBreakIdx++;
+        // Don't increment paraIdx — this isn't a paragraph in the projection
+        continue;
       }
-      elements.push(normalizeParagraph(child, `p${paraIdx}`));
+
+      elements.push(normalized);
       paraIdx++;
     } else if (tag === "w:tbl") {
       elements.push(normalizeTable(child, `tbl${tableIdx}`));

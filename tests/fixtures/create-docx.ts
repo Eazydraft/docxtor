@@ -750,3 +750,46 @@ export async function createMidTextPageBreakDocx(): Promise<Buffer> {
 
   return buildDocx({ documentXml });
 }
+
+/**
+ * Create a DOCX with both a tracked insertion and a mid-text page break
+ * in the same paragraph.
+ *
+ * Structure:
+ *   "Hello " + w:ins["world"] + w:br w:type="page" + "After break"
+ *
+ * The normalized text is "Hello worldAfter break" with:
+ *   - An insert revision for "world" at [6, 11)
+ *   - pageBreakOffset = 11 (after "Hello world", before "After break")
+ *
+ * When both includeRevisions and includePageBreaks are enabled, the
+ * markdown should read:
+ *   "Hello {+world+} [PAGE BREAK] After break"
+ * (the [PAGE BREAK] marker must land after the revision annotation).
+ */
+export async function createRevisionWithPageBreakDocx(): Promise<Buffer> {
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:t xml:space="preserve">Hello </w:t>
+      </w:r>
+      <w:ins w:id="1" w:author="Test" w:date="2025-01-01T00:00:00Z">
+        <w:r>
+          <w:t>world</w:t>
+        </w:r>
+      </w:ins>
+      <w:r>
+        <w:br w:type="page"/>
+      </w:r>
+      <w:r>
+        <w:t>After break</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>`;
+
+  return buildDocx({ documentXml });
+}

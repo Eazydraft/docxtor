@@ -297,13 +297,23 @@ function formatParagraphMarkdown(
   const listHint = para.listInfo ? ` [list L${para.listInfo.level}]` : "";
 
   let text = para.text;
-  if (includeRevisions && para.revisions && para.revisions.length > 0) {
-    text = annotateTextWithRevisions(para.text, para.revisions);
+  const hasRevisions = includeRevisions && para.revisions && para.revisions.length > 0;
+
+  if (hasRevisions) {
+    text = annotateTextWithRevisions(para.text, para.revisions!);
   }
 
-  // Insert [PAGE BREAK] marker at the correct position in the text
+  // Insert [PAGE BREAK] marker at the correct position in the text.
+  // When revisions are also active, pageBreakOffset is relative to
+  // para.text (the original string). We must map it into the annotated
+  // string whose length has changed due to {+...+} / {-...-} markers.
   if (includePageBreaks && para.hasPageBreak) {
-    const offset = para.pageBreakOffset ?? 0;
+    let offset = para.pageBreakOffset ?? 0;
+
+    if (hasRevisions) {
+      offset = mapOffsetToAnnotatedText(offset, para.revisions!);
+    }
+
     const before = text.slice(0, offset);
     const after = text.slice(offset);
     if (before.length === 0) {
@@ -316,6 +326,44 @@ function formatParagraphMarkdown(
   }
 
   return `[${para.id}]${styleHint}${listHint} ${text}`;
+}
+
+/**
+ * Map an offset in the original paragraph text to the corresponding
+ * position in the revision-annotated string.
+ *
+ * Revision markers ({+...+} for inserts, {-...-} for deletes) add
+ * characters that shift later positions. This walks revisions in
+ * document order (ascending startOffset) and accumulates the shift.
+ */
+function mapOffsetToAnnotatedText(
+  originalOffset: number,
+  revisions: RevisionMark[],
+): number {
+  // Sort by startOffset ascending — we accumulate shift left-to-right
+  const sorted = [...revisions].sort((a, b) => a.startOffset - b.startOffset);
+  let shift = 0;
+
+  for (const rev of sorted) {
+    if (rev.type === "insert") {
+      // {+...+} wraps text at [startOffset, endOffset).
+      // The 2-char prefix "{+" is inserted at startOffset.
+      // If the break is past (or at) startOffset, it shifts by +2 for the prefix.
+      // The 2-char suffix "+}" is inserted at endOffset.
+      // If the break is past (or at) endOffset, it shifts by another +2.
+      if (originalOffset >= rev.startOffset) shift += 2; // "{+"
+      if (originalOffset >= rev.endOffset) shift += 2;   // "+}"
+    } else if (rev.type === "delete") {
+      // {-text-} is inserted at startOffset (zero-width in original).
+      // Total insertion = text.length + 4 chars ("{-" + text + "-}").
+      // If the break is at or past the delete position, shift by the full marker length.
+      if (originalOffset >= rev.startOffset) {
+        shift += rev.text.length + 4;
+      }
+    }
+  }
+
+  return originalOffset + shift;
 }
 
 /**

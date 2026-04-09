@@ -144,8 +144,8 @@ The offset is positionally accurate: it reflects where the break actually occurs
 [p0] First page content
 [pb0] --- PAGE BREAK ---
 [p1] Some text [PAGE BREAK] continues on next page
-[p2] [PAGE BREAK]Starts on new page
-[p3] All the text up to here[PAGE BREAK]
+[p2] [PAGE BREAK] Starts on new page
+[p3] All the text up to here [PAGE BREAK]
 ```
 
 **JSON** — standalone page breaks are `{ id: "pb0", type: "page_break" }`. Inline breaks add `hasPageBreak` and `pageBreakOffset` (character index within `.text`):
@@ -515,7 +515,7 @@ pnpm build         # build ESM + CJS + DTS (tsup)
 pnpm lint          # type-check
 ```
 
-290 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style), revision tracking (tracked changes), page breaks (explicit, lastRenderedPageBreak, pageBreakBefore, positional offset), integration flows, hyperlinks, entity escaping, newlines, nested tables, projection, and API surface.
+293 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style), revision tracking (tracked changes), page breaks (explicit, lastRenderedPageBreak, pageBreakBefore, positional offset, revision interaction), integration flows, hyperlinks, entity escaping, newlines, nested tables, projection, and API surface.
 
 ## License
 

@@ -13,6 +13,7 @@ import {
   createPageBreakBeforeDocx,
   createPageBreakBeforeDisabledDocx,
   createMidTextPageBreakDocx,
+  createRevisionWithPageBreakDocx,
 } from "../fixtures/create-docx.js";
 
 // =============================================================================
@@ -504,6 +505,54 @@ describe("Page Break — positional offset", () => {
     const projection = doc.project("json");
     expect((projection.body[0] as any).hasPageBreak).toBeUndefined();
     expect((projection.body[0] as any).pageBreakOffset).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// Page Break + Revisions interaction
+// =============================================================================
+
+describe("Page Break — revision annotation interaction", () => {
+  it("should place [PAGE BREAK] marker at the correct position when revisions are also annotated", async () => {
+    const buffer = await createRevisionWithPageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const markdown = doc.project("markdown", {
+      includePageBreaks: true,
+      includeRevisions: true,
+    });
+
+    // Original text: "Hello worldAfter break" (pageBreakOffset = 11)
+    // With revisions: "Hello {+world+}After break"
+    // With page break: "Hello {+world+} [PAGE BREAK] After break"
+    expect(markdown).toContain("[p0] Hello {+world+} [PAGE BREAK] After break");
+  });
+
+  it("should place [PAGE BREAK] correctly without revisions even when revisions exist", async () => {
+    const buffer = await createRevisionWithPageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const markdown = doc.project("markdown", {
+      includePageBreaks: true,
+      includeRevisions: false,
+    });
+
+    // Without revision annotation, text is "Hello worldAfter break"
+    // pageBreakOffset = 11, so marker goes after "Hello world"
+    expect(markdown).toContain("[p0] Hello world [PAGE BREAK] After break");
+  });
+
+  it("should not show [PAGE BREAK] when only revisions are enabled", async () => {
+    const buffer = await createRevisionWithPageBreakDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const markdown = doc.project("markdown", {
+      includePageBreaks: false,
+      includeRevisions: true,
+    });
+
+    expect(markdown).toContain("[p0] Hello {+world+}After break");
+    expect(markdown).not.toContain("[PAGE BREAK]");
   });
 });
 

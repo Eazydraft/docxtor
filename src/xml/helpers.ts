@@ -209,7 +209,8 @@ export function setTextContent(node: FXPNode, text: string): void {
  * Get all text from w:t elements inside a w:r run node.
  * Unescapes XML entities so the returned text is natural.
  * Converts w:br (line break) elements to \n characters.
- * Page breaks (w:br w:type="page") are skipped (not included in text).
+ * Structural breaks — page breaks (w:br w:type="page") and column
+ * breaks (w:br w:type="column") — are skipped (not included in text).
  */
 export function getRunText(runNode: FXPNode): string {
   const children = getChildren(runNode);
