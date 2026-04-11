@@ -765,6 +765,51 @@ describe("append_text", () => {
     expect(results.every((r) => r.success)).toBe(true);
     expect(doc.getParagraphs()[1]!.text).toBe("Appended content");
   });
+
+  it("should handle text with newlines (w:br elements)", async () => {
+    const buffer = await createSimpleDocx("First");
+    const doc = await Docxtor.load(buffer);
+
+    const results = doc.applyPatches([
+      { type: "append_text", text: "Line one\nLine two\nLine three" },
+    ]);
+
+    expect(results[0]!.success).toBe(true);
+    expect(doc.getParagraphs()[1]!.text).toBe("Line one\nLine two\nLine three");
+  });
+
+  it("should survive export/reload with newlines", async () => {
+    const buffer = await createSimpleDocx("First");
+    const doc = await Docxtor.load(buffer);
+
+    doc.applyPatches([
+      { type: "append_text", text: "Hello\nWorld" },
+    ]);
+
+    const output = await doc.toBuffer();
+    const reloaded = await Docxtor.load(output);
+
+    expect(reloaded.getParagraphs()).toHaveLength(2);
+    expect(reloaded.getParagraphs()[1]!.text).toBe("Hello\nWorld");
+  });
+
+  it("should handle newlines with revision tracking", async () => {
+    const buffer = await createSimpleDocx("First");
+    const doc = await Docxtor.load(buffer);
+
+    const results = doc.applyPatches(
+      [{ type: "append_text", text: "Line A\nLine B" }],
+      { trackRevisions: true, revisionAuthor: "test" },
+    );
+
+    expect(results[0]!.success).toBe(true);
+    expect(doc.getParagraphs()[1]!.text).toBe("Line A\nLine B");
+
+    // Verify it survives export/reload
+    const output = await doc.toBuffer();
+    const reloaded = await Docxtor.load(output);
+    expect(reloaded.getParagraphs()[1]!.text).toBe("Line A\nLine B");
+  });
 });
 
 // =============================================================================

@@ -45,7 +45,7 @@ import {
   getTagName,
   createRun,
 } from "../xml/helpers.js";
-import { createInsElement } from "./revision.js";
+import { createInsElement, createRevisionRun } from "./revision.js";
 
 /**
  * Apply a list of patches to a NormalizedDocument.
@@ -223,13 +223,14 @@ function executeAppendText(
   const bodyChildren = getChildren(bodyNode);
 
   // Build the new w:p FXP node
-  const run = createRun(patch.text);
   let paragraphChildren: FXPNode[];
 
   if (revCtx) {
+    const run = createRevisionRun(patch.text, undefined);
     const insElement = createInsElement(revCtx, [run]);
     paragraphChildren = [insElement];
   } else {
+    const run = createRun(patch.text);
     paragraphChildren = [run];
   }
 

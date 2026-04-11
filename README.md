@@ -100,7 +100,7 @@ The empty document is a fully valid `.docx` that can be patched, projected, and 
 ```ts
 const doc = await Docxtor.create();
 doc.applyPatches([
-  { type: "replace_text", target: "p0", find: "", replace: "Hello World" },
+  { type: "append_text", text: "Hello World" },
 ]);
 await doc.toFile("new-document.docx");
 ```
@@ -565,7 +565,7 @@ pnpm build         # build ESM + CJS + DTS (tsup)
 pnpm lint          # type-check
 ```
 
-307 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style, append), document creation, revision tracking (tracked changes), page breaks (explicit, lastRenderedPageBreak, pageBreakBefore, positional offset, revision interaction), integration flows, hyperlinks, entity escaping, newlines, nested tables, projection, and API surface.
+310 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style, append), document creation, revision tracking (tracked changes), page breaks (explicit, lastRenderedPageBreak, pageBreakBefore, positional offset, revision interaction), integration flows, hyperlinks, entity escaping, newlines, nested tables, projection, and API surface.
 
 ## License
 
