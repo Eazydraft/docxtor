@@ -17,6 +17,75 @@ import {
 } from "../fixtures/create-docx.js";
 
 // =============================================================================
+// Creating
+// =============================================================================
+
+describe("Docxtor.create", () => {
+  it("should create a valid empty DOCX when called with no arguments", async () => {
+    const doc = await Docxtor.create();
+
+    expect(doc).toBeInstanceOf(Docxtor);
+    expect(doc.getParagraphs()).toHaveLength(1);
+    expect(doc.getParagraphs()[0]!.text).toBe("");
+  });
+
+  it("should produce a DOCX buffer that Docxtor.load can read back", async () => {
+    const doc = await Docxtor.create();
+    const buffer = await doc.toBuffer();
+
+    const reloaded = await Docxtor.load(buffer);
+    expect(reloaded).toBeInstanceOf(Docxtor);
+    expect(reloaded.getParagraphs()).toHaveLength(1);
+    expect(reloaded.getParagraphs()[0]!.text).toBe("");
+  });
+
+  it("should delegate to load() when input is provided", async () => {
+    const buffer = await createSimpleDocx("Hello from create");
+    const doc = await Docxtor.create(buffer);
+
+    expect(doc).toBeInstanceOf(Docxtor);
+    expect(doc.getParagraphs()).toHaveLength(1);
+    expect(doc.getParagraphs()[0]!.text).toBe("Hello from create");
+  });
+
+  it("should support patching an empty document with append_text", async () => {
+    const doc = await Docxtor.create();
+
+    const results = doc.applyPatches([
+      { type: "append_text", text: "New content" },
+    ]);
+
+    expect(results[0]!.success).toBe(true);
+    expect(doc.getParagraphs()).toHaveLength(2);
+    expect(doc.getParagraphs()[1]!.text).toBe("New content");
+  });
+
+  it("should support the full create → patch → export → reload cycle", async () => {
+    const doc = await Docxtor.create();
+
+    doc.applyPatches([
+      { type: "append_text", text: "Created from scratch" },
+    ]);
+
+    const buffer = await doc.toBuffer();
+    const reloaded = await Docxtor.load(buffer);
+
+    expect(reloaded.getParagraphs()[1]!.text).toBe("Created from scratch");
+  });
+
+  it("should produce valid projections for an empty document", async () => {
+    const doc = await Docxtor.create();
+
+    const json = doc.project("json");
+    expect(json.body).toHaveLength(1);
+    expect(json.body[0]).toMatchObject({ id: "p0", text: "" });
+
+    const markdown = doc.project("markdown");
+    expect(markdown).toContain("[p0]");
+  });
+});
+
+// =============================================================================
 // Loading
 // =============================================================================
 
@@ -583,6 +652,163 @@ describe("Docxtor.applyPatches", () => {
 
     expect(results[0]!.success).toBe(false);
     expect(results[0]!.error).toBeDefined();
+  });
+});
+
+// =============================================================================
+// append_text patch
+// =============================================================================
+
+describe("append_text", () => {
+  it("should append a new paragraph to the document body", async () => {
+    const buffer = await createSimpleDocx("First paragraph");
+    const doc = await Docxtor.load(buffer);
+
+    const results = doc.applyPatches([
+      { type: "append_text", text: "Second paragraph" },
+    ]);
+
+    expect(results[0]!.success).toBe(true);
+    expect(doc.getParagraphs()).toHaveLength(2);
+    expect(doc.getParagraphs()[1]!.text).toBe("Second paragraph");
+  });
+
+  it("should assign the correct paragraph ID", async () => {
+    const buffer = await createSimpleDocx("First");
+    const doc = await Docxtor.load(buffer);
+
+    doc.applyPatches([{ type: "append_text", text: "Second" }]);
+
+    expect(doc.getParagraphs()[1]!.id).toBe("p1");
+  });
+
+  it("should support multiple sequential appends", async () => {
+    const buffer = await createSimpleDocx("First");
+    const doc = await Docxtor.load(buffer);
+
+    const results = doc.applyPatches([
+      { type: "append_text", text: "Second" },
+      { type: "append_text", text: "Third" },
+    ]);
+
+    expect(results.every((r) => r.success)).toBe(true);
+    expect(doc.getParagraphs()).toHaveLength(3);
+    expect(doc.getParagraphs()[0]!.text).toBe("First");
+    expect(doc.getParagraphs()[1]!.text).toBe("Second");
+    expect(doc.getParagraphs()[2]!.text).toBe("Third");
+    expect(doc.getParagraphs()[1]!.id).toBe("p1");
+    expect(doc.getParagraphs()[2]!.id).toBe("p2");
+  });
+
+  it("should survive export and reload", async () => {
+    const buffer = await createSimpleDocx("Original");
+    const doc = await Docxtor.load(buffer);
+
+    doc.applyPatches([{ type: "append_text", text: "Appended" }]);
+
+    const output = await doc.toBuffer();
+    const reloaded = await Docxtor.load(output);
+
+    expect(reloaded.getParagraphs()).toHaveLength(2);
+    expect(reloaded.getParagraphs()[0]!.text).toBe("Original");
+    expect(reloaded.getParagraphs()[1]!.text).toBe("Appended");
+  });
+
+  it("should appear in projections", async () => {
+    const buffer = await createSimpleDocx("Existing");
+    const doc = await Docxtor.load(buffer);
+
+    doc.applyPatches([{ type: "append_text", text: "New" }]);
+
+    const json = doc.project("json");
+    expect(json.body).toHaveLength(2);
+    expect(json.body[1]).toMatchObject({ id: "p1", text: "New" });
+
+    const markdown = doc.project("markdown");
+    expect(markdown).toContain("[p0] Existing");
+    expect(markdown).toContain("[p1] New");
+  });
+
+  it("should reject empty text", async () => {
+    const buffer = await createSimpleDocx("Hello");
+    const doc = await Docxtor.load(buffer);
+
+    const results = doc.applyPatches([
+      { type: "append_text", text: "" },
+    ]);
+
+    expect(results[0]!.success).toBe(false);
+    expect(results[0]!.error).toContain("Empty");
+  });
+
+  it("should work on an empty document created with Docxtor.create()", async () => {
+    const doc = await Docxtor.create();
+
+    doc.applyPatches([{ type: "append_text", text: "Hello World" }]);
+
+    const output = await doc.toBuffer();
+    const reloaded = await Docxtor.load(output);
+
+    expect(reloaded.getParagraphs()).toHaveLength(2);
+    expect(reloaded.getParagraphs()[1]!.text).toBe("Hello World");
+  });
+
+  it("should be targetable by subsequent patches", async () => {
+    const buffer = await createSimpleDocx("First");
+    const doc = await Docxtor.load(buffer);
+
+    const results = doc.applyPatches([
+      { type: "append_text", text: "Appended text here" },
+      { type: "replace_text", target: "p1", find: "text here", replace: "content" },
+    ]);
+
+    expect(results.every((r) => r.success)).toBe(true);
+    expect(doc.getParagraphs()[1]!.text).toBe("Appended content");
+  });
+
+  it("should handle text with newlines (w:br elements)", async () => {
+    const buffer = await createSimpleDocx("First");
+    const doc = await Docxtor.load(buffer);
+
+    const results = doc.applyPatches([
+      { type: "append_text", text: "Line one\nLine two\nLine three" },
+    ]);
+
+    expect(results[0]!.success).toBe(true);
+    expect(doc.getParagraphs()[1]!.text).toBe("Line one\nLine two\nLine three");
+  });
+
+  it("should survive export/reload with newlines", async () => {
+    const buffer = await createSimpleDocx("First");
+    const doc = await Docxtor.load(buffer);
+
+    doc.applyPatches([
+      { type: "append_text", text: "Hello\nWorld" },
+    ]);
+
+    const output = await doc.toBuffer();
+    const reloaded = await Docxtor.load(output);
+
+    expect(reloaded.getParagraphs()).toHaveLength(2);
+    expect(reloaded.getParagraphs()[1]!.text).toBe("Hello\nWorld");
+  });
+
+  it("should handle newlines with revision tracking", async () => {
+    const buffer = await createSimpleDocx("First");
+    const doc = await Docxtor.load(buffer);
+
+    const results = doc.applyPatches(
+      [{ type: "append_text", text: "Line A\nLine B" }],
+      { trackRevisions: true, revisionAuthor: "test" },
+    );
+
+    expect(results[0]!.success).toBe(true);
+    expect(doc.getParagraphs()[1]!.text).toBe("Line A\nLine B");
+
+    // Verify it survives export/reload
+    const output = await doc.toBuffer();
+    const reloaded = await Docxtor.load(output);
+    expect(reloaded.getParagraphs()[1]!.text).toBe("Line A\nLine B");
   });
 });
 

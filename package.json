@@ -1,7 +1,7 @@
 {
   "name": "@eazydraft/docxtor",
   "description": "Surgical, LLM-friendly DOCX editing through normalized AST with direct XML mutation",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": {
     "name": "Randeep Singh",
     "email": "randeep@lucioai.com"

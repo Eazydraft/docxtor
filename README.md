@@ -35,6 +35,9 @@ import { Docxtor } from "docxtor";
 // Load from file path or buffer
 const doc = await Docxtor.load("contract.docx");
 
+// Or create a blank document from scratch
+// const doc = await Docxtor.create();
+
 // Get an LLM-friendly projection
 const markdown = doc.project("markdown");
 // [p0] (Heading1) Service Agreement
@@ -77,6 +80,29 @@ Load a DOCX document. `input` can be a file path (`string`), `Buffer`, `ArrayBuf
 const doc = await Docxtor.load("file.docx");
 const doc = await Docxtor.load(buffer);
 const doc = await Docxtor.load(buffer, { includeHeadersFooters: false });
+```
+
+### `Docxtor.create(input?, options?)`
+
+Create a new Docxtor instance. If `input` is provided, delegates to `Docxtor.load()`. Otherwise, creates a valid empty DOCX document in memory with a single empty paragraph.
+
+```ts
+// Create a blank document from scratch
+const doc = await Docxtor.create();
+
+// Equivalent to Docxtor.load(buffer)
+const doc = await Docxtor.create(buffer);
+const doc = await Docxtor.create("file.docx");
+```
+
+The empty document is a fully valid `.docx` that can be patched, projected, and exported:
+
+```ts
+const doc = await Docxtor.create();
+doc.applyPatches([
+  { type: "append_text", text: "Hello World" },
+]);
+await doc.toFile("new-document.docx");
 ```
 
 ### `doc.project(format?, options?)`
@@ -249,6 +275,26 @@ Delete a substring from a paragraph.
 }
 ```
 
+### `append_text`
+
+Append a new paragraph to the end of the document body. No `target` needed — this is a document-level operation. Particularly useful with `Docxtor.create()` to build documents from scratch.
+
+```ts
+{
+  type: "append_text",
+  text: "New paragraph at the end",
+}
+```
+
+The new paragraph gets the next available ID (e.g., `p3` if the last paragraph is `p2`) and is immediately available for subsequent patches in the same batch:
+
+```ts
+doc.applyPatches([
+  { type: "append_text", text: "Conclusion paragraph" },
+  { type: "apply_formatting", target: "p3", find: "Conclusion", formatting: { bold: true } },
+]);
+```
+
 ### `replace_cell_text`
 
 Replace text in a table cell paragraph (same as `replace_text` but uses the cell's paragraph ID).
@@ -383,6 +429,7 @@ const results = doc.applyPatches(
 | `replace_text` | `w:del` wrapping the original runs + `w:ins` wrapping the replacement runs |
 | `insert_text` | `w:ins` wrapping the new runs |
 | `delete_text` | `w:del` wrapping the deleted runs (text preserved in XML) |
+| `append_text` | `w:ins` wrapping the new paragraph's run |
 | `apply_formatting` | `w:rPrChange` inside each affected run's `w:rPr` (captures old formatting) |
 | `apply_style` (paragraph) | `w:pPrChange` inside `w:pPr` (captures old paragraph style) |
 | `apply_style` (character) | `w:rPrChange` inside each affected run's `w:rPr` |
@@ -432,6 +479,7 @@ Patch types:
 - replace_text: { type: "replace_text", target: "<id>", find: "<text>", replace: "<text>" }
 - insert_text: { type: "insert_text", target: "<id>", position: "before"|"after", anchor: "<text>", text: "<text>" }
 - delete_text: { type: "delete_text", target: "<id>", find: "<text>" }
+- append_text: { type: "append_text", text: "<text>" }
 - apply_formatting: { type: "apply_formatting", target: "<id>", find: "<text>", formatting: { bold: true, color: "FF0000" } }
 - apply_style: { type: "apply_style", target: "<id>", style: "Heading1" }
 
@@ -480,6 +528,8 @@ import type { PatchOptions, RevisionMark, NormalizedPageBreak, JsonProjectionPag
 
 ## What it handles
 
+- Document creation from scratch (`Docxtor.create()`)
+- Paragraph appending (`append_text` — document-level, no target needed)
 - Paragraphs, runs, and text across split runs
 - Tables (add/delete rows, cell text replacement)
 - Nested tables
@@ -515,7 +565,7 @@ pnpm build         # build ESM + CJS + DTS (tsup)
 pnpm lint          # type-check
 ```
 
-293 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style), revision tracking (tracked changes), page breaks (explicit, lastRenderedPageBreak, pageBreakBefore, positional offset, revision interaction), integration flows, hyperlinks, entity escaping, newlines, nested tables, projection, and API surface.
+310 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style, append), document creation, revision tracking (tracked changes), page breaks (explicit, lastRenderedPageBreak, pageBreakBefore, positional offset, revision interaction), integration flows, hyperlinks, entity escaping, newlines, nested tables, projection, and API surface.
 
 ## License
 

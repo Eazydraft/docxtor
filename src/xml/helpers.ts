@@ -476,6 +476,9 @@ export function needsSpacePreserve(text: string): boolean {
 /**
  * Create a w:r run element with text and optional formatting.
  * If rPrNode is provided, it's cloned and used as the run properties.
+ *
+ * Handles newlines (\n) by interleaving w:t and w:br elements,
+ * matching the behavior of getRunText() which converts w:br → \n.
  */
 export function createRun(
   text: string,
@@ -485,6 +488,22 @@ export function createRun(
   if (rPrNode) {
     children.push(cloneNode(rPrNode));
   }
-  children.push(createWt(text));
+
+  if (text.includes("\n")) {
+    // Multi-line: interleave w:t and w:br
+    const segments = text.split("\n");
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i]!;
+      if (seg.length > 0 || i === 0) {
+        children.push(createWt(seg));
+      }
+      if (i < segments.length - 1) {
+        children.push({ "w:br": [] as FXPNode[] });
+      }
+    }
+  } else {
+    children.push(createWt(text));
+  }
+
   return { "w:r": children };
 }
