@@ -169,6 +169,12 @@ export function validatePatch(
       }
       return { valid: true };
     }
+    case "append_text": {
+      if (!patch.text || patch.text.length === 0) {
+        return { valid: false, error: "Empty append text" };
+      }
+      return { valid: true };
+    }
     default:
       return {
         valid: false,

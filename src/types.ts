@@ -254,6 +254,7 @@ export type Patch =
   | ReplaceTextPatch
   | InsertTextPatch
   | DeleteTextPatch
+  | AppendTextPatch
   | AddTableRowPatch
   | DeleteTableRowPatch
   | ReplaceCellTextPatch
@@ -294,6 +295,12 @@ export interface DeleteTextPatch {
   find: string;
   /** Which occurrence to delete (1-based). Default: 1. */
   occurrence?: number;
+}
+
+export interface AppendTextPatch {
+  type: "append_text";
+  /** Text for the new paragraph appended to the end of the document body. */
+  text: string;
 }
 
 export interface AddTableRowPatch {

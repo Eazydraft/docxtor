@@ -28,6 +28,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import JSZip from "jszip";
 import type {
   NormalizedDocument,
   NormalizedParagraph,
@@ -94,6 +95,71 @@ export class Docxtor {
     const doc = normalizeDocument(zipEntries, options);
 
     return new Docxtor(zipEntries, doc);
+  }
+
+  /**
+   * Create a new Docxtor instance.
+   *
+   * If `input` is provided, delegates to {@link Docxtor.load}.
+   * Otherwise, creates a valid empty DOCX document in memory.
+   *
+   * @param input - Optional buffer, ArrayBuffer, Uint8Array, or file path to load from
+   * @param options - Optional load options
+   *
+   * @example
+   * ```ts
+   * // Create a blank document
+   * const doc = await Docxtor.create();
+   *
+   * // Equivalent to Docxtor.load(buffer)
+   * const doc2 = await Docxtor.create(buffer);
+   * ```
+   */
+  static async create(
+    input?: Buffer | ArrayBuffer | Uint8Array | string,
+    options?: LoadOptions,
+  ): Promise<Docxtor> {
+    if (input !== undefined) {
+      return Docxtor.load(input, options);
+    }
+
+    // Build a minimal valid DOCX in memory
+    const zip = new JSZip();
+
+    const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`;
+
+    const topRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`;
+
+    const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:t></w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>`;
+
+    zip.file("[Content_Types].xml", contentTypes);
+    zip.file("_rels/.rels", topRels);
+    zip.file("word/document.xml", documentXml);
+
+    const buffer = await zip.generateAsync({
+      type: "nodebuffer",
+      compression: "DEFLATE",
+    });
+
+    return Docxtor.load(buffer, options);
   }
 
   // ===========================================================================
@@ -270,6 +336,7 @@ export type {
   ReplaceTextPatch,
   InsertTextPatch,
   DeleteTextPatch,
+  AppendTextPatch,
   AddTableRowPatch,
   DeleteTableRowPatch,
   ReplaceCellTextPatch,

@@ -16,6 +16,8 @@ import type {
   Patch,
   PatchResult,
   PatchOptions,
+  AppendTextPatch,
+  FXPNode,
 } from "../types.js";
 import {
   validatePatch,
@@ -37,6 +39,13 @@ import { executeApplyStyle } from "./style-ops.js";
 import { normalizeParagraph } from "../normalizer/paragraph.js";
 import { normalizeTable } from "../normalizer/table.js";
 import { createRevisionContext, type RevisionContext } from "./revision.js";
+import {
+  findChild,
+  getChildren,
+  getTagName,
+  createRun,
+} from "../xml/helpers.js";
+import { createInsElement } from "./revision.js";
 
 /**
  * Apply a list of patches to a NormalizedDocument.
@@ -132,6 +141,10 @@ function applySinglePatch(
         reNormalizeParagraph(doc, para);
         break;
       }
+      case "append_text": {
+        executeAppendText(doc, patch, revCtx);
+        break;
+      }
     }
 
     return { success: true, patch };
@@ -175,4 +188,74 @@ function reNormalizeTable(
   // Update in-place
   table.rows = fresh.rows;
   table.style = fresh.style;
+}
+
+// =============================================================================
+// Append text (document-level operation)
+// =============================================================================
+
+/**
+ * Execute an append_text patch: creates a new w:p element at the end
+ * of the document body and adds it to the normalized body array.
+ *
+ * Inserts before w:sectPr if present so section properties stay last.
+ *
+ * With revision tracking, the new paragraph's run is wrapped in w:ins.
+ */
+function executeAppendText(
+  doc: NormalizedDocument,
+  patch: AppendTextPatch,
+  revCtx?: RevisionContext,
+): void {
+  // Find w:body in the FXP tree
+  const docNode = doc.xmlParts.document.find(
+    (n) => getTagName(n) === "w:document",
+  );
+  if (!docNode) {
+    throw new Error("Cannot find w:document in FXP tree");
+  }
+
+  const bodyNode = findChild(docNode, "w:body");
+  if (!bodyNode) {
+    throw new Error("Cannot find w:body in FXP tree");
+  }
+
+  const bodyChildren = getChildren(bodyNode);
+
+  // Build the new w:p FXP node
+  const run = createRun(patch.text);
+  let paragraphChildren: FXPNode[];
+
+  if (revCtx) {
+    const insElement = createInsElement(revCtx, [run]);
+    paragraphChildren = [insElement];
+  } else {
+    paragraphChildren = [run];
+  }
+
+  const newParagraph: FXPNode = { "w:p": paragraphChildren };
+
+  // Insert before w:sectPr if present, otherwise append at the end
+  const sectPrIndex = bodyChildren.findIndex(
+    (n) => getTagName(n) === "w:sectPr",
+  );
+  if (sectPrIndex !== -1) {
+    bodyChildren.splice(sectPrIndex, 0, newParagraph);
+  } else {
+    bodyChildren.push(newParagraph);
+  }
+
+  // Compute the next paragraph ID
+  let maxPIdx = -1;
+  for (const el of doc.body) {
+    if (el.kind === "paragraph") {
+      const num = parseInt(el.id.replace("p", ""), 10);
+      if (!isNaN(num) && num > maxPIdx) maxPIdx = num;
+    }
+  }
+  const newId = `p${maxPIdx + 1}`;
+
+  // Normalize the new paragraph and add it to the body
+  const normalized = normalizeParagraph(newParagraph, newId);
+  doc.body.push(normalized);
 }
