@@ -222,28 +222,31 @@ function executeAppendText(
 
   const bodyChildren = getChildren(bodyNode);
 
-  // Build the new w:p FXP node
-  let paragraphChildren: FXPNode[];
+  // Split text by newlines — each line becomes a separate w:p paragraph
+  const lines = patch.text.split("\n");
 
-  if (revCtx) {
-    const run = createRevisionRun(patch.text, undefined);
-    const insElement = createInsElement(revCtx, [run]);
-    paragraphChildren = [insElement];
-  } else {
-    const run = createRun(patch.text);
-    paragraphChildren = [run];
+  // Build a w:p for each line
+  const newParagraphs: FXPNode[] = [];
+  for (const line of lines) {
+    if (revCtx) {
+      // Wrap run in w:ins so the paragraph appears as a tracked insertion
+      const run = createRevisionRun(line, undefined);
+      const insElement = createInsElement(revCtx, [run]);
+      newParagraphs.push({ "w:p": [insElement] });
+    } else {
+      const run = createRun(line);
+      newParagraphs.push({ "w:p": [run] });
+    }
   }
 
-  const newParagraph: FXPNode = { "w:p": paragraphChildren };
-
-  // Insert before w:sectPr if present, otherwise append at the end
+  // Insert all new paragraphs before w:sectPr if present, otherwise append
   const sectPrIndex = bodyChildren.findIndex(
     (n) => getTagName(n) === "w:sectPr",
   );
   if (sectPrIndex !== -1) {
-    bodyChildren.splice(sectPrIndex, 0, newParagraph);
+    bodyChildren.splice(sectPrIndex, 0, ...newParagraphs);
   } else {
-    bodyChildren.push(newParagraph);
+    bodyChildren.push(...newParagraphs);
   }
 
   // Compute the next paragraph ID
@@ -254,9 +257,11 @@ function executeAppendText(
       if (!isNaN(num) && num > maxPIdx) maxPIdx = num;
     }
   }
-  const newId = `p${maxPIdx + 1}`;
 
-  // Normalize the new paragraph and add it to the body
-  const normalized = normalizeParagraph(newParagraph, newId);
-  doc.body.push(normalized);
+  // Normalize each new paragraph and add to the body
+  for (let i = 0; i < newParagraphs.length; i++) {
+    const newId = `p${maxPIdx + 1 + i}`;
+    const normalized = normalizeParagraph(newParagraphs[i]!, newId);
+    doc.body.push(normalized);
+  }
 }
