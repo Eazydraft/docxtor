@@ -32,6 +32,7 @@ import type {
   NormalizedDocument,
   NormalizedParagraph,
   NormalizedTable,
+  DocxXmlParts,
   Patch,
   PatchResult,
   ProjectionFormat,
@@ -132,6 +133,28 @@ export class Docxtor {
   // ===========================================================================
   // Export
   // ===========================================================================
+
+  /**
+   * Export the current document as a raw OOXML string (word/document.xml content).
+   *
+   * Returns the serialized XML for the document body, reflecting any patches
+   * that have been applied. This is the same XML that gets written into the
+   * DOCX ZIP as word/document.xml.
+   */
+  toOoxml(): string {
+    return serializeXml(this.doc.xmlParts.document);
+  }
+
+  /**
+   * The raw XML parts for the document (document, headers, footers, and any
+   * other XML files preserved from the original ZIP).
+   *
+   * Each value is the mutable FXPNode tree — patches operate on these objects
+   * directly. Use serializeXml() to convert any part to an XML string.
+   */
+  get xmlParts(): DocxXmlParts {
+    return this.doc.xmlParts;
+  }
 
   /**
    * Export the modified document as a Buffer.
@@ -253,6 +276,7 @@ export type {
   ListInfo,
   HeaderFooter,
   BodyElement,
+  DocxXmlParts,
   Patch,
   ReplaceTextPatch,
   InsertTextPatch,
