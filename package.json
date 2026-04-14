@@ -54,7 +54,7 @@
     "prepublishOnly": "pnpm build"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.19.0"
   },
   "dependencies": {
     "fast-xml-parser": "5.5.10",
