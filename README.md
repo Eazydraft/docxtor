@@ -135,6 +135,20 @@ const buffer = await doc.toBuffer();
 await doc.toFile("output.docx");
 ```
 
+### `doc.toString()`
+
+Export the current document as a raw OOXML string (`word/document.xml` content). Reflects any patches that have been applied. Useful for inspecting the XML directly or forwarding it to another system without producing a full DOCX file.
+
+```ts
+const xml = doc.toString();
+// <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+// <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+//   <w:body>
+//     <w:p><w:r><w:t>Hello World</w:t></w:r></w:p>
+//   </w:body>
+// </w:document>
+```
+
 ### Inspection methods
 
 ```ts

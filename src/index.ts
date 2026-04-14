@@ -141,7 +141,7 @@ export class Docxtor {
    * that have been applied. This is the same XML that gets written into the
    * DOCX ZIP as word/document.xml.
    */
-  toOoxml(): string {
+  toString(): string {
     return serializeXml(this.doc.xmlParts.document);
   }
 
