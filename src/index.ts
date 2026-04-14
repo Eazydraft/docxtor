@@ -204,6 +204,17 @@ export class Docxtor {
   // ===========================================================================
 
   /**
+   * Export the current document as a raw OOXML string (word/document.xml content).
+   *
+   * Returns the serialized XML for the document body, reflecting any patches
+   * that have been applied. This is the same XML that gets written into the
+   * DOCX ZIP as word/document.xml.
+   */
+  toString(): string {
+    return serializeXml(this.doc.xmlParts.document);
+  }
+
+  /**
    * Export the modified document as a Buffer.
    */
   async toBuffer(): Promise<Buffer> {
