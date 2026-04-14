@@ -766,7 +766,7 @@ describe("append_text", () => {
     expect(doc.getParagraphs()[1]!.text).toBe("Appended content");
   });
 
-  it("should handle text with newlines (w:br elements)", async () => {
+  it("should handle text with newlines by creating separate paragraphs", async () => {
     const buffer = await createSimpleDocx("First");
     const doc = await Docxtor.load(buffer);
 
@@ -775,7 +775,83 @@ describe("append_text", () => {
     ]);
 
     expect(results[0]!.success).toBe(true);
-    expect(doc.getParagraphs()[1]!.text).toBe("Line one\nLine two\nLine three");
+    // Each line becomes its own paragraph
+    expect(doc.getParagraphs()).toHaveLength(4); // "First" + 3 lines
+    expect(doc.getParagraphs()[1]!.text).toBe("Line one");
+    expect(doc.getParagraphs()[2]!.text).toBe("Line two");
+    expect(doc.getParagraphs()[3]!.text).toBe("Line three");
+  });
+
+  it("should assign correct paragraph IDs for each line", async () => {
+    const buffer = await createSimpleDocx("First");
+    const doc = await Docxtor.load(buffer);
+
+    doc.applyPatches([
+      { type: "append_text", text: "Alpha\nBravo\nCharlie" },
+    ]);
+
+    expect(doc.getParagraphs()[1]!.id).toBe("p1");
+    expect(doc.getParagraphs()[2]!.id).toBe("p2");
+    expect(doc.getParagraphs()[3]!.id).toBe("p3");
+  });
+
+  it("should make newline-split paragraphs targetable by subsequent patches", async () => {
+    const buffer = await createSimpleDocx("First");
+    const doc = await Docxtor.load(buffer);
+
+    const results = doc.applyPatches([
+      { type: "append_text", text: "Hello world\nGoodbye world" },
+      { type: "replace_text", target: "p2", find: "Goodbye", replace: "Farewell" },
+    ]);
+
+    expect(results.every((r) => r.success)).toBe(true);
+    expect(doc.getParagraphs()[1]!.text).toBe("Hello world");
+    expect(doc.getParagraphs()[2]!.text).toBe("Farewell world");
+  });
+
+  it("should show newline-split paragraphs in projections", async () => {
+    const buffer = await createSimpleDocx("Existing");
+    const doc = await Docxtor.load(buffer);
+
+    doc.applyPatches([
+      { type: "append_text", text: "Line A\nLine B" },
+    ]);
+
+    const json = doc.project("json");
+    expect(json.body).toHaveLength(3);
+    expect(json.body[1]).toMatchObject({ id: "p1", text: "Line A" });
+    expect(json.body[2]).toMatchObject({ id: "p2", text: "Line B" });
+
+    const markdown = doc.project("markdown");
+    expect(markdown).toContain("[p0] Existing");
+    expect(markdown).toContain("[p1] Line A");
+    expect(markdown).toContain("[p2] Line B");
+  });
+
+  it("should handle trailing newline by creating an empty paragraph", async () => {
+    const buffer = await createSimpleDocx("First");
+    const doc = await Docxtor.load(buffer);
+
+    doc.applyPatches([
+      { type: "append_text", text: "Hello\n" },
+    ]);
+
+    expect(doc.getParagraphs()).toHaveLength(3);
+    expect(doc.getParagraphs()[1]!.text).toBe("Hello");
+    expect(doc.getParagraphs()[2]!.text).toBe("");
+  });
+
+  it("should handle leading newline by creating an empty paragraph first", async () => {
+    const buffer = await createSimpleDocx("First");
+    const doc = await Docxtor.load(buffer);
+
+    doc.applyPatches([
+      { type: "append_text", text: "\nHello" },
+    ]);
+
+    expect(doc.getParagraphs()).toHaveLength(3);
+    expect(doc.getParagraphs()[1]!.text).toBe("");
+    expect(doc.getParagraphs()[2]!.text).toBe("Hello");
   });
 
   it("should survive export/reload with newlines", async () => {
@@ -789,8 +865,10 @@ describe("append_text", () => {
     const output = await doc.toBuffer();
     const reloaded = await Docxtor.load(output);
 
-    expect(reloaded.getParagraphs()).toHaveLength(2);
-    expect(reloaded.getParagraphs()[1]!.text).toBe("Hello\nWorld");
+    // Each line becomes its own paragraph
+    expect(reloaded.getParagraphs()).toHaveLength(3); // "First" + "Hello" + "World"
+    expect(reloaded.getParagraphs()[1]!.text).toBe("Hello");
+    expect(reloaded.getParagraphs()[2]!.text).toBe("World");
   });
 
   it("should handle newlines with revision tracking", async () => {
@@ -803,12 +881,56 @@ describe("append_text", () => {
     );
 
     expect(results[0]!.success).toBe(true);
-    expect(doc.getParagraphs()[1]!.text).toBe("Line A\nLine B");
+    // Each line becomes its own paragraph
+    expect(doc.getParagraphs()).toHaveLength(3); // "First" + "Line A" + "Line B"
+    expect(doc.getParagraphs()[1]!.text).toBe("Line A");
+    expect(doc.getParagraphs()[2]!.text).toBe("Line B");
 
     // Verify it survives export/reload
     const output = await doc.toBuffer();
     const reloaded = await Docxtor.load(output);
-    expect(reloaded.getParagraphs()[1]!.text).toBe("Line A\nLine B");
+    expect(reloaded.getParagraphs()).toHaveLength(3);
+    expect(reloaded.getParagraphs()[1]!.text).toBe("Line A");
+    expect(reloaded.getParagraphs()[2]!.text).toBe("Line B");
+  });
+
+  it("should wrap each paragraph run in w:ins when revision tracking", async () => {
+    const buffer = await createSimpleDocx("First");
+    const doc = await Docxtor.load(buffer);
+
+    doc.applyPatches(
+      [{ type: "append_text", text: "Alpha\nBravo" }],
+      { trackRevisions: true, revisionAuthor: "tester" },
+    );
+
+    // Inspect the raw XML to confirm w:ins wrapping
+    const xml = doc.toString();
+    // Each appended paragraph should contain a w:ins element
+    const insMatches = xml.match(/<w:ins /g);
+    expect(insMatches).not.toBeNull();
+    expect(insMatches!.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("should handle multiple appends each with newlines", async () => {
+    const buffer = await createSimpleDocx("First");
+    const doc = await Docxtor.load(buffer);
+
+    const results = doc.applyPatches([
+      { type: "append_text", text: "A\nB" },
+      { type: "append_text", text: "C\nD" },
+    ]);
+
+    expect(results.every((r) => r.success)).toBe(true);
+    expect(doc.getParagraphs()).toHaveLength(5); // "First" + A + B + C + D
+    expect(doc.getParagraphs()[1]!.text).toBe("A");
+    expect(doc.getParagraphs()[2]!.text).toBe("B");
+    expect(doc.getParagraphs()[3]!.text).toBe("C");
+    expect(doc.getParagraphs()[4]!.text).toBe("D");
+    // IDs should be sequential
+    expect(doc.getParagraphs()[1]!.id).toBe("p1");
+    expect(doc.getParagraphs()[2]!.id).toBe("p2");
+    expect(doc.getParagraphs()[3]!.id).toBe("p3");
+    expect(doc.getParagraphs()[4]!.id).toBe("p4");
   });
 });
 

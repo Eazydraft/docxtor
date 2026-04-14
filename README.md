@@ -309,6 +309,20 @@ doc.applyPatches([
 ]);
 ```
 
+**Newline handling:** If the text contains `\n` characters, each line becomes a separate `w:p` paragraph in the OOXML output. For example, `"Line one\nLine two\nLine three"` creates three paragraphs, each with its own sequential ID. This matches how Word represents distinct paragraphs and ensures proper rendering.
+
+```ts
+// Creates 3 separate paragraphs: p1, p2, p3
+doc.applyPatches([
+  { type: "append_text", text: "First line\nSecond line\nThird line" },
+]);
+// doc.getParagraphs() → [..., { id: "p1", text: "First line" },
+//                              { id: "p2", text: "Second line" },
+//                              { id: "p3", text: "Third line" }]
+```
+
+With revision tracking enabled, each appended paragraph's run is wrapped in `w:ins` so all lines appear as tracked insertions in Word.
+
 ### `replace_cell_text`
 
 Replace text in a table cell paragraph (same as `replace_text` but uses the cell's paragraph ID).
@@ -443,7 +457,7 @@ const results = doc.applyPatches(
 | `replace_text` | `w:del` wrapping the original runs + `w:ins` wrapping the replacement runs |
 | `insert_text` | `w:ins` wrapping the new runs |
 | `delete_text` | `w:del` wrapping the deleted runs (text preserved in XML) |
-| `append_text` | `w:ins` wrapping the new paragraph's run |
+| `append_text` | `w:ins` wrapping each new paragraph's run (one per line if text contains `\n`) |
 | `apply_formatting` | `w:rPrChange` inside each affected run's `w:rPr` (captures old formatting) |
 | `apply_style` (paragraph) | `w:pPrChange` inside `w:pPr` (captures old paragraph style) |
 | `apply_style` (character) | `w:rPrChange` inside each affected run's `w:rPr` |
@@ -556,7 +570,8 @@ import type { PatchOptions, RevisionMark, NormalizedPageBreak, JsonProjectionPag
 - Tracked changes / revision tracking (`w:ins`, `w:del`, `w:rPrChange`, `w:pPrChange`)
 - Page breaks — surfaced via `includePageBreaks` option with positional `pageBreakOffset` (see [projection options](#docprojectformat-options) for details)
 - XML entity escaping (`&amp;`, `&lt;`, `&gt;`)
-- Newlines (`\n` maps to `w:br` elements)
+- Newlines in `append_text` (`\n` creates separate `w:p` paragraphs)
+- Newlines in run text (`\n` maps to `w:br` elements)
 - List/numbering info in projections
 - Styles, fonts, colors, highlighting in projections
 
@@ -579,7 +594,7 @@ pnpm build         # build ESM + CJS + DTS (tsup)
 pnpm lint          # type-check
 ```
 
-310 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style, append), document creation, revision tracking (tracked changes), page breaks (explicit, lastRenderedPageBreak, pageBreakBefore, positional offset, revision interaction), integration flows, hyperlinks, entity escaping, newlines, nested tables, projection, and API surface.
+317 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style, append), document creation, revision tracking (tracked changes), page breaks (explicit, lastRenderedPageBreak, pageBreakBefore, positional offset, revision interaction), integration flows, hyperlinks, entity escaping, newlines, nested tables, projection, and API surface.
 
 ## License
 
