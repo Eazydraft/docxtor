@@ -1050,3 +1050,214 @@ describe("Full pipeline", () => {
     });
   });
 });
+
+// =============================================================================
+// add_table patch
+// =============================================================================
+
+describe("add_table", () => {
+  it("should add a table to an empty document", async () => {
+    const buffer = await createSimpleDocx("Hello");
+    const doc = await Docxtor.load(buffer);
+
+    const results = doc.applyPatches([
+      {
+        type: "add_table",
+        headers: ["Name", "Age"],
+        rows: [
+          ["Alice", "30"],
+          ["Bob", "25"],
+        ],
+      },
+    ]);
+
+    expect(results[0]!.success).toBe(true);
+    const tables = doc.getTables();
+    expect(tables).toHaveLength(1);
+    expect(tables[0]!.rows).toHaveLength(3); // 1 header + 2 data
+    expect(tables[0]!.rows[0]!.cells[0]!.paragraphs[0]!.text).toBe("Name");
+    expect(tables[0]!.rows[1]!.cells[0]!.paragraphs[0]!.text).toBe("Alice");
+    expect(tables[0]!.rows[2]!.cells[1]!.paragraphs[0]!.text).toBe("25");
+  });
+
+  it("should add a table without headers", async () => {
+    const buffer = await createSimpleDocx("Hello");
+    const doc = await Docxtor.load(buffer);
+
+    const results = doc.applyPatches([
+      {
+        type: "add_table",
+        rows: [
+          ["A", "B"],
+          ["C", "D"],
+        ],
+      },
+    ]);
+
+    expect(results[0]!.success).toBe(true);
+    const tables = doc.getTables();
+    expect(tables).toHaveLength(1);
+    expect(tables[0]!.rows).toHaveLength(2);
+  });
+
+  it("should insert table after a specific element", async () => {
+    const buffer = await createSimpleDocx("First");
+    const doc = await Docxtor.load(buffer);
+
+    const results = doc.applyPatches([
+      {
+        type: "add_table",
+        afterId: "p0",
+        rows: [["X", "Y"]],
+      },
+    ]);
+
+    expect(results[0]!.success).toBe(true);
+    // Body should be: p0, tbl0
+    const elements = doc.getBody();
+    expect(elements[0]!.kind).toBe("paragraph");
+    expect(elements[1]!.kind).toBe("table");
+  });
+
+  it("should survive export and reload", async () => {
+    const buffer = await createSimpleDocx("Hello");
+    const doc = await Docxtor.load(buffer);
+
+    doc.applyPatches([
+      {
+        type: "add_table",
+        headers: ["Col1"],
+        rows: [["Val1"]],
+      },
+    ]);
+
+    const output = await doc.toBuffer();
+    const reloaded = await Docxtor.load(output);
+    expect(reloaded.getTables()).toHaveLength(1);
+    expect(reloaded.getTables()[0]!.rows).toHaveLength(2);
+  });
+
+  it("should fail validation for empty rows and no headers", async () => {
+    const buffer = await createSimpleDocx("Hello");
+    const doc = await Docxtor.load(buffer);
+
+    const results = doc.applyPatches([
+      { type: "add_table", rows: [] } as any,
+    ]);
+
+    expect(results[0]!.success).toBe(false);
+  });
+
+  it("should fail validation for mismatched column counts", async () => {
+    const buffer = await createSimpleDocx("Hello");
+    const doc = await Docxtor.load(buffer);
+
+    const results = doc.applyPatches([
+      {
+        type: "add_table",
+        headers: ["A", "B"],
+        rows: [["X", "Y", "Z"]],
+      },
+    ]);
+
+    expect(results[0]!.success).toBe(false);
+  });
+
+  it("should fail validation for invalid afterId", async () => {
+    const buffer = await createSimpleDocx("Hello");
+    const doc = await Docxtor.load(buffer);
+
+    const results = doc.applyPatches([
+      { type: "add_table", afterId: "nonexistent", rows: [["A"]] },
+    ]);
+
+    expect(results[0]!.success).toBe(false);
+  });
+});
+
+// =============================================================================
+// append_text with markdown tables
+// =============================================================================
+
+describe("append_text — markdown table support", () => {
+  it("should convert a markdown table to a real table", async () => {
+    const buffer = await createSimpleDocx("Intro");
+    const doc = await Docxtor.load(buffer);
+
+    const results = doc.applyPatches([
+      {
+        type: "append_text",
+        text: "| Name | Age |\n| --- | --- |\n| Alice | 30 |",
+      },
+    ]);
+
+    expect(results[0]!.success).toBe(true);
+    const tables = doc.getTables();
+    expect(tables).toHaveLength(1);
+    expect(tables[0]!.rows).toHaveLength(2); // header + 1 data row
+    expect(tables[0]!.rows[0]!.cells[0]!.paragraphs[0]!.text).toBe("Name");
+    expect(tables[0]!.rows[1]!.cells[0]!.paragraphs[0]!.text).toBe("Alice");
+  });
+
+  it("should handle mixed text and markdown table", async () => {
+    const buffer = await createSimpleDocx("Intro");
+    const doc = await Docxtor.load(buffer);
+
+    const results = doc.applyPatches([
+      {
+        type: "append_text",
+        text: "Before table\n| A | B |\n| --- | --- |\n| 1 | 2 |\nAfter table",
+      },
+    ]);
+
+    expect(results[0]!.success).toBe(true);
+    // Should have: original p0, "Before table" paragraph, table, "After table" paragraph
+    expect(doc.getParagraphs().length).toBeGreaterThanOrEqual(3);
+    expect(doc.getTables()).toHaveLength(1);
+  });
+
+  it("should handle a table with no data rows (headers only)", async () => {
+    const buffer = await createSimpleDocx("Intro");
+    const doc = await Docxtor.load(buffer);
+
+    const results = doc.applyPatches([
+      {
+        type: "append_text",
+        text: "| H1 | H2 |\n| --- | --- |",
+      },
+    ]);
+
+    expect(results[0]!.success).toBe(true);
+    const tables = doc.getTables();
+    expect(tables).toHaveLength(1);
+    expect(tables[0]!.rows).toHaveLength(1); // just header row
+  });
+
+  it("should not treat non-table pipe content as a table", async () => {
+    const buffer = await createSimpleDocx("Intro");
+    const doc = await Docxtor.load(buffer);
+
+    doc.applyPatches([
+      { type: "append_text", text: "a | b | c" },
+    ]);
+
+    expect(doc.getTables()).toHaveLength(0);
+  });
+
+  it("should survive export and reload with markdown table", async () => {
+    const buffer = await createSimpleDocx("Intro");
+    const doc = await Docxtor.load(buffer);
+
+    doc.applyPatches([
+      {
+        type: "append_text",
+        text: "| X | Y |\n| --- | --- |\n| 1 | 2 |",
+      },
+    ]);
+
+    const output = await doc.toBuffer();
+    const reloaded = await Docxtor.load(output);
+    expect(reloaded.getTables()).toHaveLength(1);
+    expect(reloaded.getTables()[0]!.rows[0]!.cells[0]!.paragraphs[0]!.text).toBe("X");
+  });
+});

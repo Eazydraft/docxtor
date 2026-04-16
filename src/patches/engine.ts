@@ -17,12 +17,14 @@ import type {
   PatchResult,
   PatchOptions,
   AppendTextPatch,
+  AddTablePatch,
   FXPNode,
 } from "../types.js";
 import {
   validatePatch,
   findParagraphById,
   findTableById,
+  findElementById,
 } from "./validator.js";
 import {
   executeReplaceText,
@@ -33,6 +35,7 @@ import {
   executeAddTableRow,
   executeDeleteTableRow,
   executeReplaceCellText,
+  buildTableNode,
 } from "./table-ops.js";
 import { executeApplyFormatting } from "./format-ops.js";
 import { executeApplyStyle } from "./style-ops.js";
@@ -41,11 +44,13 @@ import { normalizeTable } from "../normalizer/table.js";
 import { createRevisionContext, type RevisionContext } from "./revision.js";
 import {
   findChild,
+  findChildren,
   getChildren,
   getTagName,
   createRun,
+  createElement,
 } from "../xml/helpers.js";
-import { createInsElement, createRevisionRun } from "./revision.js";
+import { createInsElement, createRevisionRun, createTrPrIns } from "./revision.js";
 
 /**
  * Apply a list of patches to a NormalizedDocument.
@@ -145,6 +150,10 @@ function applySinglePatch(
         executeAppendText(doc, patch, revCtx);
         break;
       }
+      case "add_table": {
+        executeAddTablePatch(doc, patch, revCtx);
+        break;
+      }
     }
 
     return { success: true, patch };
@@ -195,73 +204,279 @@ function reNormalizeTable(
 // =============================================================================
 
 /**
- * Execute an append_text patch: creates a new w:p element at the end
- * of the document body and adds it to the normalized body array.
- *
- * Inserts before w:sectPr if present so section properties stay last.
- *
- * With revision tracking, the new paragraph's run is wrapped in w:ins.
+ * Get the w:body node and its children from the document FXP tree.
  */
-function executeAppendText(
-  doc: NormalizedDocument,
-  patch: AppendTextPatch,
-  revCtx?: RevisionContext,
-): void {
-  // Find w:body in the FXP tree
+function getBodyNode(doc: NormalizedDocument): {
+  bodyNode: FXPNode;
+  bodyChildren: FXPNode[];
+} {
   const docNode = doc.xmlParts.document.find(
     (n) => getTagName(n) === "w:document",
   );
   if (!docNode) {
     throw new Error("Cannot find w:document in FXP tree");
   }
-
   const bodyNode = findChild(docNode, "w:body");
   if (!bodyNode) {
     throw new Error("Cannot find w:body in FXP tree");
   }
+  return { bodyNode, bodyChildren: getChildren(bodyNode) };
+}
 
-  const bodyChildren = getChildren(bodyNode);
-
-  // Split text by newlines — each line becomes a separate w:p paragraph
-  const lines = patch.text.split("\n");
-
-  // Build a w:p for each line
-  const newParagraphs: FXPNode[] = [];
-  for (const line of lines) {
-    if (revCtx) {
-      // Wrap run in w:ins so the paragraph appears as a tracked insertion
-      const run = createRevisionRun(line, undefined);
-      const insElement = createInsElement(revCtx, [run]);
-      newParagraphs.push({ "w:p": [insElement] });
-    } else {
-      const run = createRun(line);
-      newParagraphs.push({ "w:p": [run] });
+/**
+ * Insert FXP nodes into the body before w:sectPr, or after a specific element.
+ * Returns the insertion index.
+ */
+function insertIntoBody(
+  bodyChildren: FXPNode[],
+  nodes: FXPNode[],
+  afterXmlRef?: FXPNode,
+): void {
+  if (afterXmlRef) {
+    const idx = bodyChildren.indexOf(afterXmlRef);
+    if (idx !== -1) {
+      bodyChildren.splice(idx + 1, 0, ...nodes);
+      return;
     }
   }
-
-  // Insert all new paragraphs before w:sectPr if present, otherwise append
+  // Default: insert before w:sectPr if present, otherwise append
   const sectPrIndex = bodyChildren.findIndex(
     (n) => getTagName(n) === "w:sectPr",
   );
   if (sectPrIndex !== -1) {
-    bodyChildren.splice(sectPrIndex, 0, ...newParagraphs);
+    bodyChildren.splice(sectPrIndex, 0, ...nodes);
   } else {
-    bodyChildren.push(...newParagraphs);
+    bodyChildren.push(...nodes);
   }
+}
 
-  // Compute the next paragraph ID
+/**
+ * Compute the next available paragraph and table IDs.
+ */
+function getNextIds(doc: NormalizedDocument): { nextPIdx: number; nextTblIdx: number } {
   let maxPIdx = -1;
+  let maxTblIdx = -1;
   for (const el of doc.body) {
     if (el.kind === "paragraph") {
       const num = parseInt(el.id.replace("p", ""), 10);
       if (!isNaN(num) && num > maxPIdx) maxPIdx = num;
+    } else if (el.kind === "table") {
+      const num = parseInt(el.id.replace("tbl", ""), 10);
+      if (!isNaN(num) && num > maxTblIdx) maxTblIdx = num;
+    }
+  }
+  return { nextPIdx: maxPIdx + 1, nextTblIdx: maxTblIdx + 1 };
+}
+
+// =============================================================================
+// Markdown table parsing
+// =============================================================================
+
+/** A contiguous block of text lines or a markdown table. */
+type TextSegment =
+  | { kind: "text"; lines: string[] }
+  | { kind: "table"; headers: string[]; rows: string[][] };
+
+/**
+ * Parse text into segments of plain lines and markdown tables.
+ *
+ * A markdown table is detected as:
+ * - A header row: `| col1 | col2 | ...`
+ * - A separator row: `| --- | --- | ...` (dashes, colons, spaces)
+ * - Zero or more data rows: `| val1 | val2 | ...`
+ */
+function parseTextSegments(text: string): TextSegment[] {
+  const lines = text.split("\n");
+  const segments: TextSegment[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    // Try to detect a markdown table starting at line i
+    if (
+      i + 1 < lines.length &&
+      isMarkdownTableRow(lines[i]!) &&
+      isMarkdownSeparator(lines[i + 1]!)
+    ) {
+      const headerCells = parseMarkdownRow(lines[i]!);
+      // Skip header and separator
+      i += 2;
+      const dataRows: string[][] = [];
+      while (i < lines.length && isMarkdownTableRow(lines[i]!)) {
+        const cells = parseMarkdownRow(lines[i]!);
+        // Pad or trim to match header count
+        while (cells.length < headerCells.length) cells.push("");
+        if (cells.length > headerCells.length) cells.length = headerCells.length;
+        dataRows.push(cells);
+        i++;
+      }
+      segments.push({ kind: "table", headers: headerCells, rows: dataRows });
+    } else {
+      // Plain text line
+      const last = segments[segments.length - 1];
+      if (last && last.kind === "text") {
+        last.lines.push(lines[i]!);
+      } else {
+        segments.push({ kind: "text", lines: [lines[i]!] });
+      }
+      i++;
     }
   }
 
-  // Normalize each new paragraph and add to the body
-  for (let i = 0; i < newParagraphs.length; i++) {
-    const newId = `p${maxPIdx + 1 + i}`;
-    const normalized = normalizeParagraph(newParagraphs[i]!, newId);
-    doc.body.push(normalized);
+  return segments;
+}
+
+function isMarkdownTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.length > 1;
+}
+
+function isMarkdownSeparator(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) return false;
+  // Each cell should be dashes (with optional colons for alignment)
+  const cells = trimmed.slice(1, -1).split("|");
+  return cells.every((cell) => /^\s*:?-+:?\s*$/.test(cell));
+}
+
+function parseMarkdownRow(line: string): string[] {
+  const trimmed = line.trim();
+  // Remove leading/trailing pipes and split
+  const inner = trimmed.startsWith("|") ? trimmed.slice(1) : trimmed;
+  const content = inner.endsWith("|") ? inner.slice(0, -1) : inner;
+  return content.split("|").map((cell) => cell.trim());
+}
+
+// =============================================================================
+// Revision tracking for new tables
+// =============================================================================
+
+/**
+ * Mark all rows in a table node as inserted revisions.
+ * Adds w:ins to w:trPr for each w:tr in the table.
+ */
+function markTableRowsAsInserted(
+  tableNode: FXPNode,
+  revCtx: RevisionContext,
+): void {
+  const trNodes = findChildren(tableNode, "w:tr");
+  for (const trNode of trNodes) {
+    const rowChildren = getChildren(trNode);
+    let trPr = rowChildren.find((c) => "w:trPr" in c);
+    if (!trPr) {
+      trPr = createElement("w:trPr", []);
+      rowChildren.unshift(trPr);
+    }
+    const trPrChildren = getChildren(trPr);
+    trPrChildren.push(createTrPrIns(revCtx));
   }
+}
+
+// =============================================================================
+// Execute append_text
+// =============================================================================
+
+/**
+ * Execute an append_text patch: creates new w:p and/or w:tbl elements at the
+ * end of the document body.
+ *
+ * Supports markdown table syntax — pipe-delimited rows with a separator line
+ * are automatically converted to OOXML tables.
+ *
+ * Inserts before w:sectPr if present so section properties stay last.
+ * With revision tracking, new paragraph runs are wrapped in w:ins.
+ */
+function executeAppendText(
+  doc: NormalizedDocument,
+  patch: AppendTextPatch,
+  revCtx?: RevisionContext,
+): void {
+  const { bodyChildren } = getBodyNode(doc);
+  const segments = parseTextSegments(patch.text);
+  const newNodes: FXPNode[] = [];
+
+  for (const segment of segments) {
+    if (segment.kind === "text") {
+      for (const line of segment.lines) {
+        if (revCtx) {
+          const run = createRevisionRun(line, undefined);
+          const insElement = createInsElement(revCtx, [run]);
+          newNodes.push({ "w:p": [insElement] });
+        } else {
+          const run = createRun(line);
+          newNodes.push({ "w:p": [run] });
+        }
+      }
+    } else {
+      // Table segment
+      const tblNode = buildTableNode(segment.headers, segment.rows);
+      if (revCtx) {
+        markTableRowsAsInserted(tblNode, revCtx);
+      }
+      newNodes.push(tblNode);
+    }
+  }
+
+  // Insert all new nodes before w:sectPr
+  insertIntoBody(bodyChildren, newNodes);
+
+  // Normalize and add to doc.body
+  let { nextPIdx, nextTblIdx } = getNextIds(doc);
+  for (const node of newNodes) {
+    if ("w:tbl" in node) {
+      const id = `tbl${nextTblIdx++}`;
+      const normalized = normalizeTable(node, id);
+      doc.body.push(normalized);
+    } else {
+      const id = `p${nextPIdx++}`;
+      const normalized = normalizeParagraph(node, id);
+      doc.body.push(normalized);
+    }
+  }
+}
+
+// =============================================================================
+// Execute add_table
+// =============================================================================
+
+/**
+ * Execute an add_table patch: creates a new w:tbl element and inserts it
+ * into the document body.
+ */
+function executeAddTablePatch(
+  doc: NormalizedDocument,
+  patch: AddTablePatch,
+  revCtx?: RevisionContext,
+): void {
+  const { bodyChildren } = getBodyNode(doc);
+  const tableNode = buildTableNode(patch.headers, patch.rows);
+
+  if (revCtx) {
+    markTableRowsAsInserted(tableNode, revCtx);
+  }
+
+  // Find the afterId target's xmlRef if specified
+  let afterXmlRef: FXPNode | undefined;
+  if (patch.afterId) {
+    const target = findElementById(patch.afterId, doc);
+    if (target) {
+      afterXmlRef = target.xmlRef;
+    }
+  }
+
+  insertIntoBody(bodyChildren, [tableNode], afterXmlRef);
+
+  // Normalize and add to doc.body
+  const { nextTblIdx } = getNextIds(doc);
+  const id = `tbl${nextTblIdx}`;
+  const normalized = normalizeTable(tableNode, id);
+
+  // Insert into body array at correct position (after the target element)
+  if (patch.afterId) {
+    const targetIdx = doc.body.findIndex((el) => el.id === patch.afterId);
+    if (targetIdx !== -1) {
+      doc.body.splice(targetIdx + 1, 0, normalized);
+      return;
+    }
+  }
+  doc.body.push(normalized);
 }

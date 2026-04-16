@@ -255,6 +255,7 @@ export type Patch =
   | InsertTextPatch
   | DeleteTextPatch
   | AppendTextPatch
+  | AddTablePatch
   | AddTableRowPatch
   | DeleteTableRowPatch
   | ReplaceCellTextPatch
@@ -299,8 +300,20 @@ export interface DeleteTextPatch {
 
 export interface AppendTextPatch {
   type: "append_text";
-  /** Text for the new paragraph appended to the end of the document body. */
+  /** Text for the new paragraph appended to the end of the document body.
+   *  Supports markdown table syntax — pipe-delimited rows with a separator
+   *  line are automatically converted to a real OOXML table. */
   text: string;
+}
+
+export interface AddTablePatch {
+  type: "add_table";
+  /** Element ID to insert after. If omitted, appends to end of document. */
+  afterId?: string;
+  /** Optional header row cells. */
+  headers?: string[];
+  /** Data rows. Each sub-array is one row of cell text values. */
+  rows: string[][];
 }
 
 export interface AddTableRowPatch {
