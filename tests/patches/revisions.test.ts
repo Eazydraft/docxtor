@@ -1144,3 +1144,122 @@ describe("w:br preservation in split runs", () => {
     expect(xml).toContain("w:br");
   });
 });
+
+// =============================================================================
+// add_table with revisions
+// =============================================================================
+
+describe("add_table with revisions", () => {
+  it("should mark all rows with w:ins in w:trPr", async () => {
+    const buffer = await createSimpleDocx("Hello");
+    const entries = await readDocx(buffer);
+    const doc = normalizeDocument(entries);
+
+    const results = applyPatches(doc, [
+      {
+        type: "add_table",
+        headers: ["Name", "Age"],
+        rows: [["Alice", "30"]],
+      },
+    ], REV_OPTIONS);
+
+    expect(results[0]!.success).toBe(true);
+
+    const xml = getDocXml(doc);
+    // Both rows (header + data) should have w:ins in w:trPr
+    expect(xml).toContain("w:trPr");
+    expect(xml).toContain("w:ins");
+    expect(xml).toContain("Test Author");
+  });
+
+  it("should mark rows with w:ins when using afterId", async () => {
+    const buffer = await createSimpleDocx("Hello");
+    const entries = await readDocx(buffer);
+    const doc = normalizeDocument(entries);
+
+    const results = applyPatches(doc, [
+      {
+        type: "add_table",
+        afterId: "p0",
+        rows: [["A", "B"]],
+      },
+    ], REV_OPTIONS);
+
+    expect(results[0]!.success).toBe(true);
+
+    const xml = getDocXml(doc);
+    expect(xml).toContain("w:ins");
+    expect(xml).toContain("Test Author");
+  });
+
+  it("should survive export and reload with revisions", async () => {
+    const buffer = await createSimpleDocx("Hello");
+    const entries = await readDocx(buffer);
+    const doc = normalizeDocument(entries);
+
+    applyPatches(doc, [
+      {
+        type: "add_table",
+        headers: ["X"],
+        rows: [["Y"]],
+      },
+    ], REV_OPTIONS);
+
+    // Verify in the current doc's XML
+    const xml = getDocXml(doc);
+    expect(xml).toContain("w:ins");
+    expect(xml).toContain("Test Author");
+    expect(xml).toContain("w:tbl");
+  });
+});
+
+// =============================================================================
+// append_text markdown table with revisions
+// =============================================================================
+
+describe("append_text markdown table with revisions", () => {
+  it("should mark table rows with w:ins when appending a markdown table", async () => {
+    const buffer = await createSimpleDocx("Hello");
+    const entries = await readDocx(buffer);
+    const doc = normalizeDocument(entries);
+
+    const results = applyPatches(doc, [
+      {
+        type: "append_text",
+        text: "| Col1 | Col2 |\n| --- | --- |\n| A | B |",
+      },
+    ], REV_OPTIONS);
+
+    expect(results[0]!.success).toBe(true);
+
+    const xml = getDocXml(doc);
+    // Table rows should have revision marks
+    expect(xml).toContain("w:trPr");
+    expect(xml).toContain("w:ins");
+    expect(xml).toContain("Test Author");
+  });
+
+  it("should wrap plain text paragraphs in w:ins and mark table rows", async () => {
+    const buffer = await createSimpleDocx("Hello");
+    const entries = await readDocx(buffer);
+    const doc = normalizeDocument(entries);
+
+    const results = applyPatches(doc, [
+      {
+        type: "append_text",
+        text: "Before\n| H1 | H2 |\n| --- | --- |\n| V1 | V2 |\nAfter",
+      },
+    ], REV_OPTIONS);
+
+    expect(results[0]!.success).toBe(true);
+
+    const xml = getDocXml(doc);
+    // Both paragraph w:ins and table row w:ins should be present
+    expect(xml).toContain("w:ins");
+    expect(xml).toContain("Test Author");
+
+    // Should have the table
+    const tables = doc.body.filter((e) => e.kind === "table");
+    expect(tables).toHaveLength(1);
+  });
+});

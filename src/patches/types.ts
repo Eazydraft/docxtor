@@ -9,6 +9,7 @@ export type {
   ReplaceTextPatch,
   InsertTextPatch,
   DeleteTextPatch,
+  AddTablePatch,
   AddTableRowPatch,
   DeleteTableRowPatch,
   ReplaceCellTextPatch,

@@ -50,6 +50,7 @@ const patches = [
   { type: "replace_text", target: "p1", find: "valid", replace: "enforceable" },
   { type: "insert_text", target: "p2", position: "after", anchor: "terms:", text: " and conditions:" },
   { type: "delete_text", target: "p5", find: "DRAFT - " },
+  { type: "add_table", afterId: "p2", headers: ["Term", "Value"], rows: [["Duration", "12 months"]] },
   { type: "apply_formatting", target: "p1", find: "enforceable", formatting: { bold: true, color: "FF0000" } },
   { type: "apply_style", target: "p0", style: "Heading1" },
 ];
@@ -321,7 +322,29 @@ doc.applyPatches([
 //                              { id: "p3", text: "Third line" }]
 ```
 
-With revision tracking enabled, each appended paragraph's run is wrapped in `w:ins` so all lines appear as tracked insertions in Word.
+**Markdown table support:** If the text contains a markdown table (pipe-delimited rows with a `| --- |` separator line), it is automatically converted to a real OOXML table (`w:tbl`) with TableGrid styling and visible borders. Plain text before and after the table becomes normal paragraphs.
+
+```ts
+// Creates an actual table in the document
+doc.applyPatches([
+  { type: "append_text", text: "| Name | Age |\n| --- | --- |\n| Alice | 30 |\n| Bob | 25 |" },
+]);
+// doc.getTables() → [{ id: "tbl0", rows: [{ cells: ["Name", "Age"] }, ...] }]
+```
+
+Mixed content works naturally — text lines become paragraphs, table blocks become tables:
+
+```ts
+doc.applyPatches([
+  {
+    type: "append_text",
+    text: "Summary:\n| Metric | Value |\n| --- | --- |\n| Revenue | $1M |\nEnd of report.",
+  },
+]);
+// Creates: paragraph "Summary:", then a table, then paragraph "End of report."
+```
+
+With revision tracking enabled, each appended paragraph's run is wrapped in `w:ins`, and each table row gets `w:ins` in its `w:trPr`, so all content appears as tracked insertions in Word.
 
 ### `replace_cell_text`
 
@@ -360,6 +383,38 @@ Delete a row from a table.
   row: 2,                 // 0-based row index
 }
 ```
+
+### `add_table`
+
+Add a new table to the document body. This is a document-level operation — no existing table is required. The table is created with TableGrid styling (visible single borders).
+
+```ts
+{
+  type: "add_table",
+  headers: ["Name", "Age", "Role"],           // optional header row
+  rows: [["Alice", "30", "Engineer"], ["Bob", "25", "Designer"]],
+}
+```
+
+Use `afterId` to insert the table after a specific paragraph or table. If omitted, the table is appended to the end of the document (before `w:sectPr`).
+
+```ts
+{
+  type: "add_table",
+  afterId: "p2",          // insert after paragraph p2
+  headers: ["Item", "Qty"],
+  rows: [["Widget", "10"]],
+}
+```
+
+Headers are optional. If provided, they become the first row of the table. All rows (and headers, if present) must have the same number of cells.
+
+```ts
+// Table without headers
+{ type: "add_table", rows: [["A", "B"], ["C", "D"]] }
+```
+
+With revision tracking, every row in the new table gets `w:ins` in its `w:trPr`.
 
 ### `apply_formatting`
 
@@ -443,6 +498,7 @@ const results = doc.applyPatches(
     { type: "insert_text", target: "p2", position: "after", anchor: "terms:", text: " and conditions" },
     { type: "apply_formatting", target: "p1", find: "enforceable", formatting: { bold: true } },
     { type: "apply_style", target: "p0", style: "Heading2" },
+    { type: "add_table", headers: ["Col1", "Col2"], rows: [["A", "B"]] },
     { type: "add_table_row", target: "tbl0", afterRow: 1, cells: ["A", "B"] },
     { type: "delete_table_row", target: "tbl0", row: 2 },
   ],
@@ -457,10 +513,11 @@ const results = doc.applyPatches(
 | `replace_text` | `w:del` wrapping the original runs + `w:ins` wrapping the replacement runs |
 | `insert_text` | `w:ins` wrapping the new runs |
 | `delete_text` | `w:del` wrapping the deleted runs (text preserved in XML) |
-| `append_text` | `w:ins` wrapping each new paragraph's run (one per line if text contains `\n`) |
+| `append_text` | `w:ins` wrapping each new paragraph's run; markdown tables get `w:ins` in each row's `w:trPr` |
 | `apply_formatting` | `w:rPrChange` inside each affected run's `w:rPr` (captures old formatting) |
 | `apply_style` (paragraph) | `w:pPrChange` inside `w:pPr` (captures old paragraph style) |
 | `apply_style` (character) | `w:rPrChange` inside each affected run's `w:rPr` |
+| `add_table` | `w:ins` element inside every row's `w:trPr` |
 | `add_table_row` | `w:ins` element inside the new row's `w:trPr` |
 | `delete_table_row` | Row is kept; `w:del` element added to `w:trPr` |
 
@@ -507,7 +564,8 @@ Patch types:
 - replace_text: { type: "replace_text", target: "<id>", find: "<text>", replace: "<text>" }
 - insert_text: { type: "insert_text", target: "<id>", position: "before"|"after", anchor: "<text>", text: "<text>" }
 - delete_text: { type: "delete_text", target: "<id>", find: "<text>" }
-- append_text: { type: "append_text", text: "<text>" }
+- append_text: { type: "append_text", text: "<text>" } (supports markdown tables)
+- add_table: { type: "add_table", headers: ["col1", ...], rows: [["val1", ...], ...], afterId: "<id>" }
 - apply_formatting: { type: "apply_formatting", target: "<id>", find: "<text>", formatting: { bold: true, color: "FF0000" } }
 - apply_style: { type: "apply_style", target: "<id>", style: "Heading1" }
 
@@ -558,6 +616,8 @@ import type { PatchOptions, RevisionMark, NormalizedPageBreak, JsonProjectionPag
 
 - Document creation from scratch (`Docxtor.create()`)
 - Paragraph appending (`append_text` — document-level, no target needed)
+- Table creation (`add_table` — inserts a new table with TableGrid style)
+- Markdown table conversion in `append_text` (pipe-delimited syntax → real OOXML tables)
 - Paragraphs, runs, and text across split runs
 - Tables (add/delete rows, cell text replacement)
 - Nested tables
@@ -570,7 +630,7 @@ import type { PatchOptions, RevisionMark, NormalizedPageBreak, JsonProjectionPag
 - Tracked changes / revision tracking (`w:ins`, `w:del`, `w:rPrChange`, `w:pPrChange`)
 - Page breaks — surfaced via `includePageBreaks` option with positional `pageBreakOffset` (see [projection options](#docprojectformat-options) for details)
 - XML entity escaping (`&amp;`, `&lt;`, `&gt;`)
-- Newlines in `append_text` (`\n` creates separate `w:p` paragraphs)
+- Newlines in `append_text` (`\n` creates separate `w:p` paragraphs; markdown tables create `w:tbl`)
 - Newlines in run text (`\n` maps to `w:br` elements)
 - List/numbering info in projections
 - Styles, fonts, colors, highlighting in projections
@@ -594,7 +654,7 @@ pnpm build         # build ESM + CJS + DTS (tsup)
 pnpm lint          # type-check
 ```
 
-317 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style, append), document creation, revision tracking (tracked changes), page breaks (explicit, lastRenderedPageBreak, pageBreakBefore, positional offset, revision interaction), integration flows, hyperlinks, entity escaping, newlines, nested tables, projection, and API surface.
+334 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style, append, add_table), document creation, revision tracking (tracked changes), page breaks (explicit, lastRenderedPageBreak, pageBreakBefore, positional offset, revision interaction), integration flows, hyperlinks, entity escaping, newlines, nested tables, markdown table conversion, projection, and API surface.
 
 ## License
 

@@ -175,6 +175,45 @@ export function validatePatch(
       }
       return { valid: true };
     }
+    case "add_table": {
+      if (!patch.rows || patch.rows.length === 0) {
+        if (!patch.headers || patch.headers.length === 0) {
+          return { valid: false, error: "Table must have at least one row or headers" };
+        }
+      }
+      // Determine column count from headers or first row
+      const colCount = patch.headers?.length ?? (patch.rows.length > 0 ? patch.rows[0]!.length : 0);
+      if (colCount === 0) {
+        return { valid: false, error: "Table must have at least one column" };
+      }
+      // All rows must have the same column count
+      for (let i = 0; i < patch.rows.length; i++) {
+        if (patch.rows[i]!.length !== colCount) {
+          return {
+            valid: false,
+            error: `Row ${i} has ${patch.rows[i]!.length} cells, expected ${colCount}`,
+          };
+        }
+      }
+      // If headers provided, must match column count
+      if (patch.headers && patch.rows.length > 0 && patch.headers.length !== patch.rows[0]!.length) {
+        return {
+          valid: false,
+          error: `Headers have ${patch.headers.length} cells, but rows have ${patch.rows[0]!.length}`,
+        };
+      }
+      // Validate afterId target exists if provided
+      if (patch.afterId) {
+        const found = findElementById(patch.afterId, doc);
+        if (!found) {
+          return {
+            valid: false,
+            error: `Element "${patch.afterId}" not found`,
+          };
+        }
+      }
+      return { valid: true };
+    }
     default:
       return {
         valid: false,
@@ -278,6 +317,22 @@ function searchParagraphInTable(
         const found = searchParagraphInTable(id, nested);
         if (found) return found;
       }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Find any body element (paragraph or table) by its ID.
+ */
+export function findElementById(
+  id: string,
+  doc: NormalizedDocument,
+): BodyElement | undefined {
+  for (const element of doc.body) {
+    if (element.kind === "paragraph" && element.id === id) return element;
+    if (element.kind === "table") {
+      if (element.id === id) return element;
     }
   }
   return undefined;

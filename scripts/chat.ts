@@ -54,7 +54,17 @@ Patch types:
 6. delete_table_row — Delete a row from a table.
    { "type": "delete_table_row", "target": "<table_id>", "row": <row_index> }
 
-7. apply_formatting — Apply inline formatting to a substring or entire paragraph.
+7. add_table — Add a new table to the document.
+   { "type": "add_table", "headers": ["col1", "col2"], "rows": [["val1", "val2"], ...] }
+   "headers" is optional. "afterId" is optional — if specified, the table is inserted after that element ID; otherwise it's appended to the end.
+   { "type": "add_table", "afterId": "<element_id>", "headers": ["col1", "col2"], "rows": [["val1", "val2"]] }
+
+8. append_text — Append text (or a markdown table) to the end of the document.
+   { "type": "append_text", "text": "New paragraph text" }
+   Supports markdown table syntax — pipe-delimited rows with a separator line are auto-converted to a real table:
+   { "type": "append_text", "text": "| Name | Age |\\n| --- | --- |\\n| Alice | 30 |" }
+
+9. apply_formatting — Apply inline formatting to a substring or entire paragraph.
    { "type": "apply_formatting", "target": "<paragraph_id>", "find": "<exact_text>", "occurrence": 1, "formatting": { ... } }
    Omit "find" to format the entire paragraph. The "formatting" object supports:
    - bold: true/false/null (true=add, false/null=remove)
@@ -133,7 +143,7 @@ function cyan(s: string): string {
 function printPatches(results: PatchResult[]): void {
   for (const r of results) {
     const status = r.success ? green("OK") : red("FAIL");
-    const target = r.patch.target;
+    const target = "target" in r.patch ? r.patch.target : "(document)";
     let desc: string;
     switch (r.patch.type) {
       case "replace_text":
@@ -151,6 +161,12 @@ function printPatches(results: PatchResult[]): void {
         break;
       case "delete_table_row":
         desc = `delete row ${r.patch.row}`;
+        break;
+      case "add_table":
+        desc = `add table (${r.patch.rows.length} rows, ${r.patch.headers ? "with headers" : "no headers"})${r.patch.afterId ? ` after ${r.patch.afterId}` : ""}`;
+        break;
+      case "append_text":
+        desc = `append "${truncate(r.patch.text, 40)}"`;
         break;
       case "apply_formatting": {
         const props = Object.keys(r.patch.formatting).join(", ");

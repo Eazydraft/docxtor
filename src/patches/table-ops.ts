@@ -13,6 +13,7 @@ import type {
   AddTableRowPatch,
   DeleteTableRowPatch,
   ReplaceCellTextPatch,
+  FXPNode,
 } from "../types.js";
 import {
   cloneNode,
@@ -176,4 +177,95 @@ export function executeReplaceCellText(
     replace: patch.replace,
     occurrence: patch.occurrence,
   }, revCtx);
+}
+
+// =============================================================================
+// Build a w:tbl FXP node from scratch
+// =============================================================================
+
+/**
+ * Build a complete w:tbl FXP node with TableGrid style and single borders.
+ *
+ * @param headers - Optional header row cells
+ * @param rows - Data rows (each sub-array is one row of cell values)
+ * @returns A w:tbl FXP node ready for insertion into w:body
+ */
+export function buildTableNode(
+  headers: string[] | undefined,
+  rows: string[][],
+): FXPNode {
+  const colCount =
+    headers?.length ?? (rows.length > 0 ? rows[0]!.length : 0);
+
+  // w:tblPr — table properties with TableGrid style and borders
+  const borderAttrs = { "w:val": "single", "w:sz": "4", "w:space": "0", "w:color": "auto" };
+  const tblBorders = createElement("w:tblBorders", [
+    createElement("w:top", [], borderAttrs),
+    createElement("w:left", [], borderAttrs),
+    createElement("w:bottom", [], borderAttrs),
+    createElement("w:right", [], borderAttrs),
+    createElement("w:insideH", [], borderAttrs),
+    createElement("w:insideV", [], borderAttrs),
+  ]);
+
+  const tblPr = createElement("w:tblPr", [
+    createElement("w:tblStyle", [], { "w:val": "TableGrid" }),
+    createElement("w:tblW", [], { "w:w": "0", "w:type": "auto" }),
+    tblBorders,
+    createElement("w:tblLook", [], {
+      "w:val": "04A0",
+      "w:firstRow": "1",
+      "w:lastRow": "0",
+      "w:firstColumn": "1",
+      "w:lastColumn": "0",
+      "w:noHBand": "0",
+      "w:noVBand": "1",
+    }),
+  ]);
+
+  // w:tblGrid — one gridCol per column
+  const gridCols: FXPNode[] = [];
+  for (let i = 0; i < colCount; i++) {
+    gridCols.push(createElement("w:gridCol", []));
+  }
+  const tblGrid = createElement("w:tblGrid", gridCols);
+
+  // Build rows
+  const allRows: FXPNode[] = [];
+
+  if (headers) {
+    allRows.push(buildTableRowNode(headers));
+  }
+
+  for (const row of rows) {
+    allRows.push(buildTableRowNode(row));
+  }
+
+  return createElement("w:tbl", [tblPr, tblGrid, ...allRows]);
+}
+
+/**
+ * Build a single w:tr node from cell text values.
+ */
+function buildTableRowNode(cells: string[]): FXPNode {
+  const tcNodes: FXPNode[] = [];
+  for (const cellText of cells) {
+    const wt: FXPNode = {
+      "w:t": [{ "#text": escapeXmlText(cellText) } as any],
+    };
+    if (needsSpacePreserve(cellText)) {
+      if (!wt[":@"]) wt[":@"] = {};
+      (wt[":@"] as Record<string, string>)["@_xml:space"] = "preserve";
+    }
+    const run: FXPNode = { "w:r": [wt] };
+    const para: FXPNode = { "w:p": [run] };
+    const tc = createElement("w:tc", [
+      createElement("w:tcPr", [
+        createElement("w:tcW", [], { "w:w": "0", "w:type": "auto" }),
+      ]),
+      para,
+    ]);
+    tcNodes.push(tc);
+  }
+  return createElement("w:tr", tcNodes);
 }
