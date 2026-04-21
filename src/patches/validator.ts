@@ -212,6 +212,32 @@ export function validatePatch(
           };
         }
       }
+      // Validate container if provided
+      if (patch.container) {
+        if (!["header", "footer"].includes(patch.container.type)) {
+          return { valid: false, error: `Invalid container type: ${patch.container.type}` };
+        }
+        if (!["default", "first", "even"].includes(patch.container.variant)) {
+          return { valid: false, error: `Invalid container variant: ${patch.container.variant}` };
+        }
+      }
+      return { valid: true };
+    }
+    case "add_header":
+    case "add_footer": {
+      if (!["default", "first", "even"].includes(patch.variant)) {
+        return { valid: false, error: `Invalid variant: ${patch.variant}` };
+      }
+      if (!patch.paragraphs || patch.paragraphs.length === 0) {
+        return { valid: false, error: "At least one paragraph is required" };
+      }
+      return { valid: true };
+    }
+    case "remove_header":
+    case "remove_footer": {
+      if (!["default", "first", "even"].includes(patch.variant)) {
+        return { valid: false, error: `Invalid variant: ${patch.variant}` };
+      }
       return { valid: true };
     }
     default:
@@ -254,7 +280,7 @@ export function findParagraphById(
 }
 
 /**
- * Find a table by its ID in the document body (including nested tables).
+ * Find a table by its ID in the document body, headers, and footers (including nested tables).
  */
 export function findTableById(
   id: string,
@@ -266,6 +292,23 @@ export function findTableById(
       if (found) return found;
     }
   }
+
+  // Search header tables
+  for (const header of doc.headers.values()) {
+    for (const table of header.tables) {
+      const found = searchTableInTable(id, table);
+      if (found) return found;
+    }
+  }
+
+  // Search footer tables
+  for (const footer of doc.footers.values()) {
+    for (const table of footer.tables) {
+      const found = searchTableInTable(id, table);
+      if (found) return found;
+    }
+  }
+
   return undefined;
 }
 

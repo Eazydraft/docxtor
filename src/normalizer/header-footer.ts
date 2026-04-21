@@ -11,9 +11,11 @@ import type {
   FXPNode,
   HeaderFooter,
   NormalizedParagraph,
+  NormalizedTable,
 } from "../types.js";
-import { findChildren, getTagName } from "../xml/helpers.js";
+import { getChildren, getTagName } from "../xml/helpers.js";
 import { normalizeParagraph } from "./paragraph.js";
+import { normalizeTable } from "./table.js";
 
 /**
  * Normalize a header or footer FXP structure.
@@ -36,16 +38,32 @@ export function normalizeHeaderFooter(
   const rootNode = fxpNodes.find((node) => getTagName(node) === rootTag);
 
   const paragraphs: NormalizedParagraph[] = [];
+  const tables: NormalizedTable[] = [];
 
   if (rootNode) {
-    const pNodes = findChildren(rootNode, "w:p");
-    for (let i = 0; i < pNodes.length; i++) {
-      paragraphs.push(
-        normalizeParagraph(
-          pNodes[i]!,
-          `${prefix}.${variant}.p${i}`,
-        ),
-      );
+    const children = getChildren(rootNode);
+    let paraIdx = 0;
+    let tableIdx = 0;
+
+    for (const child of children) {
+      const tag = getTagName(child);
+      if (tag === "w:p") {
+        paragraphs.push(
+          normalizeParagraph(
+            child,
+            `${prefix}.${variant}.p${paraIdx}`,
+          ),
+        );
+        paraIdx++;
+      } else if (tag === "w:tbl") {
+        tables.push(
+          normalizeTable(
+            child,
+            `${prefix}.${variant}.tbl${tableIdx}`,
+          ),
+        );
+        tableIdx++;
+      }
     }
   }
 
@@ -54,6 +72,7 @@ export function normalizeHeaderFooter(
     variant,
     rId,
     paragraphs,
+    tables,
     xmlRef: fxpNodes,
   };
 }

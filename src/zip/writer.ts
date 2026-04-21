@@ -17,6 +17,10 @@ export interface WriteDocxOptions {
   headers?: Map<string, string>;
   /** Modified footer XML files keyed by zip path. */
   footers?: Map<string, string>;
+  /** Modified document.xml.rels content. */
+  documentRelsXml?: string;
+  /** Modified [Content_Types].xml content. */
+  contentTypesXml?: string;
 }
 
 /**
@@ -29,7 +33,7 @@ export interface WriteDocxOptions {
 export async function writeDocx(
   options: WriteDocxOptions,
 ): Promise<Buffer> {
-  const { zip, documentXml, headers, footers } = options;
+  const { zip, documentXml, headers, footers, documentRelsXml, contentTypesXml } = options;
 
   // Replace document.xml
   zip.file("word/document.xml", documentXml);
@@ -46,6 +50,16 @@ export async function writeDocx(
     for (const [path, content] of footers) {
       zip.file(path, content);
     }
+  }
+
+  // Replace document.xml.rels if modified
+  if (documentRelsXml) {
+    zip.file("word/_rels/document.xml.rels", documentRelsXml);
+  }
+
+  // Replace [Content_Types].xml if modified
+  if (contentTypesXml) {
+    zip.file("[Content_Types].xml", contentTypesXml);
   }
 
   // Generate the output buffer

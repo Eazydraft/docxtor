@@ -53,6 +53,7 @@ const patches = [
   { type: "add_table", afterId: "p2", headers: ["Term", "Value"], rows: [["Duration", "12 months"]] },
   { type: "apply_formatting", target: "p1", find: "enforceable", formatting: { bold: true, color: "FF0000" } },
   { type: "apply_style", target: "p0", style: "Heading1" },
+  { type: "add_footer", variant: "default", paragraphs: ["Page {{PAGE}} of {{NUMPAGES}}"] },
 ];
 const results = doc.applyPatches(patches);
 
@@ -242,7 +243,7 @@ doc.getTables();                 // Body-level tables only
 doc.getHeaders();                // Map<string, HeaderFooter>
 doc.getFooters();                // Map<string, HeaderFooter>
 doc.findParagraphById("p5");     // Search everywhere (body, tables, headers, footers)
-doc.findTableById("tbl0");       // Search body + nested tables
+doc.findTableById("tbl0");       // Search body, headers, footers + nested tables
 doc.getStyles();                 // StyleInfo[] from styles.xml
 ```
 
@@ -292,12 +293,31 @@ Delete a substring from a paragraph.
 
 ### `append_text`
 
-Append a new paragraph to the end of the document body. No `target` needed — this is a document-level operation. Particularly useful with `Docxtor.create()` to build documents from scratch.
+Append a new paragraph to the end of the document body (or a header/footer). No `target` needed — this is a document-level operation. Particularly useful with `Docxtor.create()` to build documents from scratch.
 
 ```ts
 {
   type: "append_text",
   text: "New paragraph at the end",
+}
+```
+
+To append to a header or footer instead of the body, use `container`:
+
+```ts
+{
+  type: "append_text",
+  text: "Updated: {{DATE}}",
+  container: { type: "footer", variant: "default" },
+}
+```
+
+**Field placeholders:** Text supports `{{FIELD}}` placeholders that are converted to proper OOXML field codes. Supported fields: `{{PAGE}}` (current page number), `{{NUMPAGES}}` (total page count), `{{DATE}}`, `{{TIME}}`, `{{FILENAME}}`.
+
+```ts
+{
+  type: "append_text",
+  text: "Page {{PAGE}} of {{NUMPAGES}}",
 }
 ```
 
@@ -386,7 +406,7 @@ Delete a row from a table.
 
 ### `add_table`
 
-Add a new table to the document body. This is a document-level operation — no existing table is required. The table is created with TableGrid styling (visible single borders).
+Add a new table to the document body (or a header/footer). This is a document-level operation — no existing table is required. The table is created with TableGrid styling (visible single borders).
 
 ```ts
 {
@@ -404,6 +424,17 @@ Use `afterId` to insert the table after a specific paragraph or table. If omitte
   afterId: "p2",          // insert after paragraph p2
   headers: ["Item", "Qty"],
   rows: [["Widget", "10"]],
+}
+```
+
+To add a table inside a header or footer, use `container`:
+
+```ts
+{
+  type: "add_table",
+  headers: ["A", "B"],
+  rows: [["1", "2"]],
+  container: { type: "header", variant: "default" },
 }
 ```
 
@@ -471,6 +502,54 @@ Re-point a paragraph or substring to a pre-existing style defined in the documen
 
 Available styles are listed in the markdown projection under "Available Styles" and in the JSON projection's `styles` array. Use `doc.getStyles()` to inspect them programmatically.
 
+### `add_header`
+
+Add a header to the document's last section. Creates the header XML part, relationship, and content type entry automatically.
+
+```ts
+{
+  type: "add_header",
+  variant: "default",     // "default" (all/odd pages), "first" (first page only), "even" (even pages)
+  paragraphs: ["CONFIDENTIAL", "Page {{PAGE}}"],
+}
+```
+
+Paragraph text supports `{{FIELD}}` placeholders: `{{PAGE}}`, `{{NUMPAGES}}`, `{{DATE}}`, `{{TIME}}`, `{{FILENAME}}`.
+
+### `add_footer`
+
+Add a footer to the document's last section. Same options as `add_header`.
+
+```ts
+{
+  type: "add_footer",
+  variant: "default",
+  paragraphs: ["Page {{PAGE}} of {{NUMPAGES}}"],
+}
+```
+
+### `remove_header`
+
+Remove a header from the document's last section. Cleans up the relationship and content type entry.
+
+```ts
+{
+  type: "remove_header",
+  variant: "default",     // "default", "first", or "even"
+}
+```
+
+### `remove_footer`
+
+Remove a footer from the document's last section.
+
+```ts
+{
+  type: "remove_footer",
+  variant: "default",
+}
+```
+
 ## ID scheme
 
 | Location | Pattern | Example |
@@ -482,7 +561,9 @@ Available styles are listed in the markdown projection under "Available Styles" 
 | Nested table | `tbl{t}.r{r}.c{c}.tbl{n}` | `tbl0.r2.c1.tbl0` |
 | Nested cell paragraph | `tbl0.r0.c0.tbl0.r0.c0.p0` | (recursive) |
 | Header paragraph | `hdr.{variant}.p{n}` | `hdr.default.p0` |
+| Header table | `hdr.{variant}.tbl{n}` | `hdr.default.tbl0` |
 | Footer paragraph | `ftr.{variant}.p{n}` | `ftr.default.p0` |
+| Footer table | `ftr.{variant}.tbl{n}` | `ftr.default.tbl0` |
 
 IDs are positional and stable within a single editing session. They are reassigned if you re-load the document.
 
@@ -520,6 +601,10 @@ const results = doc.applyPatches(
 | `add_table` | `w:ins` element inside every row's `w:trPr` |
 | `add_table_row` | `w:ins` element inside the new row's `w:trPr` |
 | `delete_table_row` | Row is kept; `w:del` element added to `w:trPr` |
+| `add_header` | `w:ins` wrapping each paragraph's runs |
+| `add_footer` | `w:ins` wrapping each paragraph's runs |
+| `remove_header` | Removes header reference, relationship, and content type (no revision markup) |
+| `remove_footer` | Removes footer reference, relationship, and content type (no revision markup) |
 
 ### Revision IDs
 
@@ -564,10 +649,14 @@ Patch types:
 - replace_text: { type: "replace_text", target: "<id>", find: "<text>", replace: "<text>" }
 - insert_text: { type: "insert_text", target: "<id>", position: "before"|"after", anchor: "<text>", text: "<text>" }
 - delete_text: { type: "delete_text", target: "<id>", find: "<text>" }
-- append_text: { type: "append_text", text: "<text>" } (supports markdown tables)
+- append_text: { type: "append_text", text: "<text>" } (supports markdown tables and {{FIELD}} placeholders)
 - add_table: { type: "add_table", headers: ["col1", ...], rows: [["val1", ...], ...], afterId: "<id>" }
 - apply_formatting: { type: "apply_formatting", target: "<id>", find: "<text>", formatting: { bold: true, color: "FF0000" } }
 - apply_style: { type: "apply_style", target: "<id>", style: "Heading1" }
+- add_header: { type: "add_header", variant: "default"|"first"|"even", paragraphs: ["text", ...] }
+- add_footer: { type: "add_footer", variant: "default"|"first"|"even", paragraphs: ["text", ...] }
+- remove_header: { type: "remove_header", variant: "default"|"first"|"even" }
+- remove_footer: { type: "remove_footer", variant: "default"|"first"|"even" }
 
 Document:
 ${projection}`,
@@ -609,7 +698,7 @@ import {
 } from "docxtor";
 
 // Types
-import type { PatchOptions, RevisionMark, NormalizedPageBreak, JsonProjectionPageBreak } from "docxtor";
+import type { PatchOptions, RevisionMark, NormalizedPageBreak, JsonProjectionPageBreak, HeaderFooterVariant, HeaderFooterRef } from "docxtor";
 ```
 
 ## What it handles
@@ -621,7 +710,10 @@ import type { PatchOptions, RevisionMark, NormalizedPageBreak, JsonProjectionPag
 - Paragraphs, runs, and text across split runs
 - Tables (add/delete rows, cell text replacement)
 - Nested tables
-- Headers and footers
+- Headers and footers (including tables within headers/footers)
+- Header/footer creation and removal (`add_header`, `add_footer`, `remove_header`, `remove_footer`)
+- Field code placeholders (`{{PAGE}}`, `{{NUMPAGES}}`, `{{DATE}}`, `{{TIME}}`, `{{FILENAME}}`)
+- Container targeting for `append_text` and `add_table` (add content to headers/footers)
 - Hyperlinks (text inside `w:hyperlink` elements)
 - Run splitting with formatting preservation
 - Inline formatting patches (bold, italic, underline, strikethrough, fontSize, fontFamily, color, highlight)

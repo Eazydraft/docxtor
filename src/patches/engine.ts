@@ -51,6 +51,13 @@ import {
   createElement,
 } from "../xml/helpers.js";
 import { createInsElement, createRevisionRun, createTrPrIns } from "./revision.js";
+import {
+  executeAddHeader,
+  executeAddFooter,
+  executeRemoveHeader,
+  executeRemoveFooter,
+} from "./header-footer-ops.js";
+import { buildFieldRuns, hasFieldPlaceholders } from "./field-codes.js";
 
 /**
  * Apply a list of patches to a NormalizedDocument.
@@ -152,6 +159,22 @@ function applySinglePatch(
       }
       case "add_table": {
         executeAddTablePatch(doc, patch, revCtx);
+        break;
+      }
+      case "add_header": {
+        executeAddHeader(doc, patch, revCtx);
+        break;
+      }
+      case "add_footer": {
+        executeAddFooter(doc, patch, revCtx);
+        break;
+      }
+      case "remove_header": {
+        executeRemoveHeader(doc, patch);
+        break;
+      }
+      case "remove_footer": {
+        executeRemoveFooter(doc, patch);
         break;
       }
     }
@@ -377,10 +400,11 @@ function markTableRowsAsInserted(
 
 /**
  * Execute an append_text patch: creates new w:p and/or w:tbl elements at the
- * end of the document body.
+ * end of the document body (or a header/footer if container is specified).
  *
  * Supports markdown table syntax — pipe-delimited rows with a separator line
  * are automatically converted to OOXML tables.
+ * Supports {{FIELD}} placeholders (e.g., {{PAGE}}, {{NUMPAGES}}).
  *
  * Inserts before w:sectPr if present so section properties stay last.
  * With revision tracking, new paragraph runs are wrapped in w:ins.
@@ -390,6 +414,12 @@ function executeAppendText(
   patch: AppendTextPatch,
   revCtx?: RevisionContext,
 ): void {
+  if (patch.container) {
+    // Target a header/footer container
+    executeAppendTextToContainer(doc, patch, revCtx);
+    return;
+  }
+
   const { bodyChildren } = getBodyNode(doc);
   const segments = parseTextSegments(patch.text);
   const newNodes: FXPNode[] = [];
@@ -397,7 +427,15 @@ function executeAppendText(
   for (const segment of segments) {
     if (segment.kind === "text") {
       for (const line of segment.lines) {
-        if (revCtx) {
+        if (hasFieldPlaceholders(line)) {
+          const runs = buildFieldRuns(line);
+          if (revCtx) {
+            const insElement = createInsElement(revCtx, runs);
+            newNodes.push({ "w:p": [insElement] });
+          } else {
+            newNodes.push({ "w:p": runs });
+          }
+        } else if (revCtx) {
           const run = createRevisionRun(line, undefined);
           const insElement = createInsElement(revCtx, [run]);
           newNodes.push({ "w:p": [insElement] });
@@ -447,6 +485,11 @@ function executeAddTablePatch(
   patch: AddTablePatch,
   revCtx?: RevisionContext,
 ): void {
+  if (patch.container) {
+    executeAddTableToContainer(doc, patch, revCtx);
+    return;
+  }
+
   const { bodyChildren } = getBodyNode(doc);
   const tableNode = buildTableNode(patch.headers, patch.rows);
 
@@ -479,4 +522,128 @@ function executeAddTablePatch(
     }
   }
   doc.body.push(normalized);
+}
+
+// =============================================================================
+// Container helpers (header/footer targeting for append_text and add_table)
+// =============================================================================
+
+/**
+ * Find a header/footer's root FXP node by type and variant.
+ */
+function findContainerRoot(
+  doc: NormalizedDocument,
+  containerType: "header" | "footer",
+  variant: string,
+): { rootNode: FXPNode; hf: import("../types.js").HeaderFooter } | undefined {
+  const map = containerType === "header" ? doc.headers : doc.footers;
+  for (const hf of map.values()) {
+    if (hf.variant === variant) {
+      const rootTag = containerType === "header" ? "w:hdr" : "w:ftr";
+      const rootNode = hf.xmlRef.find((n) => getTagName(n) === rootTag);
+      if (rootNode) return { rootNode, hf };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Append text to a header/footer container.
+ */
+function executeAppendTextToContainer(
+  doc: NormalizedDocument,
+  patch: AppendTextPatch,
+  revCtx?: RevisionContext,
+): void {
+  const container = patch.container!;
+  const result = findContainerRoot(doc, container.type, container.variant);
+  if (!result) {
+    throw new Error(
+      `${container.type} with variant "${container.variant}" not found`,
+    );
+  }
+
+  const { rootNode, hf } = result;
+  const rootChildren = getChildren(rootNode);
+  const prefix = container.type === "header" ? "hdr" : "ftr";
+
+  const segments = parseTextSegments(patch.text);
+  let nextPIdx = hf.paragraphs.length;
+
+  for (const segment of segments) {
+    if (segment.kind === "text") {
+      for (const line of segment.lines) {
+        let pNode: FXPNode;
+        if (hasFieldPlaceholders(line)) {
+          const runs = buildFieldRuns(line);
+          if (revCtx) {
+            const insElement = createInsElement(revCtx, runs);
+            pNode = { "w:p": [insElement] };
+          } else {
+            pNode = { "w:p": runs };
+          }
+        } else if (revCtx) {
+          const run = createRevisionRun(line, undefined);
+          const insElement = createInsElement(revCtx, [run]);
+          pNode = { "w:p": [insElement] };
+        } else {
+          const run = createRun(line);
+          pNode = { "w:p": [run] };
+        }
+        rootChildren.push(pNode);
+        const normalized = normalizeParagraph(
+          pNode,
+          `${prefix}.${container.variant}.p${nextPIdx++}`,
+        );
+        hf.paragraphs.push(normalized);
+      }
+    } else {
+      // Table segment — add to container XML
+      const tblNode = buildTableNode(segment.headers, segment.rows);
+      if (revCtx) {
+        markTableRowsAsInserted(tblNode, revCtx);
+      }
+      rootChildren.push(tblNode);
+
+      // Normalize and track
+      const nextTblIdx = hf.tables.length;
+      const tblId = `${prefix}.${container.variant}.tbl${nextTblIdx}`;
+      const normalizedTbl = normalizeTable(tblNode, tblId);
+      hf.tables.push(normalizedTbl);
+    }
+  }
+}
+
+/**
+ * Execute add_table targeting a header/footer container.
+ */
+function executeAddTableToContainer(
+  doc: NormalizedDocument,
+  patch: AddTablePatch,
+  revCtx?: RevisionContext,
+): void {
+  const container = patch.container!;
+  const result = findContainerRoot(doc, container.type, container.variant);
+  if (!result) {
+    throw new Error(
+      `${container.type} with variant "${container.variant}" not found`,
+    );
+  }
+
+  const { rootNode, hf } = result;
+  const rootChildren = getChildren(rootNode);
+  const tableNode = buildTableNode(patch.headers, patch.rows);
+
+  if (revCtx) {
+    markTableRowsAsInserted(tableNode, revCtx);
+  }
+
+  rootChildren.push(tableNode);
+
+  // Normalize and track
+  const prefix = container.type === "header" ? "hdr" : "ftr";
+  const nextTblIdx = hf.tables.length;
+  const id = `${prefix}.${container.variant}.tbl${nextTblIdx}`;
+  const normalized = normalizeTable(tableNode, id);
+  hf.tables.push(normalized);
 }

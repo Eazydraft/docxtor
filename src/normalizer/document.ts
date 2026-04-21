@@ -101,6 +101,12 @@ export function normalizeDocument(
     document: documentFxp,
     headers: headersFxp,
     footers: footersFxp,
+    documentRels: zipEntries.documentRels
+      ? parseXml(zipEntries.documentRels)
+      : undefined,
+    contentTypes: zipEntries.contentTypes
+      ? parseXml(zipEntries.contentTypes)
+      : undefined,
   };
 
   return { body, headers, footers, xmlParts, styles };
@@ -187,7 +193,7 @@ function parseRelationships(
   return map;
 }
 
-interface HeaderFooterRef {
+export interface HeaderFooterRef {
   type: "header" | "footer";
   variant: string; // "default", "first", "even"
   rId: string;
@@ -196,7 +202,7 @@ interface HeaderFooterRef {
 /**
  * Find header/footer references in w:sectPr elements.
  */
-function findHeaderFooterRefs(documentFxp: FXPNode[]): HeaderFooterRef[] {
+export function findHeaderFooterRefs(documentFxp: FXPNode[]): HeaderFooterRef[] {
   const refs: HeaderFooterRef[] = [];
 
   const docNode = documentFxp.find((n) => getTagName(n) === "w:document");

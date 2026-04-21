@@ -230,11 +230,21 @@ export class Docxtor {
       footers.set(path, serializeXml(fxp));
     }
 
+    // Serialize rels and content types if they were parsed
+    const documentRelsXml = this.doc.xmlParts.documentRels
+      ? serializeXml(this.doc.xmlParts.documentRels)
+      : undefined;
+    const contentTypesXml = this.doc.xmlParts.contentTypes
+      ? serializeXml(this.doc.xmlParts.contentTypes)
+      : undefined;
+
     return writeDocx({
       zip: this.zipEntries.zip,
       documentXml,
       headers: headers.size > 0 ? headers : undefined,
       footers: footers.size > 0 ? footers : undefined,
+      documentRelsXml,
+      contentTypesXml,
     });
   }
 
@@ -348,11 +358,17 @@ export type {
   InsertTextPatch,
   DeleteTextPatch,
   AppendTextPatch,
+  AddTablePatch,
   AddTableRowPatch,
   DeleteTableRowPatch,
   ReplaceCellTextPatch,
   ApplyFormattingPatch,
   ApplyStylePatch,
+  AddHeaderPatch,
+  AddFooterPatch,
+  RemoveHeaderPatch,
+  RemoveFooterPatch,
+  HeaderFooterVariant,
   FormattingUpdate,
   StyleInfo,
   PatchResult,
@@ -370,6 +386,7 @@ export { writeDocx } from "./zip/writer.js";
 export { parseXml } from "./xml/parser.js";
 export { serializeXml } from "./xml/serializer.js";
 export { normalizeDocument } from "./normalizer/document.js";
+export type { HeaderFooterRef } from "./normalizer/document.js";
 export { applyPatches } from "./patches/engine.js";
 export { project, projectToJson, projectToMarkdown } from "./projection/llm.js";
 export type { JsonProjection, JsonProjectionPageBreak } from "./projection/llm.js";
