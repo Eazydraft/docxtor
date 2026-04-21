@@ -438,6 +438,8 @@ To add a table inside a header or footer, use `container`:
 }
 ```
 
+> **Note:** `afterId` is not supported when `container` is set. Container-targeted tables are always appended to the end of the header/footer. The validator will reject patches that specify both.
+
 Headers are optional. If provided, they become the first row of the table. All rows (and headers, if present) must have the same number of cells.
 
 ```ts
@@ -516,6 +518,13 @@ Add a header to the document's last section. Creates the header XML part, relati
 
 Paragraph text supports `{{FIELD}}` placeholders: `{{PAGE}}`, `{{NUMPAGES}}`, `{{DATE}}`, `{{TIME}}`, `{{FILENAME}}`.
 
+**Variant behavior:**
+- `"default"` — applies to all pages (or odd pages when even/odd mode is active).
+- `"first"` — applies to the first page only. Automatically adds `w:titlePg` to the section properties.
+- `"even"` — applies to even pages. Automatically adds `<w:evenAndOddHeaders/>` to `word/settings.xml` so Word honours the even-page reference.
+
+Headers and footers can be added to documents created via `Docxtor.create()` — the required `document.xml.rels` is initialized on-demand.
+
 ### `add_footer`
 
 Add a footer to the document's last section. Same options as `add_header`.
@@ -530,7 +539,7 @@ Add a footer to the document's last section. Same options as `add_header`.
 
 ### `remove_header`
 
-Remove a header from the document's last section. Cleans up the relationship and content type entry.
+Remove a header from the document's last section. Cleans up the relationship, content type entry, and the XML part from the archive.
 
 ```ts
 {
@@ -541,7 +550,7 @@ Remove a header from the document's last section. Cleans up the relationship and
 
 ### `remove_footer`
 
-Remove a footer from the document's last section.
+Remove a footer from the document's last section. Cleans up the relationship, content type entry, and the XML part from the archive.
 
 ```ts
 {
@@ -746,7 +755,7 @@ pnpm build         # build ESM + CJS + DTS (tsup)
 pnpm lint          # type-check
 ```
 
-334 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style, append, add_table), document creation, revision tracking (tracked changes), page breaks (explicit, lastRenderedPageBreak, pageBreakBefore, positional offset, revision interaction), integration flows, hyperlinks, entity escaping, newlines, nested tables, markdown table conversion, projection, and API surface.
+364 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style, append, add_table), document creation, header/footer lifecycle (add/remove with round-trip, field placeholders, container targeting, stale zip entry cleanup, even/odd settings), revision tracking (tracked changes), page breaks (explicit, lastRenderedPageBreak, pageBreakBefore, positional offset, revision interaction), integration flows, hyperlinks, entity escaping, newlines, nested tables, markdown table conversion, projection, and API surface.
 
 ## License
 

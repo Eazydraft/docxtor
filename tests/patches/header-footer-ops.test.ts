@@ -472,6 +472,24 @@ describe("container targeting", () => {
     const defaultHdr = headers.find((h) => h.variant === "default");
     expect(defaultHdr!.paragraphs.some((p) => p.text === "Persisted text")).toBe(true);
   });
+
+  it("should validate append_text with invalid container type", async () => {
+    const doc = await Docxtor.create();
+    const results = doc.validatePatches([
+      { type: "append_text", text: "hi", container: { type: "bogus" as any, variant: "default" } },
+    ]);
+    expect(results[0]!.valid).toBe(false);
+    expect(results[0]!.error).toContain("container type");
+  });
+
+  it("should validate append_text with invalid container variant", async () => {
+    const doc = await Docxtor.create();
+    const results = doc.validatePatches([
+      { type: "append_text", text: "hi", container: { type: "header", variant: "bogus" as any } },
+    ]);
+    expect(results[0]!.valid).toBe(false);
+    expect(results[0]!.error).toContain("container variant");
+  });
 });
 
 // =============================================================================

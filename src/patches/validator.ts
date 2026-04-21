@@ -173,6 +173,14 @@ export function validatePatch(
       if (!patch.text || patch.text.length === 0) {
         return { valid: false, error: "Empty append text" };
       }
+      if (patch.container) {
+        if (!["header", "footer"].includes(patch.container.type)) {
+          return { valid: false, error: `Invalid container type: ${patch.container.type}` };
+        }
+        if (!["default", "first", "even"].includes(patch.container.variant)) {
+          return { valid: false, error: `Invalid container variant: ${patch.container.variant}` };
+        }
+      }
       return { valid: true };
     }
     case "add_table": {
