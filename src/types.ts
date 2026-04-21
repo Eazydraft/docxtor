@@ -59,6 +59,8 @@ export interface DocxXmlParts {
   documentRels?: FXPNode[];
   /** Parsed [Content_Types].xml for mutation by header/footer ops. */
   contentTypes?: FXPNode[];
+  /** Parsed word/settings.xml for mutation (e.g., w:evenAndOddHeaders). */
+  settings?: FXPNode[];
   /** All other XML files in the zip (styles, numbering, etc.) — preserved as-is. */
   [key: string]: FXPNode[] | Map<string, FXPNode[]> | undefined;
 }

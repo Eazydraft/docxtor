@@ -107,6 +107,9 @@ export function normalizeDocument(
     contentTypes: zipEntries.contentTypes
       ? parseXml(zipEntries.contentTypes)
       : undefined,
+    settings: zipEntries.settingsXml
+      ? parseXml(zipEntries.settingsXml)
+      : undefined,
   };
 
   return { body, headers, footers, xmlParts, styles };

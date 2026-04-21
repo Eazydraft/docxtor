@@ -230,12 +230,30 @@ export class Docxtor {
       footers.set(path, serializeXml(fxp));
     }
 
+    // Determine which header/footer zip entries were removed since loading.
+    // Original entries still in the zip but no longer in xmlParts must be
+    // explicitly deleted so stale files don't persist in the output DOCX.
+    const removedParts: string[] = [];
+    for (const origPath of this.zipEntries.headers.keys()) {
+      if (!this.doc.xmlParts.headers.has(origPath)) {
+        removedParts.push(origPath);
+      }
+    }
+    for (const origPath of this.zipEntries.footers.keys()) {
+      if (!this.doc.xmlParts.footers.has(origPath)) {
+        removedParts.push(origPath);
+      }
+    }
+
     // Serialize rels and content types if they were parsed
     const documentRelsXml = this.doc.xmlParts.documentRels
       ? serializeXml(this.doc.xmlParts.documentRels)
       : undefined;
     const contentTypesXml = this.doc.xmlParts.contentTypes
       ? serializeXml(this.doc.xmlParts.contentTypes)
+      : undefined;
+    const settingsXml = this.doc.xmlParts.settings
+      ? serializeXml(this.doc.xmlParts.settings)
       : undefined;
 
     return writeDocx({
@@ -245,6 +263,8 @@ export class Docxtor {
       footers: footers.size > 0 ? footers : undefined,
       documentRelsXml,
       contentTypesXml,
+      settingsXml,
+      removedParts: removedParts.length > 0 ? removedParts : undefined,
     });
   }
 

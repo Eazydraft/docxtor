@@ -21,6 +21,8 @@ export interface DocxZipEntries {
   contentTypes?: string;
   /** The styles.xml file (may not be present). */
   stylesXml?: string;
+  /** The settings.xml file (may not be present). */
+  settingsXml?: string;
   /** The JSZip instance (kept for writing back). */
   zip: JSZip;
 }
@@ -48,6 +50,7 @@ export async function readDocx(
   );
   const contentTypes = await readEntry(zip, "[Content_Types].xml");
   const stylesXml = await readEntry(zip, "word/styles.xml");
+  const settingsXml = await readEntry(zip, "word/settings.xml");
 
   // Extract header and footer files
   const headers = new Map<string, string>();
@@ -75,6 +78,7 @@ export async function readDocx(
     documentRels,
     contentTypes,
     stylesXml,
+    settingsXml,
     zip,
   };
 }

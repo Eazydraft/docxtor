@@ -295,7 +295,14 @@ function addRelationship(
   type: "header" | "footer",
 ): void {
   if (!doc.xmlParts.documentRels) {
-    throw new Error("document.xml.rels not loaded — cannot add relationship");
+    // Initialize a minimal Relationships root on-demand so that
+    // add_header / add_footer works on documents created via Docxtor.create()
+    // (which doesn't include word/_rels/document.xml.rels).
+    doc.xmlParts.documentRels = [
+      createElement("Relationships", [], {
+        "xmlns": "http://schemas.openxmlformats.org/package/2006/relationships",
+      }),
+    ];
   }
 
   const relType = type === "header"
@@ -479,5 +486,49 @@ function addSectPrReference(
     if (!hasTitlePg) {
       sectPrChildren.push(createElement("w:titlePg", []));
     }
+  }
+
+  // If variant is "even", ensure w:evenAndOddHeaders is present in
+  // word/settings.xml so Word honours the even-page header/footer reference.
+  if (variant === "even") {
+    ensureEvenAndOddHeaders(doc);
+  }
+}
+
+// =============================================================================
+// Helpers: settings.xml management
+// =============================================================================
+
+/**
+ * Ensure `<w:evenAndOddHeaders/>` is present in word/settings.xml.
+ *
+ * Without this element, Word ignores even-page header/footer references.
+ * If settings.xml was not loaded (e.g., created via Docxtor.create()),
+ * a minimal settings part is initialized on-demand.
+ */
+function ensureEvenAndOddHeaders(doc: NormalizedDocument): void {
+  if (!doc.xmlParts.settings) {
+    // Create a minimal settings.xml FXP structure
+    doc.xmlParts.settings = [
+      createElement("w:settings", [
+        createElement("w:evenAndOddHeaders", []),
+      ], {
+        "xmlns:w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+      }),
+    ];
+    return;
+  }
+
+  const settingsNode = doc.xmlParts.settings.find(
+    (n) => getTagName(n) === "w:settings",
+  );
+  if (!settingsNode) return;
+
+  const children = getChildren(settingsNode);
+  const hasFlag = children.some(
+    (c) => getTagName(c) === "w:evenAndOddHeaders",
+  );
+  if (!hasFlag) {
+    children.push(createElement("w:evenAndOddHeaders", []));
   }
 }

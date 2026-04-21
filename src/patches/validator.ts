@@ -204,6 +204,12 @@ export function validatePatch(
       }
       // Validate afterId target exists if provided
       if (patch.afterId) {
+        if (patch.container) {
+          return {
+            valid: false,
+            error: `"afterId" is not supported when "container" is set — container-targeted tables are appended to the end of the header/footer`,
+          };
+        }
         const found = findElementById(patch.afterId, doc);
         if (!found) {
           return {

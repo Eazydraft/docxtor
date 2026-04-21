@@ -486,6 +486,11 @@ function executeAddTablePatch(
   revCtx?: RevisionContext,
 ): void {
   if (patch.container) {
+    if (patch.afterId) {
+      throw new Error(
+        `"afterId" is not supported when "container" is set`,
+      );
+    }
     executeAddTableToContainer(doc, patch, revCtx);
     return;
   }

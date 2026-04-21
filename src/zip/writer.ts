@@ -21,6 +21,10 @@ export interface WriteDocxOptions {
   documentRelsXml?: string;
   /** Modified [Content_Types].xml content. */
   contentTypesXml?: string;
+  /** Modified word/settings.xml content. */
+  settingsXml?: string;
+  /** Zip paths to remove from the archive (e.g., deleted header/footer parts). */
+  removedParts?: string[];
 }
 
 /**
@@ -33,7 +37,14 @@ export interface WriteDocxOptions {
 export async function writeDocx(
   options: WriteDocxOptions,
 ): Promise<Buffer> {
-  const { zip, documentXml, headers, footers, documentRelsXml, contentTypesXml } = options;
+  const { zip, documentXml, headers, footers, documentRelsXml, contentTypesXml, settingsXml, removedParts } = options;
+
+  // Remove deleted parts (e.g., header/footer XML files after remove_header/remove_footer)
+  if (removedParts) {
+    for (const path of removedParts) {
+      zip.remove(path);
+    }
+  }
 
   // Replace document.xml
   zip.file("word/document.xml", documentXml);
@@ -60,6 +71,11 @@ export async function writeDocx(
   // Replace [Content_Types].xml if modified
   if (contentTypesXml) {
     zip.file("[Content_Types].xml", contentTypesXml);
+  }
+
+  // Replace word/settings.xml if modified
+  if (settingsXml) {
+    zip.file("word/settings.xml", settingsXml);
   }
 
   // Generate the output buffer
