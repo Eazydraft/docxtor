@@ -10,6 +10,7 @@ import type {
   NormalizedTable,
   RevisionMark,
   RunFormatting,
+  RunMapping,
   StyleInfo,
   ProjectionOptions,
 } from "../types.js";
@@ -18,12 +19,21 @@ import type {
 // JSON Projection
 // =============================================================================
 
+export interface JsonProjectionRunFormatting extends RunFormatting {
+  /** The run's text content. */
+  text: string;
+  /** Start character offset in paragraph text (inclusive). */
+  startOffset: number;
+  /** End character offset in paragraph text (exclusive). */
+  endOffset: number;
+}
+
 interface JsonProjectionParagraph {
   id: string;
   text: string;
   style?: string;
   listLevel?: number;
-  formatting?: RunFormatting[];
+  formatting?: JsonProjectionRunFormatting[];
   revisions?: RevisionMark[];
   hasPageBreak?: boolean;
   pageBreakOffset?: number;
@@ -155,8 +165,25 @@ function projectParagraphToJson(
   }
 
   if (includeFormatting && para.runs.length > 0) {
-    result.formatting = para.runs.map((r) => {
-      const fmt: RunFormatting = {};
+    const fmtRuns: JsonProjectionRunFormatting[] = [];
+    for (const r of para.runs) {
+      // Only include runs that have at least one formatting property set
+      const hasAny =
+        r.formatting.bold ||
+        r.formatting.italic ||
+        r.formatting.underline ||
+        r.formatting.strikethrough ||
+        r.formatting.fontSize ||
+        r.formatting.fontFamily ||
+        r.formatting.color ||
+        r.formatting.highlight;
+      if (!hasAny) continue;
+
+      const fmt: JsonProjectionRunFormatting = {
+        text: r.text,
+        startOffset: r.startOffset,
+        endOffset: r.endOffset,
+      };
       if (r.formatting.bold) fmt.bold = true;
       if (r.formatting.italic) fmt.italic = true;
       if (r.formatting.underline) fmt.underline = r.formatting.underline;
@@ -165,8 +192,11 @@ function projectParagraphToJson(
       if (r.formatting.fontFamily) fmt.fontFamily = r.formatting.fontFamily;
       if (r.formatting.color) fmt.color = r.formatting.color;
       if (r.formatting.highlight) fmt.highlight = r.formatting.highlight;
-      return fmt;
-    });
+      fmtRuns.push(fmt);
+    }
+    if (fmtRuns.length > 0) {
+      result.formatting = fmtRuns;
+    }
   }
 
   if (includeRevisions && para.revisions && para.revisions.length > 0) {
@@ -255,14 +285,15 @@ export function projectToMarkdown(
   const includeTables = options.includeTables ?? true;
   const includeRevisions = options.includeRevisions ?? false;
   const includePageBreaks = options.includePageBreaks ?? false;
+  const includeFormatting = options.includeFormatting ?? false;
   const lines: string[] = [];
 
   for (const element of doc.body) {
     if (element.kind === "paragraph") {
-      lines.push(formatParagraphMarkdown(element, includeRevisions, includePageBreaks));
+      lines.push(formatParagraphMarkdown(element, includeRevisions, includePageBreaks, includeFormatting));
     } else if (element.kind === "table" && includeTables) {
       lines.push(""); // blank line before table
-      lines.push(...formatTableMarkdown(element, includeRevisions));
+      lines.push(...formatTableMarkdown(element, includeRevisions, includeFormatting));
       lines.push(""); // blank line after table
     } else if (element.kind === "page_break" && includePageBreaks) {
       lines.push("");
@@ -276,7 +307,7 @@ export function projectToMarkdown(
       lines.push("");
       lines.push(`--- Header (${header.variant}) ---`);
       for (const para of header.paragraphs) {
-        lines.push(formatParagraphMarkdown(para, includeRevisions));
+        lines.push(formatParagraphMarkdown(para, includeRevisions, false, includeFormatting));
       }
       if (includeTables) {
         for (const table of header.tables) {
@@ -290,7 +321,7 @@ export function projectToMarkdown(
       lines.push("");
       lines.push(`--- Footer (${footer.variant}) ---`);
       for (const para of footer.paragraphs) {
-        lines.push(formatParagraphMarkdown(para, includeRevisions));
+        lines.push(formatParagraphMarkdown(para, includeRevisions, false, includeFormatting));
       }
       if (includeTables) {
         for (const table of footer.tables) {
@@ -317,26 +348,50 @@ function formatParagraphMarkdown(
   para: NormalizedParagraph,
   includeRevisions: boolean = false,
   includePageBreaks: boolean = false,
+  includeFormatting: boolean = false,
 ): string {
   const styleHint = para.style ? ` (${para.style})` : "";
   const listHint = para.listInfo ? ` [list L${para.listInfo.level}]` : "";
 
-  let text = para.text;
+  let text = includeFormatting
+    ? annotateTextWithFormatting(para.text, para.runs)
+    : para.text;
   const hasRevisions = includeRevisions && para.revisions && para.revisions.length > 0;
 
   if (hasRevisions) {
-    text = annotateTextWithRevisions(para.text, para.revisions!);
+    if (includeFormatting) {
+      // Map revision offsets through formatting annotation shift
+      const mappedRevisions = para.revisions!.map((rev) => ({
+        ...rev,
+        startOffset: mapOffsetToFormattedText(rev.startOffset, para.runs),
+        endOffset: mapOffsetToFormattedText(rev.endOffset, para.runs),
+      }));
+      text = annotateTextWithRevisions(text, mappedRevisions);
+    } else {
+      text = annotateTextWithRevisions(para.text, para.revisions!);
+    }
   }
 
   // Insert [PAGE BREAK] marker at the correct position in the text.
-  // When revisions are also active, pageBreakOffset is relative to
-  // para.text (the original string). We must map it into the annotated
-  // string whose length has changed due to {+...+} / {-...-} markers.
   if (includePageBreaks && para.hasPageBreak) {
     let offset = para.pageBreakOffset ?? 0;
 
+    if (includeFormatting) {
+      offset = mapOffsetToFormattedText(offset, para.runs);
+    }
+
     if (hasRevisions) {
-      offset = mapOffsetToAnnotatedText(offset, para.revisions!);
+      if (includeFormatting) {
+        // Revisions have already been mapped through formatting, so use mapped revisions
+        const mappedRevisions = para.revisions!.map((rev) => ({
+          ...rev,
+          startOffset: mapOffsetToFormattedText(rev.startOffset, para.runs),
+          endOffset: mapOffsetToFormattedText(rev.endOffset, para.runs),
+        }));
+        offset = mapOffsetToAnnotatedText(offset, mappedRevisions);
+      } else {
+        offset = mapOffsetToAnnotatedText(offset, para.revisions!);
+      }
     }
 
     const before = text.slice(0, offset);
@@ -351,6 +406,95 @@ function formatParagraphMarkdown(
   }
 
   return `[${para.id}]${styleHint}${listHint} ${text}`;
+}
+
+/**
+ * Annotate paragraph text with GFM inline formatting markers.
+ *
+ * Walks the runs and wraps text spans with:
+ * - **bold**
+ * - _italic_
+ * - ~~strikethrough~~
+ * - Combined: **_bold+italic_**
+ *
+ * Runs with identical formatting are merged. Runs with no GFM-representable
+ * formatting are emitted as plain text.
+ */
+function annotateTextWithFormatting(
+  text: string,
+  runs: RunMapping[],
+): string {
+  if (runs.length === 0) return text;
+
+  const parts: string[] = [];
+  let lastEnd = 0;
+
+  for (const run of runs) {
+    // Fill any gap between runs with plain text
+    if (run.startOffset > lastEnd) {
+      parts.push(text.slice(lastEnd, run.startOffset));
+    }
+
+    const runText = text.slice(run.startOffset, run.endOffset);
+    const { bold, italic, strikethrough, underline } = run.formatting;
+
+    if (!bold && !italic && !strikethrough && !underline) {
+      parts.push(runText);
+    } else {
+      let wrapped = runText;
+      // Inner wrapping first, then outer
+      if (underline) wrapped = `<u>${wrapped}</u>`;
+      if (italic) wrapped = `_${wrapped}_`;
+      if (bold) wrapped = `**${wrapped}**`;
+      if (strikethrough) wrapped = `~~${wrapped}~~`;
+      parts.push(wrapped);
+    }
+
+    lastEnd = run.endOffset;
+  }
+
+  // Trailing text after last run
+  if (lastEnd < text.length) {
+    parts.push(text.slice(lastEnd));
+  }
+
+  return parts.join("");
+}
+
+/**
+ * Map an offset in the original paragraph text to the corresponding
+ * position in the formatting-annotated string.
+ *
+ * Formatting markers (**, _, ~~) add characters that shift positions.
+ * This walks runs in document order and accumulates the shift.
+ */
+function mapOffsetToFormattedText(
+  originalOffset: number,
+  runs: RunMapping[],
+): number {
+  let shift = 0;
+
+  for (const run of runs) {
+    const { bold, italic, strikethrough, underline } = run.formatting;
+    if (!bold && !italic && !strikethrough && !underline) continue;
+
+    // Calculate marker lengths for this run
+    let prefixLen = 0;
+    let suffixLen = 0;
+    if (strikethrough) { prefixLen += 2; suffixLen += 2; }
+    if (bold) { prefixLen += 2; suffixLen += 2; }
+    if (italic) { prefixLen += 1; suffixLen += 1; }
+    if (underline) { prefixLen += 3; suffixLen += 4; } // <u> and </u>
+
+    if (originalOffset >= run.startOffset) {
+      shift += prefixLen;
+    }
+    if (originalOffset >= run.endOffset) {
+      shift += suffixLen;
+    }
+  }
+
+  return originalOffset + shift;
 }
 
 /**
@@ -428,14 +572,29 @@ function annotateTextWithRevisions(
 function formatTableMarkdown(
   table: NormalizedTable,
   includeRevisions: boolean = false,
+  includeFormatting: boolean = false,
 ): string[] {
   const lines: string[] = [];
 
   for (const row of table.rows) {
     const cells = row.cells.map((cell) => {
-      let text = cell.paragraphs.map((p) => p.text).join(" ");
-      if (includeRevisions) {
-        // Annotate each paragraph's revisions in the concatenated text
+      let text: string;
+      if (includeFormatting) {
+        text = cell.paragraphs
+          .map((p) => {
+            let t = annotateTextWithFormatting(p.text, p.runs);
+            if (includeRevisions && p.revisions && p.revisions.length > 0) {
+              const mappedRevisions = p.revisions.map((rev) => ({
+                ...rev,
+                startOffset: mapOffsetToFormattedText(rev.startOffset, p.runs),
+                endOffset: mapOffsetToFormattedText(rev.endOffset, p.runs),
+              }));
+              t = annotateTextWithRevisions(t, mappedRevisions);
+            }
+            return t;
+          })
+          .join(" ");
+      } else if (includeRevisions) {
         const annotated = cell.paragraphs.map((p) => {
           if (p.revisions && p.revisions.length > 0) {
             return annotateTextWithRevisions(p.text, p.revisions);
@@ -443,6 +602,8 @@ function formatTableMarkdown(
           return p.text;
         });
         text = annotated.join(" ");
+      } else {
+        text = cell.paragraphs.map((p) => p.text).join(" ");
       }
       const id = cell.paragraphs[0]?.id ?? `${table.id}.r${row.index}.c${cell.colIndex}.p0`;
       return `[${id}] ${text}`;

@@ -432,9 +432,10 @@ describe("Richer projection", () => {
     const proj = projectToJson(doc, { includeFormatting: true });
     const para = proj.body[0] as { formatting?: Record<string, unknown>[] };
     expect(para.formatting).toBeDefined();
-    // Second run (hyperlink) should have underline and color
-    expect(para.formatting![1]!.underline).toBe("single");
-    expect(para.formatting![1]!.color).toBe("0000FF");
+    // Only formatted runs are included (plain runs are filtered out)
+    // The hyperlink run has underline and color
+    expect(para.formatting![0]!.underline).toBe("single");
+    expect(para.formatting![0]!.color).toBe("0000FF");
   });
 
   it("includes nested tables in JSON projection", async () => {

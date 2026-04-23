@@ -13,11 +13,9 @@
  */
 
 import type { FXPNode } from "../types.js";
-import {
-  createElement,
-  createRun,
-  setAttr,
-} from "../xml/helpers.js";
+import { createElement, createRun, setAttr } from "../xml/helpers.js";
+import { parseFormattedText } from "./markdown-parser.js";
+import { createFormattedRuns } from "./text-ops.js";
 
 /** Supported OOXML field codes. */
 const SUPPORTED_FIELDS = new Set([
@@ -91,30 +89,37 @@ export function hasFieldPlaceholders(text: string): boolean {
 }
 
 /**
- * Build FXP run nodes for a text string that may contain field placeholders.
+ * Build FXP run nodes for a text string that may contain field placeholders
+ * and/or inline markdown formatting.
  *
- * Plain text segments produce normal w:r runs.
+ * Plain text segments are parsed for GFM formatting (bold, italic, etc.)
+ * and produce appropriately formatted w:r runs.
  * Field segments produce the standard OOXML field code pattern:
  *   <w:r><w:fldChar w:fldCharType="begin"/></w:r>
  *   <w:r><w:instrText> FIELDCODE </w:instrText></w:r>
  *   <w:r><w:fldChar w:fldCharType="separate"/></w:r>
  *   <w:r><w:fldChar w:fldCharType="end"/></w:r>
  *
- * @param text - Text possibly containing {{FIELD}} placeholders
+ * @param text - Text possibly containing {{FIELD}} placeholders and/or formatting markers
  * @param rPrNode - Optional run properties to clone onto each run
  * @returns Array of w:r FXP nodes
  */
-export function buildFieldRuns(
-  text: string,
-  rPrNode?: FXPNode,
-): FXPNode[] {
+export function buildFieldRuns(text: string, rPrNode?: FXPNode): FXPNode[] {
   const segments = parseFieldPlaceholders(text);
   const runs: FXPNode[] = [];
 
   for (const segment of segments) {
     if (segment.kind === "text") {
       if (segment.text.length > 0) {
-        runs.push(createRun(segment.text, rPrNode));
+        const formatted = parseFormattedText(segment.text);
+        const hasFormatting = formatted.some(
+          (s) => s.bold || s.italic || s.strikethrough || s.underline,
+        );
+        if (hasFormatting) {
+          runs.push(...createFormattedRuns(formatted, rPrNode));
+        } else {
+          runs.push(createRun(segment.text, rPrNode));
+        }
       }
     } else {
       // Field code: emit begin/instrText/separate/end pattern
@@ -128,10 +133,7 @@ export function buildFieldRuns(
 /**
  * Build the w:fldChar / w:instrText run sequence for a field code.
  */
-function buildFieldCodeRuns(
-  fieldCode: string,
-  rPrNode?: FXPNode,
-): FXPNode[] {
+function buildFieldCodeRuns(fieldCode: string, rPrNode?: FXPNode): FXPNode[] {
   const cloneRPr = (): FXPNode[] => {
     if (!rPrNode) return [];
     return [JSON.parse(JSON.stringify(rPrNode)) as FXPNode];
@@ -148,17 +150,12 @@ function buildFieldCodeRuns(
   // Instruction run
   const instrText = ` ${fieldCode} `;
   const instrTextNode: FXPNode = {
-    "w:instrText": [
-      { "#text": instrText } as unknown as FXPNode,
-    ],
+    "w:instrText": [{ "#text": instrText } as unknown as FXPNode],
   };
   setAttr(instrTextNode, "xml:space", "preserve");
 
   const instrRun: FXPNode = {
-    "w:r": [
-      ...cloneRPr(),
-      instrTextNode,
-    ],
+    "w:r": [...cloneRPr(), instrTextNode],
   };
 
   // Separate run

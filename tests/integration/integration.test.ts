@@ -177,7 +177,7 @@ describe("Docxtor.project — JSON", () => {
 
     const heading = projection.body[0] as any;
     expect(heading.formatting).toBeDefined();
-    expect(heading.formatting[0]).toEqual({ bold: true });
+    expect(heading.formatting[0]).toEqual({ bold: true, text: "Document Title", startOffset: 0, endOffset: 14 });
   });
 
   it("should exclude headers/footers when requested", async () => {

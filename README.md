@@ -138,6 +138,28 @@ const md = doc.project("markdown");
 
 Every element has a stable ID (`p0`, `tbl0.r1.c0.p0`, `hdr.default.p0`, etc.) that patches use as targets.
 
+**Inline formatting markers:** When `includeFormatting: true` is set, the markdown projection annotates text with inline markers showing existing formatting:
+
+```ts
+const md = doc.project("markdown", { includeFormatting: true });
+```
+
+```
+[p0] This has **bold text** and _italic text_ and ~~struck text~~ and <u>underlined text</u>.
+[p1] Combined: **_bold italic_** and ~~**bold strikethrough**~~
+```
+
+These markers are annotations — they are not part of the actual document text. The supported markers are:
+
+| Marker | Formatting |
+|---|---|
+| `**text**` | Bold |
+| `_text_` | Italic |
+| `~~text~~` | Strikethrough |
+| `<u>text</u>` | Underline |
+
+Markers can be nested for combined formatting (e.g., `**_bold italic_**`).
+
 **JSON format** (structured data):
 
 ```ts
@@ -263,6 +285,19 @@ Replace a substring in a paragraph. Formatting of the original text is preserved
 }
 ```
 
+**Inline formatting markers in `find` and `replace`:** You can include GFM/HTML markers (`**bold**`, `_italic_`, `~~strikethrough~~`, `<u>underline</u>`) in these fields. Markers in `find` are stripped before matching against the plain paragraph text. Markers in `replace` are parsed and create properly formatted OOXML runs:
+
+```ts
+{
+  type: "replace_text",
+  target: "p1",
+  find: "old text",                        // matches plain text "old text"
+  replace: "**bold** and _italic_ text",   // creates bold and italic runs
+}
+```
+
+This also works for `insert_text` (`anchor` and `text` fields) and `append_text` (`text` field).
+
 ### `insert_text`
 
 Insert text before or after an anchor string.
@@ -312,12 +347,12 @@ To append to a header or footer instead of the body, use `container`:
 }
 ```
 
-**Field placeholders:** Text supports `{{FIELD}}` placeholders that are converted to proper OOXML field codes. Supported fields: `{{PAGE}}` (current page number), `{{NUMPAGES}}` (total page count), `{{DATE}}`, `{{TIME}}`, `{{FILENAME}}`.
+**Field placeholders:** Text supports `{{FIELD}}` placeholders that are converted to proper OOXML field codes. Supported fields: `{{PAGE}}` (current page number), `{{NUMPAGES}}` (total page count), `{{DATE}}`, `{{TIME}}`, `{{FILENAME}}`. Field placeholders and inline formatting can be combined in the same text:
 
 ```ts
 {
   type: "append_text",
-  text: "Page {{PAGE}} of {{NUMPAGES}}",
+  text: "**Page** {{PAGE}} of {{NUMPAGES}}",
 }
 ```
 
@@ -645,7 +680,7 @@ docxtor is LLM-agnostic. The typical integration:
 import { Docxtor } from "docxtor";
 
 const doc = await Docxtor.load("contract.docx");
-const projection = doc.project("markdown");
+const projection = doc.project("markdown", { includeFormatting: true });
 
 // Send projection to your LLM with instructions to produce patches
 const response = await llm.chat([
@@ -658,7 +693,7 @@ Patch types:
 - replace_text: { type: "replace_text", target: "<id>", find: "<text>", replace: "<text>" }
 - insert_text: { type: "insert_text", target: "<id>", position: "before"|"after", anchor: "<text>", text: "<text>" }
 - delete_text: { type: "delete_text", target: "<id>", find: "<text>" }
-- append_text: { type: "append_text", text: "<text>" } (supports markdown tables and {{FIELD}} placeholders)
+- append_text: { type: "append_text", text: "<text>" } (supports markdown tables, {{FIELD}} placeholders, and inline formatting)
 - add_table: { type: "add_table", headers: ["col1", ...], rows: [["val1", ...], ...], afterId: "<id>" }
 - apply_formatting: { type: "apply_formatting", target: "<id>", find: "<text>", formatting: { bold: true, color: "FF0000" } }
 - apply_style: { type: "apply_style", target: "<id>", style: "Heading1" }
@@ -707,7 +742,7 @@ import {
 } from "docxtor";
 
 // Types
-import type { PatchOptions, RevisionMark, NormalizedPageBreak, JsonProjectionPageBreak, HeaderFooterVariant, HeaderFooterRef } from "docxtor";
+import type { PatchOptions, RevisionMark, NormalizedPageBreak, JsonProjectionPageBreak, JsonProjectionRunFormatting, HeaderFooterVariant, HeaderFooterRef } from "docxtor";
 ```
 
 ## What it handles
@@ -721,11 +756,12 @@ import type { PatchOptions, RevisionMark, NormalizedPageBreak, JsonProjectionPag
 - Nested tables
 - Headers and footers (including tables within headers/footers)
 - Header/footer creation and removal (`add_header`, `add_footer`, `remove_header`, `remove_footer`)
-- Field code placeholders (`{{PAGE}}`, `{{NUMPAGES}}`, `{{DATE}}`, `{{TIME}}`, `{{FILENAME}}`)
+- Field code placeholders (`{{PAGE}}`, `{{NUMPAGES}}`, `{{DATE}}`, `{{TIME}}`, `{{FILENAME}}`) — combinable with inline formatting
 - Container targeting for `append_text` and `add_table` (add content to headers/footers)
 - Hyperlinks (text inside `w:hyperlink` elements)
 - Run splitting with formatting preservation
 - Inline formatting patches (bold, italic, underline, strikethrough, fontSize, fontFamily, color, highlight)
+- Inline formatting markers in projections and text ops (`**bold**`, `_italic_`, `~~strikethrough~~`, `<u>underline</u>`)
 - Style application (paragraph styles like Heading1, character styles like Strong)
 - Style validation against the document's `styles.xml`
 - Tracked changes / revision tracking (`w:ins`, `w:del`, `w:rPrChange`, `w:pPrChange`)
@@ -755,7 +791,7 @@ pnpm build         # build ESM + CJS + DTS (tsup)
 pnpm lint          # type-check
 ```
 
-364 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style, append, add_table), document creation, header/footer lifecycle (add/remove with round-trip, field placeholders, container targeting, stale zip entry cleanup, even/odd settings), revision tracking (tracked changes), page breaks (explicit, lastRenderedPageBreak, pageBreakBefore, positional offset, revision interaction), integration flows, hyperlinks, entity escaping, newlines, nested tables, markdown table conversion, projection, and API surface.
+398 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style, append, add_table), document creation, header/footer lifecycle (add/remove with round-trip, field placeholders, container targeting, stale zip entry cleanup, even/odd settings), revision tracking (tracked changes), page breaks (explicit, lastRenderedPageBreak, pageBreakBefore, positional offset, revision interaction), integration flows, hyperlinks, entity escaping, newlines, nested tables, markdown table conversion, projection, and API surface.
 
 ## License
 
