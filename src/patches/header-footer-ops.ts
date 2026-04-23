@@ -516,7 +516,6 @@ function ensureEvenAndOddHeaders(doc: NormalizedDocument): void {
         "xmlns:w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
       }),
     ];
-    return;
   }
 
   const settingsNode = doc.xmlParts.settings.find(
@@ -525,10 +524,71 @@ function ensureEvenAndOddHeaders(doc: NormalizedDocument): void {
   if (!settingsNode) return;
 
   const children = getChildren(settingsNode);
-  const hasFlag = children.some(
-    (c) => getTagName(c) === "w:evenAndOddHeaders",
-  );
+  const hasFlag = children.some((c) => getTagName(c) === "w:evenAndOddHeaders");
   if (!hasFlag) {
     children.push(createElement("w:evenAndOddHeaders", []));
   }
+
+  ensureSettingsRelationship(doc);
+  ensureSettingsContentTypeOverride(doc);
+}
+
+function ensureSettingsRelationship(doc: NormalizedDocument): void {
+  if (!doc.xmlParts.documentRels) {
+    doc.xmlParts.documentRels = [
+      createElement("Relationships", [], {
+        "xmlns": "http://schemas.openxmlformats.org/package/2006/relationships",
+      }),
+    ];
+  }
+
+  const relsNode = doc.xmlParts.documentRels.find(
+    (n) => getTagName(n) === "Relationships",
+  );
+  if (!relsNode) return;
+
+  const relType =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings";
+  const children = getChildren(relsNode);
+  const hasSettingsRel = children.some((child) => {
+    if (getTagName(child) !== "Relationship") return false;
+    return getAttr(child, "Type") === relType && getAttr(child, "Target") === "settings.xml";
+  });
+  if (hasSettingsRel) return;
+
+  children.push(createElement("Relationship", [], {
+    "Id": getNextRelationshipId(doc),
+    "Type": relType,
+    "Target": "settings.xml",
+  }));
+}
+
+function ensureSettingsContentTypeOverride(doc: NormalizedDocument): void {
+  if (!doc.xmlParts.contentTypes) {
+    doc.xmlParts.contentTypes = [
+      createElement("Types", [], {
+        "xmlns": "http://schemas.openxmlformats.org/package/2006/content-types",
+      }),
+    ];
+  }
+
+  const typesNode = doc.xmlParts.contentTypes.find(
+    (n) => getTagName(n) === "Types",
+  );
+  if (!typesNode) return;
+
+  const partName = "/word/settings.xml";
+  const contentType =
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml";
+  const children = getChildren(typesNode);
+  const hasSettingsOverride = children.some((child) => {
+    if (getTagName(child) !== "Override") return false;
+    return getAttr(child, "PartName") === partName;
+  });
+  if (hasSettingsOverride) return;
+
+  children.push(createElement("Override", [], {
+    "PartName": partName,
+    "ContentType": contentType,
+  }));
 }
