@@ -318,7 +318,7 @@ export interface AppendTextPatch {
    *  Supports {{FIELD}} placeholders (e.g., {{PAGE}}, {{NUMPAGES}}). */
   text: string;
   /** Target a header/footer instead of the document body. */
-  container?: { type: "header" | "footer"; variant: string };
+  container?: { type: "header" | "footer"; variant: HeaderFooterVariant };
 }
 
 export interface AddTablePatch {
@@ -330,7 +330,7 @@ export interface AddTablePatch {
   /** Data rows. Each sub-array is one row of cell text values. */
   rows: string[][];
   /** Target a header/footer instead of the document body. */
-  container?: { type: "header" | "footer"; variant: string };
+  container?: { type: "header" | "footer"; variant: HeaderFooterVariant };
 }
 
 export interface AddTableRowPatch {

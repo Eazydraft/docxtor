@@ -4,6 +4,7 @@ import { writeDocx } from "../../src/zip/writer.js";
 import { normalizeDocument } from "../../src/normalizer/document.js";
 import { applyPatches } from "../../src/patches/engine.js";
 import { serializeXml } from "../../src/xml/serializer.js";
+import { findChildren, getAttr, getTagName } from "../../src/xml/helpers.js";
 import { Docxtor } from "../../src/index.js";
 import {
   createSimpleDocx,
@@ -258,6 +259,24 @@ describe("header/footer round-trip (export → reload)", () => {
     expect(entries.footers.size).toBe(0);
   });
 
+  it("should remove a newly-added header after a prior export", async () => {
+    const doc = await Docxtor.create();
+
+    doc.applyPatches([
+      { type: "add_header", variant: "default", paragraphs: ["Temp"] },
+    ]);
+    await doc.toBuffer();
+
+    doc.applyPatches([
+      { type: "remove_header", variant: "default" },
+    ]);
+
+    const exported = await doc.toBuffer();
+    const entries = await readDocx(exported);
+
+    expect(entries.headers.size).toBe(0);
+  });
+
   it("should round-trip even-page header with settings.xml", async () => {
     const buffer = await createHeaderFooterDocx();
     const doc = await Docxtor.load(buffer);
@@ -325,6 +344,24 @@ describe("add_header/add_footer on Docxtor.create() documents", () => {
     const headers = [...reloaded.getHeaders().values()];
     expect(headers.length).toBe(1);
     expect(headers[0]!.paragraphs[0]!.text).toBe("My Header");
+  });
+
+  it("should link settings.xml when adding an even header on Docxtor.create()", async () => {
+    const doc = await Docxtor.create();
+
+    const results = doc.applyPatches([
+      { type: "add_header", variant: "even", paragraphs: ["Even Header"] },
+    ]);
+    expect(results[0]!.success).toBe(true);
+
+    const ast = doc.getAST();
+    const relsXml = serializeXml(ast.xmlParts.documentRels!);
+    const contentTypesXml = serializeXml(ast.xmlParts.contentTypes!);
+
+    expect(relsXml).toContain("relationships/settings");
+    expect(relsXml).toContain('Target="settings.xml"');
+    expect(contentTypesXml).toContain('PartName="/word/settings.xml"');
+    expect(contentTypesXml).toContain("wordprocessingml.settings+xml");
   });
 });
 
@@ -490,6 +527,28 @@ describe("container targeting", () => {
     expect(results[0]!.valid).toBe(false);
     expect(results[0]!.error).toContain("container variant");
   });
+
+  it("should validate append_text container existence", async () => {
+    const buffer = await createHeaderFooterDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const results = doc.validatePatches([
+      { type: "append_text", text: "hi", container: { type: "header", variant: "first" } },
+    ]);
+    expect(results[0]!.valid).toBe(false);
+    expect(results[0]!.error).toContain('No header with variant "first" found');
+  });
+
+  it("should validate add_table container existence", async () => {
+    const buffer = await createHeaderFooterDocx();
+    const doc = await Docxtor.load(buffer);
+
+    const results = doc.validatePatches([
+      { type: "add_table", rows: [["x"]], container: { type: "footer", variant: "first" } },
+    ]);
+    expect(results[0]!.valid).toBe(false);
+    expect(results[0]!.error).toContain('No footer with variant "first" found');
+  });
 });
 
 // =============================================================================
@@ -500,19 +559,26 @@ describe("relationship and content-type integrity", () => {
   it("should add and then remove a header with clean rels/content-types", async () => {
     const buffer = await createHeaderFooterDocx();
     const doc = await Docxtor.load(buffer);
+    const ast = doc.getAST();
+    const headerPathsBeforeAdd = new Set(ast.xmlParts.headers.keys());
 
     // Add a first-page header
     doc.applyPatches([
       { type: "add_header", variant: "first", paragraphs: ["Temp Header"] },
     ]);
 
-    const ast = doc.getAST();
+    const firstHdr = [...doc.getHeaders().values()].find((h) => h.variant === "first");
+    expect(firstHdr).toBeDefined();
+    const addedRId = firstHdr!.rId;
+    const addedHeaderPath = [...ast.xmlParts.headers.keys()].find((p) => !headerPathsBeforeAdd.has(p));
+    expect(addedHeaderPath).toBeDefined();
+
     const relsXmlAfterAdd = serializeXml(ast.xmlParts.documentRels!);
     const ctXmlAfterAdd = serializeXml(ast.xmlParts.contentTypes!);
 
     // Should have added a relationship and content type
-    expect(relsXmlAfterAdd).toContain("header");
-    expect(ctXmlAfterAdd).toContain("header");
+    expect(relsXmlAfterAdd).toContain(addedRId);
+    expect(ctXmlAfterAdd).toContain(`PartName="/${addedHeaderPath!}"`);
 
     // Remove it
     doc.applyPatches([
@@ -523,7 +589,13 @@ describe("relationship and content-type integrity", () => {
     const ctXmlAfterRemove = serializeXml(ast.xmlParts.contentTypes!);
 
     // The added relationship and content type should be gone
-    // (original rId1 header should still be there)
+    expect(relsXmlAfterRemove).not.toContain(addedRId);
+    expect(ctXmlAfterRemove).not.toContain(`PartName="/${addedHeaderPath!}"`);
+    expect(ast.xmlParts.headers.has(addedHeaderPath!)).toBe(false);
+    const relsRoot = ast.xmlParts.documentRels!.find((n) => getTagName(n) === "Relationships");
+    const relNodes = relsRoot ? findChildren(relsRoot, "Relationship") : [];
+    expect(relNodes.some((rel) => getAttr(rel, "Id") === addedRId)).toBe(false);
+
     const firstHdrHeaders = [...doc.getHeaders().values()].filter(
       (h) => h.variant === "first",
     );

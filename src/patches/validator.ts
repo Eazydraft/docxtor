@@ -174,11 +174,9 @@ export function validatePatch(
         return { valid: false, error: "Empty append text" };
       }
       if (patch.container) {
-        if (!["header", "footer"].includes(patch.container.type)) {
-          return { valid: false, error: `Invalid container type: ${patch.container.type}` };
-        }
-        if (!["default", "first", "even"].includes(patch.container.variant)) {
-          return { valid: false, error: `Invalid container variant: ${patch.container.variant}` };
+        const containerValidation = validateContainerTarget(patch.container, doc);
+        if (!containerValidation.valid) {
+          return containerValidation;
         }
       }
       return { valid: true };
@@ -228,11 +226,9 @@ export function validatePatch(
       }
       // Validate container if provided
       if (patch.container) {
-        if (!["header", "footer"].includes(patch.container.type)) {
-          return { valid: false, error: `Invalid container type: ${patch.container.type}` };
-        }
-        if (!["default", "first", "even"].includes(patch.container.variant)) {
-          return { valid: false, error: `Invalid container variant: ${patch.container.variant}` };
+        const containerValidation = validateContainerTarget(patch.container, doc);
+        if (!containerValidation.valid) {
+          return containerValidation;
         }
       }
       return { valid: true };
@@ -260,6 +256,29 @@ export function validatePatch(
         error: `Unknown patch type: ${(patch as Patch).type}`,
       };
   }
+}
+
+function validateContainerTarget(
+  container: { type: string; variant: string },
+  doc: NormalizedDocument,
+): ValidationResult {
+  if (!["header", "footer"].includes(container.type)) {
+    return { valid: false, error: `Invalid container type: ${container.type}` };
+  }
+  if (!["default", "first", "even"].includes(container.variant)) {
+    return { valid: false, error: `Invalid container variant: ${container.variant}` };
+  }
+
+  const parts = container.type === "header" ? doc.headers : doc.footers;
+  const exists = [...parts.values()].some((part) => part.variant === container.variant);
+  if (!exists) {
+    return {
+      valid: false,
+      error: `No ${container.type} with variant "${container.variant}" found`,
+    };
+  }
+
+  return { valid: true };
 }
 
 /**

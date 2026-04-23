@@ -230,18 +230,19 @@ export class Docxtor {
       footers.set(path, serializeXml(fxp));
     }
 
-    // Determine which header/footer zip entries were removed since loading.
-    // Original entries still in the zip but no longer in xmlParts must be
-    // explicitly deleted so stale files don't persist in the output DOCX.
+    // Determine which header/footer zip entries should be removed from the
+    // current in-memory zip state. This handles multi-export flows where a
+    // part may be added in one export and removed in a later export.
     const removedParts: string[] = [];
-    for (const origPath of this.zipEntries.headers.keys()) {
-      if (!this.doc.xmlParts.headers.has(origPath)) {
-        removedParts.push(origPath);
-      }
-    }
-    for (const origPath of this.zipEntries.footers.keys()) {
-      if (!this.doc.xmlParts.footers.has(origPath)) {
-        removedParts.push(origPath);
+    for (const path of Object.keys(this.zipEntries.zip.files)) {
+      if (/^word\/header\d+\.xml$/i.test(path)) {
+        if (!this.doc.xmlParts.headers.has(path)) {
+          removedParts.push(path);
+        }
+      } else if (/^word\/footer\d+\.xml$/i.test(path)) {
+        if (!this.doc.xmlParts.footers.has(path)) {
+          removedParts.push(path);
+        }
       }
     }
 
