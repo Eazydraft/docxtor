@@ -4,6 +4,7 @@ import { writeDocx } from "../../src/zip/writer.js";
 import { normalizeDocument } from "../../src/normalizer/document.js";
 import { applyPatches } from "../../src/patches/engine.js";
 import { serializeXml } from "../../src/xml/serializer.js";
+import { findChildren, getAttr, getTagName } from "../../src/xml/helpers.js";
 import { Docxtor } from "../../src/index.js";
 import {
   createSimpleDocx,
@@ -591,6 +592,9 @@ describe("relationship and content-type integrity", () => {
     expect(relsXmlAfterRemove).not.toContain(addedRId);
     expect(ctXmlAfterRemove).not.toContain(`PartName="/${addedHeaderPath!}"`);
     expect(ast.xmlParts.headers.has(addedHeaderPath!)).toBe(false);
+    const relsRoot = ast.xmlParts.documentRels!.find((n) => getTagName(n) === "Relationships");
+    const relNodes = relsRoot ? findChildren(relsRoot, "Relationship") : [];
+    expect(relNodes.some((rel) => getAttr(rel, "Id") === addedRId)).toBe(false);
 
     const firstHdrHeaders = [...doc.getHeaders().values()].filter(
       (h) => h.variant === "first",
