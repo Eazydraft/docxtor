@@ -251,7 +251,7 @@ describe("Text ops with GFM markers", () => {
     const doc = await Docxtor.create();
 
     // Replace the empty text with formatted text
-    const results = doc.applyPatches([
+    let results = doc.applyPatches([
       {
         type: "replace_text",
         target: "p0",
@@ -260,8 +260,19 @@ describe("Text ops with GFM markers", () => {
       },
     ]);
 
-    // The patch may fail because find="" is not valid, let's use a different approach
-    // Instead, let's use append_text
+    results = doc.applyPatches([
+      { type: "replace_text", target: "p1", find: "world", replace: "**bold** _earth_" },
+    ]);
+
+    expect(results[0]!.success).toBe(true);
+
+    const xml = doc.toString();
+    expect(xml).toContain("w:b");
+    expect(xml).toContain("w:i");
+
+    const md = doc.project("markdown", { includeFormatting: true });
+    expect(md).toContain("**bold**");
+    expect(md).toContain("_earth_");
   });
 
   it("replace_text with bold replacement creates w:b in OOXML", async () => {

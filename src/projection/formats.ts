@@ -415,9 +415,10 @@ function formatParagraphMarkdown(
  * - **bold**
  * - _italic_
  * - ~~strikethrough~~
+ * - <u>underline</u>
  * - Combined: **_bold+italic_**
  *
- * Runs with identical formatting are merged. Runs with no GFM-representable
+ * Each run is wrapped independently. Runs with no representable
  * formatting are emitted as plain text.
  */
 function annotateTextWithFormatting(

@@ -132,7 +132,7 @@ function executeReplaceTextDirect(
   ranges: ReturnType<typeof resolveRunRanges>,
 ): void {
   const segments = parseFormattedText(patch.replace);
-  const hasFormatting = segments.some((s) => s.bold || s.italic || s.strikethrough);
+  const hasFormatting = segments.some((s) => s.bold || s.italic || s.strikethrough || s.underline);
 
   if (ranges.length === 1) {
     const range = ranges[0]!;
@@ -221,7 +221,7 @@ function executeReplaceTextRevision(
   // Create the replacement run(s) wrapped in w:ins
   let insElement: FXPNode | undefined;
   const segments = parseFormattedText(patch.replace);
-  const hasFormatting = segments.some((s) => s.bold || s.italic || s.strikethrough);
+  const hasFormatting = segments.some((s) => s.bold || s.italic || s.strikethrough || s.underline);
 
   if (segments.length > 0 && stripFormattingMarkers(patch.replace).length > 0) {
     if (hasFormatting) {
@@ -324,7 +324,7 @@ function executeInsertTextDirect(
   }
 
   const segments = parseFormattedText(patch.text);
-  const hasFormatting = segments.some((s) => s.bold || s.italic || s.strikethrough);
+  const hasFormatting = segments.some((s) => s.bold || s.italic || s.strikethrough || s.underline);
 
   if (!hasFormatting) {
     // Simple plain text insertion
@@ -411,7 +411,7 @@ function executeInsertTextRevision(
 
   // Create the new run(s) with inserted text wrapped in w:ins
   const segments = parseFormattedText(patch.text);
-  const hasFormatting = segments.some((s) => s.bold || s.italic || s.strikethrough);
+  const hasFormatting = segments.some((s) => s.bold || s.italic || s.strikethrough || s.underline);
 
   let insRuns: FXPNode[];
   if (hasFormatting) {

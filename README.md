@@ -174,6 +174,18 @@ const json = doc.project("json", {
 });
 ```
 
+When `includeFormatting` is enabled, each paragraph gains a `formatting` array of `JsonProjectionRunFormatting` objects. Only runs that have at least one formatting property set (bold, italic, underline, strikethrough, fontSize, fontFamily, color, highlight) are included — plain/unformatted runs are omitted to keep the output lean. Each entry includes `text`, `startOffset`, and `endOffset` for precise positioning within the paragraph text.
+
+```json
+{
+  "id": "p0",
+  "text": "Hello bold world",
+  "formatting": [
+    { "text": "bold", "startOffset": 6, "endOffset": 10, "bold": true }
+  ]
+}
+```
+
 When `includePageBreaks` is enabled, docxtor detects all three OOXML page break mechanisms:
 
 | Mechanism | Source | Typical use |
