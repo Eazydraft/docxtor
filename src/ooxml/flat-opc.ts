@@ -55,6 +55,7 @@ const OPC_PARSER = new XMLParser({
  * Checks for the standard Microsoft Office XML-package namespace.
  */
 export function isFlatOpc(xml: string): boolean {
+  if (!xml) return false;
   // The package root or its namespace declaration appears within the first
   // 2 KB — no need to scan the whole string.
   const head = xml.slice(0, 2048);

@@ -167,8 +167,10 @@ export class Docxtor {
     zip.file("_rels/.rels", topRels);
     zip.file("word/document.xml", documentXml);
 
+    // Use "arraybuffer" in browser environments where Node Buffer is unavailable.
+    const zipType = typeof Buffer !== "undefined" ? "nodebuffer" : "arraybuffer";
     const buffer = await zip.generateAsync({
-      type: "nodebuffer",
+      type: zipType as "nodebuffer",
       compression: "DEFLATE",
     });
 
