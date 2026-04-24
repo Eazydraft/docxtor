@@ -35,6 +35,9 @@ import { Docxtor } from "docxtor";
 // Load from file path or buffer
 const doc = await Docxtor.load("contract.docx");
 
+// Or from OOXML already extracted by Office.js (synchronous, no ZIP involved)
+// const doc = Docxtor.fromOoxml(body.getOoxml().value);
+
 // Or create a blank document from scratch
 // const doc = await Docxtor.create();
 
@@ -72,6 +75,53 @@ for (const r of results) {
 await doc.toFile("contract-edited.docx");
 ```
 
+## Word Add-in (Office.js)
+
+docxtor works inside Word add-ins. Office.js exposes document content as **Flat OPC XML** (a single XML file that bundles all DOCX parts). Use `Docxtor.fromOoxml()` to load it and `toFlatOpc()` to write it back — no ZIP handling or file I/O needed.
+
+```ts
+import { Docxtor } from "docxtor";
+
+// Office.js Word add-in entry point
+Office.onReady(() => {
+  Word.run(async (context) => {
+    // 1. Extract the document as Flat OPC XML
+    const body = context.document.body;
+    body.load("ooxml");
+    await context.sync();
+
+    // 2. Load into docxtor (synchronous)
+    const doc = Docxtor.fromOoxml(body.ooxml);
+
+    // 3. Inspect and patch
+    const projection = doc.project("markdown");
+    const patches = await getPatches(projection); // your LLM call
+    const results = doc.applyPatches(patches);
+
+    // 4a. Replace the full document body
+    body.insertOoxml(doc.toFlatOpc(), Word.InsertLocation.replace);
+
+    // 4b. Or — insert only the changed elements at the current selection
+    // const ooxml = doc.patchResultsToOoxml(results);
+    // context.document.getSelection().insertOoxml(ooxml, Word.InsertLocation.replace);
+
+    await context.sync();
+  });
+});
+```
+
+**With tracked changes** (redlines visible in Word's review pane):
+
+```ts
+const results = doc.applyPatches(patches, {
+  trackRevisions: true,
+  revisionAuthor: "AI Editor",
+});
+body.insertOoxml(doc.toFlatOpc(), Word.InsertLocation.replace);
+```
+
+**Getting the DOCX binary** (for download/upload): `Document.getFileAsync(Office.FileType.Compressed)` returns the raw `.docx` bytes — pass them directly to `Docxtor.load(buffer)` and export with `toBuffer()`.
+
 ## API
 
 ### `Docxtor.load(input, options?)`
@@ -106,6 +156,30 @@ doc.applyPatches([
 ]);
 await doc.toFile("new-document.docx");
 ```
+
+### `Docxtor.fromOoxml(xml, options?)`
+
+Load from OOXML already in memory — the primary entry point for **Office.js Word add-ins**. Unlike `load()`, this method is **synchronous**.
+
+Accepts two input formats — detected automatically:
+
+| Format | Description | Typical source |
+|---|---|---|
+| **Flat OPC XML** | `<pkg:package>` root, bundles all DOCX parts | `Word.Body.getOoxml()`, `Office.context.document.getSelectedDataAsync(Office.CoercionType.Ooxml)` |
+| **Raw document XML** | `<w:document>` root, just the main part | Custom extraction, or passing `doc.toString()` back in |
+
+```ts
+// From Office.js body.getOoxml() — Flat OPC, synchronous
+const doc = Docxtor.fromOoxml(body.ooxml);
+
+// From raw document XML
+const doc = Docxtor.fromOoxml("<w:document ...>...</w:document>");
+
+// With options
+const doc = Docxtor.fromOoxml(xml, { includeHeadersFooters: false });
+```
+
+When loaded from Flat OPC, all parts (images, fonts, numbering, etc.) are stored internally. `toFlatOpc()` then produces a complete, lossless package with only the modified XML parts replaced.
 
 ### `doc.project(format?, options?)`
 
@@ -212,16 +286,46 @@ const validations = doc.validatePatches(patches);
 
 ### `doc.toBuffer()` / `doc.toFile(path)`
 
-Export the modified document.
+Export the modified document as a DOCX buffer or write it to disk.
 
 ```ts
 const buffer = await doc.toBuffer();
 await doc.toFile("output.docx");
 ```
 
+### `doc.toFlatOpc()`
+
+Export the modified document as a **Flat OPC XML** string — the format Office.js `body.insertOoxml()` accepts.
+
+When the document was loaded via `fromOoxml()` from a Flat OPC package, all original parts (images, fonts, embedded objects, etc.) are preserved unchanged. Only the parts that were modified (document, headers, footers, settings, relationships) are replaced. When loaded from raw XML, a minimal package is produced with only the available parts.
+
+```ts
+// Replace the entire document body in a Word add-in
+body.insertOoxml(doc.toFlatOpc(), Word.InsertLocation.replace);
+```
+
+### `doc.patchResultsToOoxml(results)`
+
+Convert patch results to a **Flat OPC XML** fragment containing only the elements affected by successful patches. Useful for targeted `range.insertOoxml()` calls where you want to replace specific paragraphs rather than the whole document.
+
+Only patches with a `target` ID are included (text, cell text, formatting, style, and table-row patches). Patches without a `target` — `append_text`, header/footer operations — are not captured here; use `toFlatOpc()` for those.
+
+```ts
+const results = doc.applyPatches(patches, { trackRevisions: true });
+
+// Option A: replace entire document (includes all modifications)
+body.insertOoxml(doc.toFlatOpc(), Word.InsertLocation.replace);
+
+// Option B: replace only the changed paragraphs/tables at the selection
+const fragment = doc.patchResultsToOoxml(results);
+context.document.getSelection().insertOoxml(fragment, Word.InsertLocation.replace);
+```
+
+The returned XML fragment preserves all namespace declarations from the original document root so it is accepted by Word without namespace errors.
+
 ### `doc.toString()`
 
-Export the current document as a raw OOXML string (`word/document.xml` content). Reflects any patches that have been applied. Useful for inspecting the XML directly or forwarding it to another system without producing a full DOCX file.
+Export the current `word/document.xml` as a raw OOXML string. Useful for debugging or forwarding to another system without producing a full DOCX or Flat OPC package.
 
 ```ts
 const xml = doc.toString();
@@ -704,15 +808,30 @@ import {
   validatePatch,
   findParagraphById,
   findTableById,
+  // Flat OPC utilities (Office.js integration)
+  isFlatOpc,            // detect Flat OPC format
+  parseFlatOpc,         // Flat OPC XML string -> FlatOpcPart[]
+  buildFlatOpc,         // FlatOpcPart[] -> Flat OPC XML string
+  buildDocumentFragment, // FXP nodes -> minimal <w:document> XML string
+  opcContentType,       // path -> MIME content type
+  opcPathToZipPath,     // "/word/doc.xml" -> "word/doc.xml"
+  zipPathToOpcPath,     // "word/doc.xml" -> "/word/doc.xml"
 } from "docxtor";
 
 // Types
-import type { PatchOptions, RevisionMark, NormalizedPageBreak, JsonProjectionPageBreak, HeaderFooterVariant, HeaderFooterRef } from "docxtor";
+import type {
+  PatchOptions, RevisionMark,
+  NormalizedPageBreak, JsonProjectionPageBreak,
+  HeaderFooterVariant, HeaderFooterRef,
+  FlatOpcPart,          // { name, contentType, content, isBinary, padding? }
+} from "docxtor";
 ```
 
 ## What it handles
 
 - Document creation from scratch (`Docxtor.create()`)
+- Office.js Word add-in integration (`Docxtor.fromOoxml()`, `toFlatOpc()`, `patchResultsToOoxml()`)
+- Flat OPC XML round-trip (parse full package, modify, reassemble preserving images/fonts)
 - Paragraph appending (`append_text` — document-level, no target needed)
 - Table creation (`add_table` — inserts a new table with TableGrid style)
 - Markdown table conversion in `append_text` (pipe-delimited syntax → real OOXML tables)
@@ -755,7 +874,7 @@ pnpm build         # build ESM + CJS + DTS (tsup)
 pnpm lint          # type-check
 ```
 
-364 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style, append, add_table), document creation, header/footer lifecycle (add/remove with round-trip, field placeholders, container targeting, stale zip entry cleanup, even/odd settings), revision tracking (tracked changes), page breaks (explicit, lastRenderedPageBreak, pageBreakBefore, positional offset, revision interaction), integration flows, hyperlinks, entity escaping, newlines, nested tables, markdown table conversion, projection, and API surface.
+368 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style, append, add_table), document creation, header/footer lifecycle (add/remove with round-trip, field placeholders, container targeting, stale zip entry cleanup, even/odd settings), revision tracking (tracked changes), page breaks (explicit, lastRenderedPageBreak, pageBreakBefore, positional offset, revision interaction), integration flows, hyperlinks, entity escaping, newlines, nested tables, markdown table conversion, projection, and API surface.
 
 ## License
 

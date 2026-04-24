@@ -33,6 +33,7 @@ import type {
   NormalizedDocument,
   NormalizedParagraph,
   NormalizedTable,
+  FXPNode,
   Patch,
   PatchResult,
   PatchOptions,
@@ -54,6 +55,16 @@ import {
   findTableById as _findTableById,
   validatePatch as _validatePatch,
 } from "./patches/validator.js";
+import {
+  isFlatOpc,
+  parseFlatOpc,
+  buildFlatOpc,
+  buildDocumentFragment,
+  opcPathToZipPath,
+  zipPathToOpcPath,
+  opcContentType,
+  type FlatOpcPart,
+} from "./ooxml/flat-opc.js";
 
 /**
  * The main entry point for docxtor.
@@ -67,6 +78,8 @@ import {
 export class Docxtor {
   private zipEntries: DocxZipEntries;
   private doc: NormalizedDocument;
+  /** Stored when loaded via {@link fromOoxml} for lossless Flat OPC round-trips. */
+  private flatOpcParts?: FlatOpcPart[];
 
   private constructor(
     zipEntries: DocxZipEntries,
@@ -160,6 +173,72 @@ export class Docxtor {
     });
 
     return Docxtor.load(buffer, options);
+  }
+
+  /**
+   * Create a Docxtor instance from OOXML already extracted by Office.js.
+   *
+   * Accepts two formats:
+   * - **Flat OPC XML** — the format returned by `Word.Body.getOoxml()` and
+   *   accepted by `body.insertOoxml()`.  The root element is `<pkg:package>`.
+   * - **Raw document XML** — the raw `<w:document>…</w:document>` string.
+   *
+   * Unlike {@link load}, this method is **synchronous** — ideal for
+   * Office.js add-in code that already has the XML in memory.
+   *
+   * Use {@link toFlatOpc} to export the modified document back to Flat OPC
+   * so it can be inserted via `body.insertOoxml()`.
+   *
+   * @example
+   * ```ts
+   * // Inside a Word add-in (Office.js)
+   * await Word.run(async (context) => {
+   *   const body = context.document.body;
+   *   body.load("ooxml");
+   *   await context.sync();
+   *
+   *   const doc = Docxtor.fromOoxml(body.getOoxml().value);
+   *   doc.applyPatches([{ type: "replace_text", target: "p0", find: "foo", replace: "bar" }]);
+   *
+   *   body.insertOoxml(doc.toFlatOpc(), Word.InsertLocation.replace);
+   *   await context.sync();
+   * });
+   * ```
+   */
+  static fromOoxml(xml: string, options?: LoadOptions): Docxtor {
+    if (isFlatOpc(xml)) {
+      return Docxtor._fromFlatOpc(xml, options);
+    }
+    return Docxtor._fromDocumentXml(xml, options);
+  }
+
+  /** @internal Load from a Flat OPC XML string. */
+  private static _fromFlatOpc(xml: string, options?: LoadOptions): Docxtor {
+    const parts = parseFlatOpc(xml);
+    const zipEntries = _buildZipEntriesFromOpcParts(parts);
+    const doc = normalizeDocument(zipEntries, options);
+    const instance = new Docxtor(zipEntries, doc);
+    instance.flatOpcParts = parts;
+    return instance;
+  }
+
+  /** @internal Load from a raw `<w:document>` XML string. */
+  private static _fromDocumentXml(
+    documentXml: string,
+    options?: LoadOptions,
+  ): Docxtor {
+    const zip = new JSZip();
+    zip.file("word/document.xml", documentXml);
+
+    const zipEntries: DocxZipEntries = {
+      documentXml,
+      headers: new Map(),
+      footers: new Map(),
+      zip,
+    };
+
+    const doc = normalizeDocument(zipEntries, options);
+    return new Docxtor(zipEntries, doc);
   }
 
   // ===========================================================================
@@ -278,6 +357,115 @@ export class Docxtor {
     await fsWriteFile(filePath, buffer);
   }
 
+  /**
+   * Export the modified document as a **Flat OPC XML** string.
+   *
+   * This is the format that Office.js accepts for `body.insertOoxml()`.
+   * When the document was loaded via {@link fromOoxml} from Flat OPC, all
+   * original parts (images, fonts, styles, etc.) are preserved — only the
+   * modified XML parts (document, headers, footers, settings, rels) are
+   * replaced.  When loaded from raw XML, a minimal single-part package is
+   * produced.
+   *
+   * @example
+   * ```ts
+   * // Apply patches, then push back to Word
+   * doc.applyPatches(patches);
+   * body.insertOoxml(doc.toFlatOpc(), Word.InsertLocation.replace);
+   * ```
+   */
+  toFlatOpc(): string {
+    // Serialize all modified XML parts
+    const overrides = new Map<string, string>();
+
+    overrides.set("/word/document.xml", serializeXml(this.doc.xmlParts.document));
+
+    for (const [zipPath, fxp] of this.doc.xmlParts.headers) {
+      overrides.set(zipPathToOpcPath(zipPath), serializeXml(fxp));
+    }
+    for (const [zipPath, fxp] of this.doc.xmlParts.footers) {
+      overrides.set(zipPathToOpcPath(zipPath), serializeXml(fxp));
+    }
+    if (this.doc.xmlParts.documentRels) {
+      overrides.set(
+        "/word/_rels/document.xml.rels",
+        serializeXml(this.doc.xmlParts.documentRels),
+      );
+    }
+    if (this.doc.xmlParts.contentTypes) {
+      overrides.set("/[Content_Types].xml", serializeXml(this.doc.xmlParts.contentTypes));
+    }
+    if (this.doc.xmlParts.settings) {
+      overrides.set("/word/settings.xml", serializeXml(this.doc.xmlParts.settings));
+    }
+
+    if (this.flatOpcParts) {
+      // Merge overrides into the original parts for a lossless round-trip
+      return buildFlatOpc(this.flatOpcParts, overrides);
+    }
+
+    // Build a minimal Flat OPC from the available parts
+    const parts: FlatOpcPart[] = Array.from(overrides.entries()).map(
+      ([name, content]) => ({
+        name,
+        contentType: opcContentType(name),
+        content,
+        isBinary: false,
+      }),
+    );
+    return buildFlatOpc(parts);
+  }
+
+  /**
+   * Convert patch results to a **Flat OPC XML** fragment for targeted
+   * Office.js insertion.
+   *
+   * Only the elements affected by **successful** patches that have a `target`
+   * ID are included (paragraphs and tables).  The fragment is a minimal
+   * `<w:document>` with all namespace declarations preserved from the source
+   * document, wrapped in a Flat OPC envelope so it can be passed directly to
+   * `range.insertOoxml()` or `body.insertOoxml()`.
+   *
+   * Patches without a `target` (e.g. `append_text`, header/footer ops) do
+   * not produce entries in the fragment — use {@link toFlatOpc} to export
+   * the full modified document in those cases.
+   *
+   * @param results - The array returned by {@link applyPatches}.  Works for
+   *   both tracked-change and plain patches.
+   *
+   * @example
+   * ```ts
+   * const results = doc.applyPatches(patches, { trackRevisions: true });
+   * // Insert only the changed paragraphs/tables at the cursor
+   * const ooxml = doc.patchResultsToOoxml(results);
+   * range.insertOoxml(ooxml, Word.InsertLocation.replace);
+   * ```
+   */
+  patchResultsToOoxml(results: PatchResult[]): string {
+    const nodes = _collectPatchedNodes(results, this.doc);
+
+    const docPart = this.flatOpcParts?.find(
+      (p) => p.name === "/word/document.xml",
+    );
+
+    const fragmentXml = buildDocumentFragment(
+      nodes,
+      this.doc.xmlParts.document,
+      serializeXml,
+    );
+
+    const part: FlatOpcPart = {
+      name: "/word/document.xml",
+      contentType:
+        docPart?.contentType ??
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml",
+      content: fragmentXml,
+      isBinary: false,
+    };
+
+    return buildFlatOpc([part]);
+  }
+
   // ===========================================================================
   // Inspection
   // ===========================================================================
@@ -361,6 +549,109 @@ export class Docxtor {
   }
 }
 
+// =============================================================================
+// Module-level helpers (not exported — internal to this file)
+// =============================================================================
+
+/**
+ * Build a DocxZipEntries from Flat OPC parts.
+ *
+ * Populates a JSZip so the existing write machinery (`toBuffer`, `toFile`)
+ * works even when the document was loaded from Flat OPC.  Binary parts are
+ * added as base64.
+ */
+function _buildZipEntriesFromOpcParts(parts: FlatOpcPart[]): DocxZipEntries {
+  const zip = new JSZip();
+  const headers = new Map<string, string>();
+  const footers = new Map<string, string>();
+  let documentXml = "";
+  let documentRels: string | undefined;
+  let contentTypes: string | undefined;
+  let stylesXml: string | undefined;
+  let settingsXml: string | undefined;
+
+  for (const part of parts) {
+    const zipPath = opcPathToZipPath(part.name);
+
+    if (part.isBinary) {
+      zip.file(zipPath, part.content, { base64: true });
+      continue;
+    }
+
+    zip.file(zipPath, part.content);
+
+    const n = part.name; // OPC path with leading "/"
+    if (n === "/word/document.xml") {
+      documentXml = part.content;
+    } else if (/^\/word\/header\d+\.xml$/i.test(n)) {
+      headers.set(zipPath, part.content);
+    } else if (/^\/word\/footer\d+\.xml$/i.test(n)) {
+      footers.set(zipPath, part.content);
+    } else if (n === "/word/_rels/document.xml.rels") {
+      documentRels = part.content;
+    } else if (n === "/[Content_Types].xml") {
+      contentTypes = part.content;
+    } else if (n === "/word/styles.xml") {
+      stylesXml = part.content;
+    } else if (n === "/word/settings.xml") {
+      settingsXml = part.content;
+    }
+  }
+
+  if (!documentXml) {
+    throw new Error("Invalid OOXML: missing /word/document.xml part");
+  }
+
+  return {
+    documentXml,
+    headers,
+    footers,
+    documentRels,
+    contentTypes,
+    stylesXml,
+    settingsXml,
+    zip,
+  };
+}
+
+/**
+ * Collect the FXP nodes for all elements targeted by successful patches.
+ * Each element ID is included at most once, preserving document order.
+ */
+function _collectPatchedNodes(
+  results: PatchResult[],
+  doc: NormalizedDocument,
+): FXPNode[] {
+  const seen = new Set<string>();
+  const nodes: FXPNode[] = [];
+
+  for (const result of results) {
+    if (!result.success) continue;
+
+    const patch = result.patch;
+    let targetId: string | undefined;
+
+    if ("target" in patch) {
+      targetId = patch.target as string;
+    }
+
+    if (!targetId || seen.has(targetId)) continue;
+    seen.add(targetId);
+
+    const para = _findParagraphById(targetId, doc);
+    if (para) {
+      nodes.push(para.xmlRef);
+      continue;
+    }
+    const table = _findTableById(targetId, doc);
+    if (table) {
+      nodes.push(table.xmlRef);
+    }
+  }
+
+  return nodes;
+}
+
 // Re-export types
 export type {
   NormalizedDocument,
@@ -413,3 +704,13 @@ export { project, projectToJson, projectToMarkdown } from "./projection/llm.js";
 export type { JsonProjection, JsonProjectionPageBreak } from "./projection/llm.js";
 export { validatePatch, findParagraphById, findTableById } from "./patches/validator.js";
 export type { ValidationResult } from "./patches/validator.js";
+export {
+  isFlatOpc,
+  parseFlatOpc,
+  buildFlatOpc,
+  buildDocumentFragment,
+  opcContentType,
+  opcPathToZipPath,
+  zipPathToOpcPath,
+} from "./ooxml/flat-opc.js";
+export type { FlatOpcPart } from "./ooxml/flat-opc.js";
