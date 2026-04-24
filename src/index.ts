@@ -46,6 +46,9 @@ import type {
 import { readDocx, type DocxZipEntries } from "./zip/reader.js";
 import { writeDocx } from "./zip/writer.js";
 import { serializeXml } from "./xml/serializer.js";
+import { parseFlatOpc } from "./flat-opc/parser.js";
+import { serializeFlatOpc } from "./flat-opc/serializer.js";
+import type { FlatOpcPart } from "./flat-opc/types.js";
 import { normalizeDocument } from "./normalizer/document.js";
 import { applyPatches } from "./patches/engine.js";
 import { project, type JsonProjection } from "./projection/llm.js";
@@ -67,13 +70,17 @@ import {
 export class Docxtor {
   private zipEntries: DocxZipEntries;
   private doc: NormalizedDocument;
+  /** Original Flat OPC parts, set only when loaded via loadFlatOpc(). */
+  private flatOpcParts: FlatOpcPart[] | null = null;
 
   private constructor(
     zipEntries: DocxZipEntries,
     doc: NormalizedDocument,
+    flatOpcParts?: FlatOpcPart[],
   ) {
     this.zipEntries = zipEntries;
     this.doc = doc;
+    this.flatOpcParts = flatOpcParts ?? null;
   }
 
   /**
@@ -160,6 +167,22 @@ export class Docxtor {
     });
 
     return Docxtor.load(buffer, options);
+  }
+
+  /**
+   * Load a DOCX document from a Flat OPC XML string.
+   *
+   * Flat OPC is the format returned by Word's JavaScript API `getOoxml()`
+   * method. It wraps all document parts in a single XML envelope using
+   * `<pkg:package>` / `<pkg:part>` elements.
+   *
+   * @param xml - The Flat OPC XML string
+   * @param options - Optional load options
+   */
+  static loadFlatOpc(xml: string, options?: LoadOptions): Docxtor {
+    const { entries, parts } = parseFlatOpc(xml);
+    const doc = normalizeDocument(entries, options);
+    return new Docxtor(entries, doc, parts);
   }
 
   // ===========================================================================
@@ -276,6 +299,118 @@ export class Docxtor {
     const { writeFile: fsWriteFile } = await import("node:fs/promises");
     const buffer = await this.toBuffer();
     await fsWriteFile(filePath, buffer);
+  }
+
+  /**
+   * Export the modified document as a Flat OPC XML string.
+   *
+   * This produces a string suitable for Word's `insertOoxml()` API.
+   * Only works if the document was loaded via `loadFlatOpc()`, because
+   * the original Flat OPC parts (including binary data like images)
+   * are needed to reconstruct the full package.
+   *
+   * For documents loaded from a ZIP buffer, use `toBuffer()` instead.
+   *
+   * @throws Error if the document was not loaded from Flat OPC
+   */
+  toFlatOpc(): string {
+    if (!this.flatOpcParts) {
+      throw new Error(
+        "toFlatOpc() is only available for documents loaded via loadFlatOpc(). " +
+          "Use toBuffer() for ZIP-based documents.",
+      );
+    }
+
+    // Serialize current XML state for parts that may have been modified
+    const documentXml = serializeXml(this.doc.xmlParts.document);
+
+    const headerXmls = new Map<string, string>();
+    for (const [path, fxp] of this.doc.xmlParts.headers) {
+      headerXmls.set(path, serializeXml(fxp));
+    }
+
+    const footerXmls = new Map<string, string>();
+    for (const [path, fxp] of this.doc.xmlParts.footers) {
+      footerXmls.set(path, serializeXml(fxp));
+    }
+
+    const documentRelsXml = this.doc.xmlParts.documentRels
+      ? serializeXml(this.doc.xmlParts.documentRels)
+      : undefined;
+    const contentTypesXml = this.doc.xmlParts.contentTypes
+      ? serializeXml(this.doc.xmlParts.contentTypes)
+      : undefined;
+    const settingsXml = this.doc.xmlParts.settings
+      ? serializeXml(this.doc.xmlParts.settings)
+      : undefined;
+
+    // Build updated parts array: replace XML content for modified parts,
+    // pass through unmodified parts (including binary) as-is.
+    const updatedParts: FlatOpcPart[] = this.flatOpcParts.map((part) => {
+      const name = part.name.startsWith("/") ? part.name.slice(1) : part.name;
+
+      if (name === "word/document.xml") {
+        return { ...part, xmlContent: documentXml };
+      }
+      if (name === "word/_rels/document.xml.rels" && documentRelsXml) {
+        return { ...part, xmlContent: documentRelsXml };
+      }
+      if (name === "[Content_Types].xml" && contentTypesXml) {
+        return { ...part, xmlContent: contentTypesXml };
+      }
+      if (name === "word/settings.xml" && settingsXml) {
+        return { ...part, xmlContent: settingsXml };
+      }
+      if (headerXmls.has(name)) {
+        return { ...part, xmlContent: headerXmls.get(name)! };
+      }
+      if (footerXmls.has(name)) {
+        return { ...part, xmlContent: footerXmls.get(name)! };
+      }
+
+      // Unmodified part (styles, numbering, theme, images, etc.)
+      return part;
+    });
+
+    // Handle newly added header/footer parts that weren't in the original
+    const existingNames = new Set(
+      this.flatOpcParts.map((p) =>
+        p.name.startsWith("/") ? p.name.slice(1) : p.name,
+      ),
+    );
+
+    for (const [path, xml] of headerXmls) {
+      if (!existingNames.has(path)) {
+        updatedParts.push({
+          name: "/" + path,
+          contentType:
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+          xmlContent: xml,
+          binaryData: undefined,
+        });
+      }
+    }
+
+    for (const [path, xml] of footerXmls) {
+      if (!existingNames.has(path)) {
+        updatedParts.push({
+          name: "/" + path,
+          contentType:
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml",
+          xmlContent: xml,
+          binaryData: undefined,
+        });
+      }
+    }
+
+    return serializeFlatOpc(updatedParts);
+  }
+
+  /**
+   * Check whether this document was loaded from Flat OPC format.
+   */
+  isFromFlatOpc(): boolean {
+    return this.flatOpcParts !== null;
   }
 
   // ===========================================================================
@@ -410,6 +545,16 @@ export { normalizeDocument } from "./normalizer/document.js";
 export type { HeaderFooterRef } from "./normalizer/document.js";
 export { applyPatches } from "./patches/engine.js";
 export { project, projectToJson, projectToMarkdown } from "./projection/llm.js";
-export type { JsonProjection, JsonProjectionPageBreak } from "./projection/llm.js";
-export { validatePatch, findParagraphById, findTableById } from "./patches/validator.js";
+export type {
+  JsonProjection,
+  JsonProjectionPageBreak,
+} from "./projection/llm.js";
+export {
+  validatePatch,
+  findParagraphById,
+  findTableById,
+} from "./patches/validator.js";
 export type { ValidationResult } from "./patches/validator.js";
+export { parseFlatOpc } from "./flat-opc/parser.js";
+export { serializeFlatOpc } from "./flat-opc/serializer.js";
+export type { FlatOpcPart } from "./flat-opc/types.js";
