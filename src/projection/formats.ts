@@ -46,6 +46,7 @@ interface JsonProjectionHeaderFooter {
   type: "header" | "footer";
   variant: string;
   paragraphs: JsonProjectionParagraph[];
+  tables?: JsonProjectionTable[];
 }
 
 export interface JsonProjectionPageBreak {
@@ -96,25 +97,37 @@ export function projectToJson(
     if (doc.headers.size > 0) {
       result.headers = [];
       for (const header of doc.headers.values()) {
-        result.headers.push({
+        const hfEntry: JsonProjectionHeaderFooter = {
           type: "header",
           variant: header.variant,
           paragraphs: header.paragraphs.map((p) =>
             projectParagraphToJson(p, includeFormatting, includeRevisions),
           ),
-        });
+        };
+        if (includeTables && header.tables.length > 0) {
+          hfEntry.tables = header.tables.map((t) =>
+            projectTableToJson(t, includeFormatting, includeRevisions),
+          );
+        }
+        result.headers.push(hfEntry);
       }
     }
     if (doc.footers.size > 0) {
       result.footers = [];
       for (const footer of doc.footers.values()) {
-        result.footers.push({
+        const hfEntry: JsonProjectionHeaderFooter = {
           type: "footer",
           variant: footer.variant,
           paragraphs: footer.paragraphs.map((p) =>
             projectParagraphToJson(p, includeFormatting, includeRevisions),
           ),
-        });
+        };
+        if (includeTables && footer.tables.length > 0) {
+          hfEntry.tables = footer.tables.map((t) =>
+            projectTableToJson(t, includeFormatting, includeRevisions),
+          );
+        }
+        result.footers.push(hfEntry);
       }
     }
   }
@@ -265,6 +278,12 @@ export function projectToMarkdown(
       for (const para of header.paragraphs) {
         lines.push(formatParagraphMarkdown(para, includeRevisions));
       }
+      if (includeTables) {
+        for (const table of header.tables) {
+          lines.push("");
+          lines.push(...formatTableMarkdown(table, includeRevisions));
+        }
+      }
     }
 
     for (const footer of doc.footers.values()) {
@@ -272,6 +291,12 @@ export function projectToMarkdown(
       lines.push(`--- Footer (${footer.variant}) ---`);
       for (const para of footer.paragraphs) {
         lines.push(formatParagraphMarkdown(para, includeRevisions));
+      }
+      if (includeTables) {
+        for (const table of footer.tables) {
+          lines.push("");
+          lines.push(...formatTableMarkdown(table, includeRevisions));
+        }
       }
     }
   }

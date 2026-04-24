@@ -55,6 +55,12 @@ export interface DocxXmlParts {
   document: FXPNode[];
   headers: Map<string, FXPNode[]>;
   footers: Map<string, FXPNode[]>;
+  /** Parsed word/_rels/document.xml.rels for mutation by header/footer ops. */
+  documentRels?: FXPNode[];
+  /** Parsed [Content_Types].xml for mutation by header/footer ops. */
+  contentTypes?: FXPNode[];
+  /** Parsed word/settings.xml for mutation (e.g., w:evenAndOddHeaders). */
+  settings?: FXPNode[];
   /** All other XML files in the zip (styles, numbering, etc.) — preserved as-is. */
   [key: string]: FXPNode[] | Map<string, FXPNode[]> | undefined;
 }
@@ -74,6 +80,8 @@ export interface HeaderFooter {
   rId: string;
   /** Paragraphs inside this header/footer. */
   paragraphs: NormalizedParagraph[];
+  /** Tables inside this header/footer. */
+  tables: NormalizedTable[];
   /** The FXP object for this header/footer XML file. */
   xmlRef: FXPNode[];
 }
@@ -260,7 +268,11 @@ export type Patch =
   | DeleteTableRowPatch
   | ReplaceCellTextPatch
   | ApplyFormattingPatch
-  | ApplyStylePatch;
+  | ApplyStylePatch
+  | AddHeaderPatch
+  | AddFooterPatch
+  | RemoveHeaderPatch
+  | RemoveFooterPatch;
 
 export interface ReplaceTextPatch {
   type: "replace_text";
@@ -302,8 +314,11 @@ export interface AppendTextPatch {
   type: "append_text";
   /** Text for the new paragraph appended to the end of the document body.
    *  Supports markdown table syntax — pipe-delimited rows with a separator
-   *  line are automatically converted to a real OOXML table. */
+   *  line are automatically converted to a real OOXML table.
+   *  Supports {{FIELD}} placeholders (e.g., {{PAGE}}, {{NUMPAGES}}). */
   text: string;
+  /** Target a header/footer instead of the document body. */
+  container?: { type: "header" | "footer"; variant: HeaderFooterVariant };
 }
 
 export interface AddTablePatch {
@@ -314,6 +329,8 @@ export interface AddTablePatch {
   headers?: string[];
   /** Data rows. Each sub-array is one row of cell text values. */
   rows: string[][];
+  /** Target a header/footer instead of the document body. */
+  container?: { type: "header" | "footer"; variant: HeaderFooterVariant };
 }
 
 export interface AddTableRowPatch {
@@ -404,6 +421,41 @@ export interface ApplyStylePatch {
    * For character styles (with find): must be a "character" type style.
    */
   style: string;
+}
+
+// =============================================================================
+// Header/Footer Patch Types
+// =============================================================================
+
+/** Variant for header/footer targeting. */
+export type HeaderFooterVariant = "default" | "first" | "even";
+
+export interface AddHeaderPatch {
+  type: "add_header";
+  /** Which header variant to create. */
+  variant: HeaderFooterVariant;
+  /** Text content for each paragraph. Supports {{FIELD}} placeholders. */
+  paragraphs: string[];
+}
+
+export interface AddFooterPatch {
+  type: "add_footer";
+  /** Which footer variant to create. */
+  variant: HeaderFooterVariant;
+  /** Text content for each paragraph. Supports {{FIELD}} placeholders. */
+  paragraphs: string[];
+}
+
+export interface RemoveHeaderPatch {
+  type: "remove_header";
+  /** Which header variant to remove. */
+  variant: HeaderFooterVariant;
+}
+
+export interface RemoveFooterPatch {
+  type: "remove_footer";
+  /** Which footer variant to remove. */
+  variant: HeaderFooterVariant;
 }
 
 // =============================================================================

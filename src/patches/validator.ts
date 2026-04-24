@@ -173,6 +173,12 @@ export function validatePatch(
       if (!patch.text || patch.text.length === 0) {
         return { valid: false, error: "Empty append text" };
       }
+      if (patch.container) {
+        const containerValidation = validateContainerTarget(patch.container, doc);
+        if (!containerValidation.valid) {
+          return containerValidation;
+        }
+      }
       return { valid: true };
     }
     case "add_table": {
@@ -204,6 +210,12 @@ export function validatePatch(
       }
       // Validate afterId target exists if provided
       if (patch.afterId) {
+        if (patch.container) {
+          return {
+            valid: false,
+            error: `"afterId" is not supported when "container" is set — container-targeted tables are appended to the end of the header/footer`,
+          };
+        }
         const found = findElementById(patch.afterId, doc);
         if (!found) {
           return {
@@ -211,6 +223,30 @@ export function validatePatch(
             error: `Element "${patch.afterId}" not found`,
           };
         }
+      }
+      // Validate container if provided
+      if (patch.container) {
+        const containerValidation = validateContainerTarget(patch.container, doc);
+        if (!containerValidation.valid) {
+          return containerValidation;
+        }
+      }
+      return { valid: true };
+    }
+    case "add_header":
+    case "add_footer": {
+      if (!["default", "first", "even"].includes(patch.variant)) {
+        return { valid: false, error: `Invalid variant: ${patch.variant}` };
+      }
+      if (!patch.paragraphs || patch.paragraphs.length === 0) {
+        return { valid: false, error: "At least one paragraph is required" };
+      }
+      return { valid: true };
+    }
+    case "remove_header":
+    case "remove_footer": {
+      if (!["default", "first", "even"].includes(patch.variant)) {
+        return { valid: false, error: `Invalid variant: ${patch.variant}` };
       }
       return { valid: true };
     }
@@ -220,6 +256,29 @@ export function validatePatch(
         error: `Unknown patch type: ${(patch as Patch).type}`,
       };
   }
+}
+
+function validateContainerTarget(
+  container: { type: string; variant: string },
+  doc: NormalizedDocument,
+): ValidationResult {
+  if (!["header", "footer"].includes(container.type)) {
+    return { valid: false, error: `Invalid container type: ${container.type}` };
+  }
+  if (!["default", "first", "even"].includes(container.variant)) {
+    return { valid: false, error: `Invalid container variant: ${container.variant}` };
+  }
+
+  const parts = container.type === "header" ? doc.headers : doc.footers;
+  const exists = [...parts.values()].some((part) => part.variant === container.variant);
+  if (!exists) {
+    return {
+      valid: false,
+      error: `No ${container.type} with variant "${container.variant}" found`,
+    };
+  }
+
+  return { valid: true };
 }
 
 /**
@@ -254,7 +313,7 @@ export function findParagraphById(
 }
 
 /**
- * Find a table by its ID in the document body (including nested tables).
+ * Find a table by its ID in the document body, headers, and footers (including nested tables).
  */
 export function findTableById(
   id: string,
@@ -266,6 +325,23 @@ export function findTableById(
       if (found) return found;
     }
   }
+
+  // Search header tables
+  for (const header of doc.headers.values()) {
+    for (const table of header.tables) {
+      const found = searchTableInTable(id, table);
+      if (found) return found;
+    }
+  }
+
+  // Search footer tables
+  for (const footer of doc.footers.values()) {
+    for (const table of footer.tables) {
+      const found = searchTableInTable(id, table);
+      if (found) return found;
+    }
+  }
+
   return undefined;
 }
 

@@ -54,15 +54,21 @@ Patch types:
 6. delete_table_row — Delete a row from a table.
    { "type": "delete_table_row", "target": "<table_id>", "row": <row_index> }
 
-7. add_table — Add a new table to the document.
+7. add_table — Add a new table to the document body (or a header/footer).
    { "type": "add_table", "headers": ["col1", "col2"], "rows": [["val1", "val2"], ...] }
    "headers" is optional. "afterId" is optional — if specified, the table is inserted after that element ID; otherwise it's appended to the end.
    { "type": "add_table", "afterId": "<element_id>", "headers": ["col1", "col2"], "rows": [["val1", "val2"]] }
+   To add a table inside a header/footer, use "container":
+   { "type": "add_table", "headers": ["A", "B"], "rows": [["1", "2"]], "container": { "type": "header", "variant": "default" } }
 
-8. append_text — Append text (or a markdown table) to the end of the document.
+8. append_text — Append text (or a markdown table) to the end of the document body (or a header/footer).
    { "type": "append_text", "text": "New paragraph text" }
    Supports markdown table syntax — pipe-delimited rows with a separator line are auto-converted to a real table:
    { "type": "append_text", "text": "| Name | Age |\\n| --- | --- |\\n| Alice | 30 |" }
+   Supports {{FIELD}} placeholders for dynamic content: {{PAGE}}, {{NUMPAGES}}, {{DATE}}, {{TIME}}, {{FILENAME}}.
+   Example: { "type": "append_text", "text": "Page {{PAGE}} of {{NUMPAGES}}" }
+   To append to a header/footer instead of the body, use "container":
+   { "type": "append_text", "text": "Updated: {{DATE}}", "container": { "type": "footer", "variant": "default" } }
 
 9. apply_formatting — Apply inline formatting to a substring or entire paragraph.
    { "type": "apply_formatting", "target": "<paragraph_id>", "find": "<exact_text>", "occurrence": 1, "formatting": { ... } }
@@ -77,21 +83,38 @@ Patch types:
    - highlight: "yellow"/"green"/"cyan"/null (color name, null=remove)
    Only properties you include are changed; omitted properties are left unchanged.
 
-8. apply_style — Apply a pre-existing style to a paragraph or substring.
+10. apply_style — Apply a pre-existing style to a paragraph or substring.
    { "type": "apply_style", "target": "<paragraph_id>", "style": "<style_id>" }
    Omit "find" to apply a paragraph style (e.g. "Heading1", "Title").
    Include "find" to apply a character style (e.g. "Strong", "Emphasis") to matched text:
    { "type": "apply_style", "target": "<paragraph_id>", "find": "<exact_text>", "style": "<character_style_id>", "occurrence": 1 }
    The style must already exist in the document (listed under "Available Styles" in the projection).
 
+11. add_header — Create a new header in the document's last section.
+   { "type": "add_header", "variant": "default"|"first"|"even", "paragraphs": ["Header text", "Page {{PAGE}}"] }
+   "variant" controls which pages: "default" (all/odd pages), "first" (first page only), "even" (even pages).
+   Paragraph text supports {{FIELD}} placeholders: {{PAGE}}, {{NUMPAGES}}, {{DATE}}, {{TIME}}, {{FILENAME}}.
+
+12. add_footer — Create a new footer in the document's last section.
+   { "type": "add_footer", "variant": "default"|"first"|"even", "paragraphs": ["Page {{PAGE}} of {{NUMPAGES}}"] }
+   Same variant and field placeholder support as add_header.
+
+13. remove_header — Remove a header from the document's last section.
+   { "type": "remove_header", "variant": "default"|"first"|"even" }
+
+14. remove_footer — Remove a footer from the document's last section.
+   { "type": "remove_footer", "variant": "default"|"first"|"even" }
+
 Rules:
 - "find" must be an EXACT substring of the paragraph text. Copy it character-for-character from the document.
 - "occurrence" is 1-based. Default is 1 (first occurrence). Use higher numbers only if there are duplicates within the same paragraph.
-- Paragraph IDs look like: p0, p1, tbl0.r0.c0.p0, hdr.default.p0, etc.
+- Paragraph IDs look like: p0, p1, tbl0.r0.c0.p0, hdr.default.p0, ftr.default.p0, etc.
 - Table IDs look like: tbl0, tbl1, etc.
 - When replacing text that could be a substring of other words, include surrounding characters in "find" and "replace" to disambiguate (e.g., use " the " instead of "the" to avoid matching "other").
 - For formatting changes, prefer apply_formatting over apply_style unless the user specifically asks for a style.
 - For structural changes like "make this a heading", use apply_style with the appropriate paragraph style.
+- For headers/footers, use add_header/add_footer to create new ones. Existing header/footer paragraphs can be edited with replace_text, insert_text, etc. using their paragraph IDs (e.g., "hdr.default.p0").
+- Use {{PAGE}} and {{NUMPAGES}} in header/footer text for page numbers (e.g., "Page {{PAGE}} of {{NUMPAGES}}").
 - If the user asks for something you can't do with patches (e.g., add images), explain that in "explanation" and return an empty "patches" array.
 - ALWAYS respond with valid JSON. No markdown fences, no extra text.`;
 
@@ -163,10 +186,10 @@ function printPatches(results: PatchResult[]): void {
         desc = `delete row ${r.patch.row}`;
         break;
       case "add_table":
-        desc = `add table (${r.patch.rows.length} rows, ${r.patch.headers ? "with headers" : "no headers"})${r.patch.afterId ? ` after ${r.patch.afterId}` : ""}`;
+        desc = `add table (${r.patch.rows.length} rows, ${r.patch.headers ? "with headers" : "no headers"})${r.patch.afterId ? ` after ${r.patch.afterId}` : ""}${r.patch.container ? ` in ${r.patch.container.type}.${r.patch.container.variant}` : ""}`;
         break;
       case "append_text":
-        desc = `append "${truncate(r.patch.text, 40)}"`;
+        desc = `append "${truncate(r.patch.text, 40)}"${r.patch.container ? ` to ${r.patch.container.type}.${r.patch.container.variant}` : ""}`;
         break;
       case "apply_formatting": {
         const props = Object.keys(r.patch.formatting).join(", ");
@@ -183,6 +206,18 @@ function printPatches(results: PatchResult[]): void {
         desc = `style "${r.patch.style}"${findHint}`;
         break;
       }
+      case "add_header":
+        desc = `add ${r.patch.variant} header (${r.patch.paragraphs.length} paragraphs)`;
+        break;
+      case "add_footer":
+        desc = `add ${r.patch.variant} footer (${r.patch.paragraphs.length} paragraphs)`;
+        break;
+      case "remove_header":
+        desc = `remove ${r.patch.variant} header`;
+        break;
+      case "remove_footer":
+        desc = `remove ${r.patch.variant} footer`;
+        break;
     }
     console.log(`  ${status} [${target}] ${desc}`);
     if (!r.success && r.error) {
