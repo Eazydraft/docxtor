@@ -35,6 +35,7 @@ import {
   needsSpacePreserve,
   findChild,
   cloneNode,
+  createElement,
 } from "../xml/helpers.js";
 import type { RevisionContext } from "./revision.js";
 import {
@@ -43,6 +44,11 @@ import {
   convertRunToDeleted,
   createRevisionRun,
 } from "./revision.js";
+import {
+  stripFormattingMarkers,
+  parseFormattedText,
+  type FormattedSegment,
+} from "./markdown-parser.js";
 
 /**
  * Find the parent node that directly contains a run, and remove the run.
@@ -87,15 +93,16 @@ export function executeReplaceText(
   revCtx?: RevisionContext,
 ): void {
   const occurrence = patch.occurrence ?? 1;
-  const matchStart = findOccurrence(paragraph.text, patch.find, occurrence);
+  const plainFind = stripFormattingMarkers(patch.find);
+  const matchStart = findOccurrence(paragraph.text, plainFind, occurrence);
 
   if (matchStart === -1) {
     throw new Error(
-      `Text "${patch.find}" not found in paragraph "${paragraph.id}" (occurrence ${occurrence})`,
+      `Text "${plainFind}" not found in paragraph "${paragraph.id}" (occurrence ${occurrence})`,
     );
   }
 
-  const matchEnd = matchStart + patch.find.length;
+  const matchEnd = matchStart + plainFind.length;
   const ranges = resolveRunRanges(paragraph.runs, matchStart, matchEnd);
 
   if (ranges.length === 0) {
@@ -113,16 +120,32 @@ export function executeReplaceText(
 
 /**
  * Direct (non-revision) replacement.
+ *
+ * If the replacement text contains GFM formatting markers (**bold**, _italic_,
+ * ~~strike~~), it is parsed into segments and each segment becomes a separate
+ * run with the appropriate w:rPr formatting, inheriting any existing formatting
+ * from the matched run.
  */
 function executeReplaceTextDirect(
   paragraph: NormalizedParagraph,
   patch: ReplaceTextPatch,
   ranges: ReturnType<typeof resolveRunRanges>,
 ): void {
+  const segments = parseFormattedText(patch.replace);
+  const hasFormatting = segments.some((s) => s.bold || s.italic || s.strikethrough || s.underline);
+
   if (ranges.length === 1) {
     const range = ranges[0]!;
     const splitResult = splitRun(paragraph.xmlRef, range);
-    setRunText(splitResult.matched, patch.replace);
+
+    if (!hasFormatting) {
+      // Simple plain text replacement
+      const plainText = stripFormattingMarkers(patch.replace);
+      setRunText(splitResult.matched, plainText);
+    } else {
+      // Replace the matched run with formatted runs
+      replaceRunWithFormattedRuns(paragraph.xmlRef, splitResult.matched, segments);
+    }
   } else {
     const matchedRuns = splitRunsForMatch(paragraph.xmlRef, ranges);
 
@@ -132,8 +155,14 @@ function executeReplaceTextDirect(
       );
     }
 
-    setRunText(matchedRuns[0]!, patch.replace);
+    if (!hasFormatting) {
+      const plainText = stripFormattingMarkers(patch.replace);
+      setRunText(matchedRuns[0]!, plainText);
+    } else {
+      replaceRunWithFormattedRuns(paragraph.xmlRef, matchedRuns[0]!, segments);
+    }
 
+    // Remove extra matched runs
     for (let i = 1; i < matchedRuns.length; i++) {
       removeRunFromParagraph(paragraph.xmlRef, matchedRuns[i]!);
     }
@@ -189,11 +218,20 @@ function executeReplaceTextRevision(
   // Create the w:del element wrapping deleted runs
   const delElement = createDelElement(revCtx, deletedRuns);
 
-  // Create the replacement run wrapped in w:ins
+  // Create the replacement run(s) wrapped in w:ins
   let insElement: FXPNode | undefined;
-  if (patch.replace.length > 0) {
-    const newRun = createRevisionRun(patch.replace, rPrNode);
-    insElement = createInsElement(revCtx, [newRun]);
+  const segments = parseFormattedText(patch.replace);
+  const hasFormatting = segments.some((s) => s.bold || s.italic || s.strikethrough || s.underline);
+
+  if (segments.length > 0 && stripFormattingMarkers(patch.replace).length > 0) {
+    if (hasFormatting) {
+      const newRuns = createFormattedRuns(segments, rPrNode);
+      insElement = createInsElement(revCtx, newRuns);
+    } else {
+      const plainText = stripFormattingMarkers(patch.replace);
+      const newRun = createRevisionRun(plainText, rPrNode);
+      insElement = createInsElement(revCtx, [newRun]);
+    }
   }
 
   // Find the position of the first matched run in the parent
@@ -235,11 +273,12 @@ export function executeInsertText(
   revCtx?: RevisionContext,
 ): void {
   const occurrence = patch.occurrence ?? 1;
-  const anchorStart = findOccurrence(paragraph.text, patch.anchor, occurrence);
+  const plainAnchor = stripFormattingMarkers(patch.anchor);
+  const anchorStart = findOccurrence(paragraph.text, plainAnchor, occurrence);
 
   if (anchorStart === -1) {
     throw new Error(
-      `Anchor text "${patch.anchor}" not found in paragraph "${paragraph.id}" (occurrence ${occurrence})`,
+      `Anchor text "${plainAnchor}" not found in paragraph "${paragraph.id}" (occurrence ${occurrence})`,
     );
   }
 
@@ -247,7 +286,7 @@ export function executeInsertText(
   const insertOffset =
     patch.position === "before"
       ? anchorStart
-      : anchorStart + patch.anchor.length;
+      : anchorStart + plainAnchor.length;
 
   if (revCtx) {
     executeInsertTextRevision(paragraph, patch, insertOffset, revCtx);
@@ -257,7 +296,8 @@ export function executeInsertText(
 }
 
 /**
- * Direct (non-revision) insertion — modifies the run's text in-place.
+ * Direct (non-revision) insertion — modifies the run's text in-place,
+ * or creates multiple formatted runs if the text contains GFM markers.
  */
 function executeInsertTextDirect(
   paragraph: NormalizedParagraph,
@@ -283,15 +323,53 @@ function executeInsertTextDirect(
     targetRun = lastRun;
   }
 
-  const localInsertOffset = insertOffset - targetRun.startOffset;
+  const segments = parseFormattedText(patch.text);
+  const hasFormatting = segments.some((s) => s.bold || s.italic || s.strikethrough || s.underline);
 
-  const currentText = getRunText(targetRun.xmlRef);
-  const newText =
-    currentText.slice(0, localInsertOffset) +
-    patch.text +
-    currentText.slice(localInsertOffset);
+  if (!hasFormatting) {
+    // Simple plain text insertion
+    const plainText = stripFormattingMarkers(patch.text);
+    const localInsertOffset = insertOffset - targetRun.startOffset;
+    const currentText = getRunText(targetRun.xmlRef);
+    const newText =
+      currentText.slice(0, localInsertOffset) +
+      plainText +
+      currentText.slice(localInsertOffset);
+    setRunText(targetRun.xmlRef, newText);
+  } else {
+    // Formatted insertion: split the target run at the insert point and
+    // insert formatted runs between the halves
+    const localInsertOffset = insertOffset - targetRun.startOffset;
+    const rPrNode = findChild(targetRun.xmlRef, "w:rPr");
+    const parentChildren = findRunParentChildren(paragraph.xmlRef, targetRun.xmlRef);
+    if (!parentChildren) {
+      throw new Error("Target run not found in paragraph");
+    }
 
-  setRunText(targetRun.xmlRef, newText);
+    const runIndex = parentChildren.indexOf(targetRun.xmlRef);
+    const fullText = targetRun.text;
+    const beforeText = fullText.slice(0, localInsertOffset);
+    const afterText = fullText.slice(localInsertOffset);
+
+    const newNodes: FXPNode[] = [];
+
+    // Before part (if any)
+    if (beforeText.length > 0) {
+      newNodes.push(createRunWithTextAndFormatting(beforeText, rPrNode));
+    }
+
+    // Formatted inserted runs
+    const formattedRuns = createFormattedRuns(segments, rPrNode);
+    newNodes.push(...formattedRuns);
+
+    // After part (if any)
+    if (afterText.length > 0) {
+      newNodes.push(createRunWithTextAndFormatting(afterText, rPrNode));
+    }
+
+    // Replace the original run
+    parentChildren.splice(runIndex, 1, ...newNodes);
+  }
 }
 
 /**
@@ -331,9 +409,18 @@ function executeInsertTextRevision(
   // Get formatting from the target run to clone onto the new run
   const rPrNode = findChild(targetRun.xmlRef, "w:rPr");
 
-  // Create the new run with inserted text wrapped in w:ins
-  const newRun = createRevisionRun(patch.text, rPrNode);
-  const insElement = createInsElement(revCtx, [newRun]);
+  // Create the new run(s) with inserted text wrapped in w:ins
+  const segments = parseFormattedText(patch.text);
+  const hasFormatting = segments.some((s) => s.bold || s.italic || s.strikethrough || s.underline);
+
+  let insRuns: FXPNode[];
+  if (hasFormatting) {
+    insRuns = createFormattedRuns(segments, rPrNode);
+  } else {
+    const plainText = stripFormattingMarkers(patch.text);
+    insRuns = [createRevisionRun(plainText, rPrNode)];
+  }
+  const insElement = createInsElement(revCtx, insRuns);
 
   // Find the parent children array containing the target run
   const parentChildren = findRunParentChildren(paragraph.xmlRef, targetRun.xmlRef);
@@ -455,15 +542,16 @@ function executeDeleteTextRevision(
   revCtx: RevisionContext,
 ): void {
   const occurrence = patch.occurrence ?? 1;
-  const matchStart = findOccurrence(paragraph.text, patch.find, occurrence);
+  const plainFind = stripFormattingMarkers(patch.find);
+  const matchStart = findOccurrence(paragraph.text, plainFind, occurrence);
 
   if (matchStart === -1) {
     throw new Error(
-      `Text "${patch.find}" not found in paragraph "${paragraph.id}" (occurrence ${occurrence})`,
+      `Text "${plainFind}" not found in paragraph "${paragraph.id}" (occurrence ${occurrence})`,
     );
   }
 
-  const matchEnd = matchStart + patch.find.length;
+  const matchEnd = matchStart + plainFind.length;
   const ranges = resolveRunRanges(paragraph.runs, matchStart, matchEnd);
 
   if (ranges.length === 0) {
@@ -518,6 +606,93 @@ function executeDeleteTextRevision(
 
   // Insert w:del at the position of the first matched run
   parentChildren.splice(firstRunIndex, 0, delElement);
+}
+
+// =============================================================================
+// Formatted run creation from GFM markers
+// =============================================================================
+
+/**
+ * Build an array of w:r FXP nodes from parsed formatted segments.
+ *
+ * Each segment becomes a run. Formatting flags from the segment (bold, italic,
+ * strikethrough) are layered on top of any existing rPr inherited from the
+ * base run.
+ */
+export function createFormattedRuns(
+  segments: FormattedSegment[],
+  baseRPr: FXPNode | undefined,
+): FXPNode[] {
+  const runs: FXPNode[] = [];
+
+  for (const seg of segments) {
+    if (seg.text.length === 0) continue;
+
+    const run = createRunWithTextAndFormatting(seg.text, baseRPr);
+
+    // Layer GFM formatting on top
+    if (seg.bold || seg.italic || seg.strikethrough || seg.underline) {
+      let rPr = findChild(run, "w:rPr");
+      if (!rPr) {
+        rPr = createElement("w:rPr", []);
+        const children = getChildren(run);
+        children.unshift(rPr);
+      }
+      const rPrChildren = getChildren(rPr);
+
+      if (seg.bold && !findChild(rPr, "w:b")) {
+        rPrChildren.push(createElement("w:b", []));
+      }
+      if (seg.italic && !findChild(rPr, "w:i")) {
+        rPrChildren.push(createElement("w:i", []));
+      }
+      if (seg.strikethrough && !findChild(rPr, "w:strike")) {
+        rPrChildren.push(createElement("w:strike", []));
+      }
+      if (seg.underline && !findChild(rPr, "w:u")) {
+        rPrChildren.push(createElement("w:u", [], { "w:val": "single" }));
+      }
+    }
+
+    runs.push(run);
+  }
+
+  return runs;
+}
+
+/**
+ * Replace a single run node in a paragraph with multiple formatted runs.
+ *
+ * Finds the run in the paragraph's children (or nested containers) and
+ * splices in the new runs.
+ */
+function replaceRunWithFormattedRuns(
+  paragraphNode: FXPNode,
+  runNode: FXPNode,
+  segments: FormattedSegment[],
+): void {
+  const rPrNode = findChild(runNode, "w:rPr");
+  const newRuns = createFormattedRuns(segments, rPrNode);
+
+  if (newRuns.length === 0) {
+    // All segments were empty — just clear the run text
+    setRunText(runNode, "");
+    return;
+  }
+
+  // Find the run in parent's children and replace
+  const parentChildren = findRunParentChildren(paragraphNode, runNode);
+  if (parentChildren) {
+    const idx = parentChildren.indexOf(runNode);
+    if (idx !== -1) {
+      parentChildren.splice(idx, 1, ...newRuns);
+      return;
+    }
+  }
+
+  // Fallback: just set text on the existing run (shouldn't happen)
+  const plainText = segments.map((s) => s.text).join("");
+  setRunText(runNode, plainText);
 }
 
 // =============================================================================

@@ -47,17 +47,16 @@ import {
   findChildren,
   getChildren,
   getTagName,
-  createRun,
   createElement,
 } from "../xml/helpers.js";
-import { createInsElement, createRevisionRun, createTrPrIns } from "./revision.js";
+import { createInsElement, createTrPrIns } from "./revision.js";
 import {
   executeAddHeader,
   executeAddFooter,
   executeRemoveHeader,
   executeRemoveFooter,
 } from "./header-footer-ops.js";
-import { buildFieldRuns, hasFieldPlaceholders } from "./field-codes.js";
+import { buildFieldRuns } from "./field-codes.js";
 
 /**
  * Apply a list of patches to a NormalizedDocument.
@@ -276,7 +275,10 @@ function insertIntoBody(
 /**
  * Compute the next available paragraph and table IDs.
  */
-function getNextIds(doc: NormalizedDocument): { nextPIdx: number; nextTblIdx: number } {
+function getNextIds(doc: NormalizedDocument): {
+  nextPIdx: number;
+  nextTblIdx: number;
+} {
   let maxPIdx = -1;
   let maxTblIdx = -1;
   for (const el of doc.body) {
@@ -328,7 +330,8 @@ function parseTextSegments(text: string): TextSegment[] {
         const cells = parseMarkdownRow(lines[i]!);
         // Pad or trim to match header count
         while (cells.length < headerCells.length) cells.push("");
-        if (cells.length > headerCells.length) cells.length = headerCells.length;
+        if (cells.length > headerCells.length)
+          cells.length = headerCells.length;
         dataRows.push(cells);
         i++;
       }
@@ -427,21 +430,12 @@ function executeAppendText(
   for (const segment of segments) {
     if (segment.kind === "text") {
       for (const line of segment.lines) {
-        if (hasFieldPlaceholders(line)) {
-          const runs = buildFieldRuns(line);
-          if (revCtx) {
-            const insElement = createInsElement(revCtx, runs);
-            newNodes.push({ "w:p": [insElement] });
-          } else {
-            newNodes.push({ "w:p": runs });
-          }
-        } else if (revCtx) {
-          const run = createRevisionRun(line, undefined);
-          const insElement = createInsElement(revCtx, [run]);
+        const runs = buildFieldRuns(line);
+        if (revCtx) {
+          const insElement = createInsElement(revCtx, runs);
           newNodes.push({ "w:p": [insElement] });
         } else {
-          const run = createRun(line);
-          newNodes.push({ "w:p": [run] });
+          newNodes.push({ "w:p": runs });
         }
       }
     } else {
@@ -487,9 +481,7 @@ function executeAddTablePatch(
 ): void {
   if (patch.container) {
     if (patch.afterId) {
-      throw new Error(
-        `"afterId" is not supported when "container" is set`,
-      );
+      throw new Error(`"afterId" is not supported when "container" is set`);
     }
     executeAddTableToContainer(doc, patch, revCtx);
     return;
@@ -579,21 +571,12 @@ function executeAppendTextToContainer(
     if (segment.kind === "text") {
       for (const line of segment.lines) {
         let pNode: FXPNode;
-        if (hasFieldPlaceholders(line)) {
-          const runs = buildFieldRuns(line);
-          if (revCtx) {
-            const insElement = createInsElement(revCtx, runs);
-            pNode = { "w:p": [insElement] };
-          } else {
-            pNode = { "w:p": runs };
-          }
-        } else if (revCtx) {
-          const run = createRevisionRun(line, undefined);
-          const insElement = createInsElement(revCtx, [run]);
+        const runs = buildFieldRuns(line);
+        if (revCtx) {
+          const insElement = createInsElement(revCtx, runs);
           pNode = { "w:p": [insElement] };
         } else {
-          const run = createRun(line);
-          pNode = { "w:p": [run] };
+          pNode = { "w:p": runs };
         }
         rootChildren.push(pNode);
         const normalized = normalizeParagraph(

@@ -105,13 +105,28 @@ Patch types:
 14. remove_footer — Remove a footer from the document's last section.
    { "type": "remove_footer", "variant": "default"|"first"|"even" }
 
+Inline formatting in the projection:
+- The projection uses GitHub-flavored Markdown markers to show existing formatting: **bold**, _italic_, ~~strikethrough~~, <u>underline</u>, **_bold+italic_**.
+- These markers are NOT part of the actual document text. They are annotations showing how text is formatted.
+
+Using formatting markers in "find" and "anchor":
+- You may include GFM markers in "find" and "anchor" fields for readability, but they are automatically stripped before matching. The match is always against the plain text.
+- Example: "find": "**important**" matches the plain text "important" (which happens to be bold).
+
+Using formatting markers in "replace" and "text":
+- To apply inline formatting when replacing or inserting text, use GFM markers in the "replace" or "text" fields.
+- Example: "replace": "**bold text**" will create bold text in the document.
+- Example: "text": "This is _italic_ and **bold**" will create a mix of plain, italic, and bold runs.
+- Supported markers: **bold**, _italic_, ~~strikethrough~~, <u>underline</u>, and combinations like **_bold+italic_**.
+- This is a convenient alternative to using a separate apply_formatting patch.
+
 Rules:
-- "find" must be an EXACT substring of the paragraph text. Copy it character-for-character from the document.
+- "find" must be an EXACT substring of the paragraph text (ignoring any formatting markers). Copy it character-for-character from the document.
 - "occurrence" is 1-based. Default is 1 (first occurrence). Use higher numbers only if there are duplicates within the same paragraph.
 - Paragraph IDs look like: p0, p1, tbl0.r0.c0.p0, hdr.default.p0, ftr.default.p0, etc.
 - Table IDs look like: tbl0, tbl1, etc.
 - When replacing text that could be a substring of other words, include surrounding characters in "find" and "replace" to disambiguate (e.g., use " the " instead of "the" to avoid matching "other").
-- For formatting changes, prefer apply_formatting over apply_style unless the user specifically asks for a style.
+- For formatting changes, prefer using inline markers in replace/text fields for simple bold/italic/strikethrough/underline. Use apply_formatting for other properties (color, font size, etc.) or when you need to format existing text without replacing it.
 - For structural changes like "make this a heading", use apply_style with the appropriate paragraph style.
 - For headers/footers, use add_header/add_footer to create new ones. Existing header/footer paragraphs can be edited with replace_text, insert_text, etc. using their paragraph IDs (e.g., "hdr.default.p0").
 - Use {{PAGE}} and {{NUMPAGES}} in header/footer text for page numbers (e.g., "Page {{PAGE}} of {{NUMPAGES}}").
@@ -141,7 +156,10 @@ const conversationMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
 // =============================================================================
 
 function getProjection(): string {
-  return doc.project("markdown", { includePageBreaks: true });
+  return doc.project("markdown", {
+    includePageBreaks: true,
+    includeFormatting: true,
+  });
 }
 
 function dim(s: string): string {
