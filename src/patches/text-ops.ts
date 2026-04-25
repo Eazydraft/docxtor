@@ -77,6 +77,33 @@ function removeRunFromParagraph(paragraphNode: FXPNode, runNode: FXPNode): void 
   }
 }
 
+/**
+ * Find the container element (w:ins, w:del, w:hyperlink) that directly holds
+ * a run, or undefined if the run is a direct child of the paragraph.
+ */
+function findRunContainer(
+  paragraphNode: FXPNode,
+  runNode: FXPNode,
+): FXPNode | undefined {
+  const children = getChildren(paragraphNode);
+  if (children.includes(runNode)) return undefined;
+
+  for (const child of children) {
+    const tag = getTagName(child);
+    if (tag === "w:hyperlink" || tag === "w:ins" || tag === "w:del") {
+      const containerChildren = getChildren(child);
+      if (containerChildren.includes(runNode)) return child;
+      for (const nested of containerChildren) {
+        const nestedTag = getTagName(nested);
+        if (nestedTag === "w:hyperlink" || nestedTag === "w:ins" || nestedTag === "w:del") {
+          if (getChildren(nested).includes(runNode)) return nested;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
 // =============================================================================
 // Replace text
 // =============================================================================
@@ -207,16 +234,11 @@ function executeReplaceTextRevision(
     throw new Error("Matched run not found in paragraph");
   }
 
-  // Clone matched runs and convert to deleted runs
-  const deletedRuns: FXPNode[] = [];
-  for (const run of matchedRuns) {
-    const cloned = cloneNode(run);
-    convertRunToDeleted(cloned);
-    deletedRuns.push(cloned);
-  }
-
-  // Create the w:del element wrapping deleted runs
-  const delElement = createDelElement(revCtx, deletedRuns);
+  // Check if the matched runs live inside a w:ins (unaccepted insertion).
+  // If so, we must NOT wrap in w:del — just remove the runs from the w:ins
+  // (deleting unaccepted content = removing the insertion, not creating a deletion).
+  const container = findRunContainer(paragraph.xmlRef, matchedRuns[0]!);
+  const insideIns = container != null && getTagName(container) === "w:ins";
 
   // Create the replacement run(s) wrapped in w:ins
   let insElement: FXPNode | undefined;
@@ -245,11 +267,43 @@ function executeReplaceTextRevision(
     }
   }
 
-  // Insert w:del and w:ins at the position of the first matched run
-  if (insElement) {
-    parentChildren.splice(firstRunIndex, 0, delElement, insElement);
+  if (insideIns) {
+    // Runs were inside w:ins — remove the w:ins if now empty, then insert
+    // replacement at the paragraph level (inside a new w:ins).
+    if (parentChildren.length === 0 && container) {
+      const paraChildren = getChildren(paragraph.xmlRef);
+      const containerIdx = paraChildren.indexOf(container);
+      if (containerIdx !== -1) {
+        paraChildren.splice(containerIdx, 1);
+        // Insert replacement at the container's former position
+        if (insElement) {
+          paraChildren.splice(containerIdx, 0, insElement);
+        }
+      }
+    } else if (insElement) {
+      // w:ins still has other runs; insert replacement after the w:ins
+      const paraChildren = getChildren(paragraph.xmlRef);
+      const containerIdx = paraChildren.indexOf(container!);
+      if (containerIdx !== -1) {
+        paraChildren.splice(containerIdx + 1, 0, insElement);
+      }
+    }
   } else {
-    parentChildren.splice(firstRunIndex, 0, delElement);
+    // Normal case: insert w:del and w:ins at the position of the first matched run
+    // Clone matched runs and convert to deleted runs
+    const deletedRuns: FXPNode[] = [];
+    for (const run of matchedRuns) {
+      const cloned = cloneNode(run);
+      convertRunToDeleted(cloned);
+      deletedRuns.push(cloned);
+    }
+    const delElement = createDelElement(revCtx, deletedRuns);
+
+    if (insElement) {
+      parentChildren.splice(firstRunIndex, 0, delElement, insElement);
+    } else {
+      parentChildren.splice(firstRunIndex, 0, delElement);
+    }
   }
 }
 
@@ -582,16 +636,9 @@ function executeDeleteTextRevision(
     throw new Error("Matched run not found in paragraph");
   }
 
-  // Clone matched runs and convert to deleted runs
-  const deletedRuns: FXPNode[] = [];
-  for (const run of matchedRuns) {
-    const cloned = cloneNode(run);
-    convertRunToDeleted(cloned);
-    deletedRuns.push(cloned);
-  }
-
-  // Create the w:del element
-  const delElement = createDelElement(revCtx, deletedRuns);
+  // Check if the matched runs live inside a w:ins (unaccepted insertion).
+  const container = findRunContainer(paragraph.xmlRef, matchedRuns[0]!);
+  const insideIns = container != null && getTagName(container) === "w:ins";
 
   // Find the position of the first matched run in the parent
   const firstRunIndex = parentChildren.indexOf(matchedRuns[0]!);
@@ -604,8 +651,27 @@ function executeDeleteTextRevision(
     }
   }
 
-  // Insert w:del at the position of the first matched run
-  parentChildren.splice(firstRunIndex, 0, delElement);
+  if (insideIns) {
+    // Runs were inside w:ins — just remove them (and the w:ins if now empty).
+    // No w:del needed: the content was never part of the accepted document.
+    if (parentChildren.length === 0 && container) {
+      const paraChildren = getChildren(paragraph.xmlRef);
+      const containerIdx = paraChildren.indexOf(container);
+      if (containerIdx !== -1) {
+        paraChildren.splice(containerIdx, 1);
+      }
+    }
+  } else {
+    // Normal case: clone matched runs, wrap in w:del
+    const deletedRuns: FXPNode[] = [];
+    for (const run of matchedRuns) {
+      const cloned = cloneNode(run);
+      convertRunToDeleted(cloned);
+      deletedRuns.push(cloned);
+    }
+    const delElement = createDelElement(revCtx, deletedRuns);
+    parentChildren.splice(firstRunIndex, 0, delElement);
+  }
 }
 
 // =============================================================================

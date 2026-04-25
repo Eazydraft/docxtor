@@ -41,6 +41,7 @@ import { executeApplyFormatting } from "./format-ops.js";
 import { executeApplyStyle } from "./style-ops.js";
 import { normalizeParagraph } from "../normalizer/paragraph.js";
 import { normalizeTable } from "../normalizer/table.js";
+import { enrichListType } from "../normalizer/document.js";
 import { createRevisionContext, type RevisionContext } from "./revision.js";
 import {
   findChild,
@@ -57,6 +58,15 @@ import {
   executeRemoveFooter,
 } from "./header-footer-ops.js";
 import { buildFieldRuns } from "./field-codes.js";
+import {
+  executeAddList,
+  executeAddListItem,
+  executeRemoveListItem,
+  executeConvertToList,
+  executeRemoveList,
+  executeSetListProperties,
+} from "./list-ops.js";
+import { createNumberingDefinition } from "./numbering.js";
 
 /**
  * Apply a list of patches to a NormalizedDocument.
@@ -176,6 +186,30 @@ function applySinglePatch(
         executeRemoveFooter(doc, patch);
         break;
       }
+      case "add_list": {
+        executeAddList(doc, patch, revCtx);
+        break;
+      }
+      case "add_list_item": {
+        executeAddListItem(doc, patch, revCtx);
+        break;
+      }
+      case "remove_list_item": {
+        executeRemoveListItem(doc, patch, revCtx);
+        break;
+      }
+      case "convert_to_list": {
+        executeConvertToList(doc, patch, revCtx);
+        break;
+      }
+      case "remove_list": {
+        executeRemoveList(doc, patch, revCtx);
+        break;
+      }
+      case "set_list_properties": {
+        executeSetListProperties(doc, patch, revCtx);
+        break;
+      }
     }
 
     return { success: true, patch };
@@ -193,7 +227,7 @@ function applySinglePatch(
  * Updates the paragraph's text, runs, and mappings in-place.
  */
 function reNormalizeParagraph(
-  _doc: NormalizedDocument,
+  doc: NormalizedDocument,
   paragraph: NormalizedParagraph,
 ): void {
   const fresh = normalizeParagraph(paragraph.xmlRef, paragraph.id);
@@ -204,6 +238,11 @@ function reNormalizeParagraph(
   paragraph.style = fresh.style;
   paragraph.listInfo = fresh.listInfo;
   paragraph.revisions = fresh.revisions;
+
+  // Enrich listType from numbering.xml
+  if (doc.xmlParts.numbering) {
+    enrichListType(paragraph, doc.xmlParts.numbering);
+  }
 }
 
 /**
@@ -297,18 +336,24 @@ function getNextIds(doc: NormalizedDocument): {
 // Markdown table parsing
 // =============================================================================
 
-/** A contiguous block of text lines or a markdown table. */
+/** A contiguous block of text lines, a markdown table, or a markdown list. */
 type TextSegment =
   | { kind: "text"; lines: string[] }
-  | { kind: "table"; headers: string[]; rows: string[][] };
+  | { kind: "table"; headers: string[]; rows: string[][] }
+  | { kind: "list"; listType: "bullet" | "ordered"; items: { text: string; level: number }[] };
 
 /**
- * Parse text into segments of plain lines and markdown tables.
+ * Parse text into segments of plain lines, markdown tables, and markdown lists.
  *
  * A markdown table is detected as:
  * - A header row: `| col1 | col2 | ...`
  * - A separator row: `| --- | --- | ...` (dashes, colons, spaces)
  * - Zero or more data rows: `| val1 | val2 | ...`
+ *
+ * A markdown list is detected as consecutive lines starting with:
+ * - Bullet: `- `, `* `, `+ ` (after optional whitespace)
+ * - Ordered: `\d+\. ` (after optional whitespace)
+ * Nesting uses 2-space increments. Blank lines within a list don't break it.
  */
 function parseTextSegments(text: string): TextSegment[] {
   const lines = text.split("\n");
@@ -336,19 +381,72 @@ function parseTextSegments(text: string): TextSegment[] {
         i++;
       }
       segments.push({ kind: "table", headers: headerCells, rows: dataRows });
-    } else {
-      // Plain text line
-      const last = segments[segments.length - 1];
-      if (last && last.kind === "text") {
-        last.lines.push(lines[i]!);
-      } else {
-        segments.push({ kind: "text", lines: [lines[i]!] });
-      }
-      i++;
+      continue;
     }
+
+    // Try to detect a markdown list
+    const listMatch = parseListLine(lines[i]!);
+    if (listMatch) {
+      const items: { text: string; level: number }[] = [];
+      const listType = listMatch.listType;
+      items.push({ text: listMatch.text, level: listMatch.level });
+      i++;
+
+      while (i < lines.length) {
+        const line = lines[i]!;
+        // Blank lines don't break the list
+        if (line.trim().length === 0) {
+          i++;
+          continue;
+        }
+        const nextMatch = parseListLine(line);
+        if (!nextMatch) break;
+        // Type change breaks the list
+        if (nextMatch.listType !== listType) break;
+
+        // Check for continuation lines (indented but not a list marker)
+        items.push({ text: nextMatch.text, level: nextMatch.level });
+        i++;
+      }
+
+      segments.push({ kind: "list", listType, items });
+      continue;
+    }
+
+    // Plain text line
+    const last = segments[segments.length - 1];
+    if (last && last.kind === "text") {
+      last.lines.push(lines[i]!);
+    } else {
+      segments.push({ kind: "text", lines: [lines[i]!] });
+    }
+    i++;
   }
 
   return segments;
+}
+
+/** Bullet pattern: optional whitespace + `- `, `* `, or `+ ` */
+const BULLET_RE = /^(\s*)[*+-]\s(.*)$/;
+/** Ordered pattern: optional whitespace + `N. ` */
+const ORDERED_RE = /^(\s*)\d+\.\s(.*)$/;
+
+function parseListLine(
+  line: string,
+): { listType: "bullet" | "ordered"; text: string; level: number } | undefined {
+  // Normalize tabs to 2 spaces
+  const normalized = line.replace(/\t/g, "  ");
+  let m = BULLET_RE.exec(normalized);
+  if (m) {
+    const indent = m[1]!.length;
+    return { listType: "bullet", text: m[2]!, level: Math.floor(indent / 2) };
+  }
+  m = ORDERED_RE.exec(normalized);
+  if (m) {
+    const indent = m[1]!.length;
+    return { listType: "ordered", text: m[2]!, level: Math.floor(indent / 2) };
+  }
+  return undefined;
 }
 
 function isMarkdownTableRow(line: string): boolean {
@@ -427,8 +525,17 @@ function executeAppendText(
   const segments = parseTextSegments(patch.text);
   const newNodes: FXPNode[] = [];
 
+  // Track list context for numId reuse across table segments
+  let lastListNumId: string | undefined;
+  let lastListType: "bullet" | "ordered" | undefined;
+
   for (const segment of segments) {
     if (segment.kind === "text") {
+      // A non-blank text segment resets list context
+      if (segment.lines.some((l) => l.trim().length > 0)) {
+        lastListNumId = undefined;
+        lastListType = undefined;
+      }
       for (const line of segment.lines) {
         const runs = buildFieldRuns(line);
         if (revCtx) {
@@ -438,13 +545,38 @@ function executeAppendText(
           newNodes.push({ "w:p": runs });
         }
       }
-    } else {
-      // Table segment
+    } else if (segment.kind === "table") {
       const tblNode = buildTableNode(segment.headers, segment.rows);
       if (revCtx) {
         markTableRowsAsInserted(tblNode, revCtx);
       }
       newNodes.push(tblNode);
+      // Don't reset list context — lists continue across tables
+    } else {
+      // List segment
+      let numId: string;
+      if (lastListNumId && lastListType === segment.listType) {
+        numId = lastListNumId;
+      } else {
+        numId = createNumberingDefinition(doc, segment.listType);
+      }
+      lastListNumId = numId;
+      lastListType = segment.listType;
+
+      for (const item of segment.items) {
+        const numPr = createElement("w:numPr", [
+          createElement("w:ilvl", [], { "w:val": String(item.level) }),
+          createElement("w:numId", [], { "w:val": numId }),
+        ]);
+        const pPr = createElement("w:pPr", [numPr]);
+        const runs = buildFieldRuns(item.text);
+        if (revCtx) {
+          const insElement = createInsElement(revCtx, runs);
+          newNodes.push({ "w:p": [pPr, insElement] });
+        } else {
+          newNodes.push({ "w:p": [pPr, ...runs] });
+        }
+      }
     }
   }
 
@@ -461,6 +593,9 @@ function executeAppendText(
     } else {
       const id = `p${nextPIdx++}`;
       const normalized = normalizeParagraph(node, id);
+      if (doc.xmlParts.numbering) {
+        enrichListType(normalized, doc.xmlParts.numbering);
+      }
       doc.body.push(normalized);
     }
   }
@@ -585,7 +720,7 @@ function executeAppendTextToContainer(
         );
         hf.paragraphs.push(normalized);
       }
-    } else {
+    } else if (segment.kind === "table") {
       // Table segment — add to container XML
       const tblNode = buildTableNode(segment.headers, segment.rows);
       if (revCtx) {
@@ -598,6 +733,33 @@ function executeAppendTextToContainer(
       const tblId = `${prefix}.${container.variant}.tbl${nextTblIdx}`;
       const normalizedTbl = normalizeTable(tblNode, tblId);
       hf.tables.push(normalizedTbl);
+    } else {
+      // List segment in container
+      const numId = createNumberingDefinition(doc, segment.listType);
+      for (const item of segment.items) {
+        const numPr = createElement("w:numPr", [
+          createElement("w:ilvl", [], { "w:val": String(item.level) }),
+          createElement("w:numId", [], { "w:val": numId }),
+        ]);
+        const pPr = createElement("w:pPr", [numPr]);
+        const runs = buildFieldRuns(item.text);
+        let pNode: FXPNode;
+        if (revCtx) {
+          const insElement = createInsElement(revCtx, runs);
+          pNode = { "w:p": [pPr, insElement] };
+        } else {
+          pNode = { "w:p": [pPr, ...runs] };
+        }
+        rootChildren.push(pNode);
+        const normalized = normalizeParagraph(
+          pNode,
+          `${prefix}.${container.variant}.p${nextPIdx++}`,
+        );
+        if (doc.xmlParts.numbering) {
+          enrichListType(normalized, doc.xmlParts.numbering);
+        }
+        hf.paragraphs.push(normalized);
+      }
     }
   }
 }

@@ -14,6 +14,7 @@ import type {
   StyleInfo,
   ProjectionOptions,
 } from "../types.js";
+import { getLevelInfo } from "../patches/numbering.js";
 
 // =============================================================================
 // JSON Projection
@@ -33,6 +34,8 @@ interface JsonProjectionParagraph {
   text: string;
   style?: string;
   listLevel?: number;
+  listType?: string;
+  numId?: string;
   formatting?: JsonProjectionRunFormatting[];
   revisions?: RevisionMark[];
   hasPageBreak?: boolean;
@@ -162,6 +165,10 @@ function projectParagraphToJson(
 
   if (para.listInfo) {
     result.listLevel = para.listInfo.level;
+    if (para.listInfo.listType) {
+      result.listType = para.listInfo.listType;
+    }
+    result.numId = para.listInfo.numId;
   }
 
   if (includeFormatting && para.runs.length > 0) {
@@ -255,6 +262,125 @@ function projectTableToJson(
 }
 
 // =============================================================================
+// List prefix rendering
+// =============================================================================
+
+/**
+ * Format a number according to a w:numFmt value.
+ */
+function formatNumber(n: number, fmt: string): string {
+  switch (fmt) {
+    case "decimal":
+      return String(n);
+    case "lowerLetter": {
+      // 1→a, 2→b, ..., 26→z, 27→aa
+      let result = "";
+      let v = n;
+      while (v > 0) {
+        v--;
+        result = String.fromCharCode(97 + (v % 26)) + result;
+        v = Math.floor(v / 26);
+      }
+      return result;
+    }
+    case "upperLetter": {
+      let result = "";
+      let v = n;
+      while (v > 0) {
+        v--;
+        result = String.fromCharCode(65 + (v % 26)) + result;
+        v = Math.floor(v / 26);
+      }
+      return result;
+    }
+    case "lowerRoman":
+      return toRoman(n).toLowerCase();
+    case "upperRoman":
+      return toRoman(n);
+    default:
+      return String(n);
+  }
+}
+
+function toRoman(n: number): string {
+  const vals = [1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1];
+  const syms = ["M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I"];
+  let result = "";
+  let v = n;
+  for (let i = 0; i < vals.length; i++) {
+    while (v >= vals[i]!) {
+      result += syms[i];
+      v -= vals[i]!;
+    }
+  }
+  return result;
+}
+
+/** Default ordered formats per level (cycling). */
+const DEFAULT_ORDERED_FMTS = ["decimal", "lowerLetter", "lowerRoman"];
+
+/**
+ * Build list prefix string for a paragraph, updating counter state.
+ * Returns empty string for non-list paragraphs.
+ */
+function buildListPrefix(
+  para: NormalizedParagraph,
+  counters: Map<string, number>,
+  numberingFxp?: import("../types.js").FXPNode[],
+): string {
+  if (!para.listInfo) return "";
+
+  const { numId, level, listType } = para.listInfo;
+  const indent = "  ".repeat(level);
+
+  // Clear all deeper-level counters for this numId
+  for (const key of counters.keys()) {
+    const [kid, klvl] = key.split(":");
+    if (kid === numId && Number(klvl) > level) {
+      counters.delete(key);
+    }
+  }
+
+  // Increment this level's counter
+  const counterKey = `${numId}:${level}`;
+  const count = (counters.get(counterKey) ?? 0) + 1;
+  counters.set(counterKey, count);
+
+  if (listType === "bullet" || !listType) {
+    return `${indent}- `;
+  }
+
+  if (listType === "multilevel" && numberingFxp) {
+    // Resolve compound prefix from w:lvlText pattern
+    const info = getLevelInfo(numberingFxp, numId, level);
+    if (info) {
+      // Replace %N placeholders with counter values
+      let prefix = info.pattern;
+      const placeholders = prefix.match(/%(\d+)/g);
+      if (placeholders) {
+        for (const ph of placeholders) {
+          const lvlIdx = parseInt(ph.slice(1), 10) - 1;
+          const lvlCount = counters.get(`${numId}:${lvlIdx}`) ?? 1;
+          const fmt = info.ancestorFormats.get(lvlIdx) ?? "decimal";
+          prefix = prefix.replace(ph, formatNumber(lvlCount, fmt));
+        }
+      }
+      return `${indent}${prefix} `;
+    }
+  }
+
+  // Ordered (independent counters) — resolve format from numbering.xml or use defaults
+  let fmt = DEFAULT_ORDERED_FMTS[level % DEFAULT_ORDERED_FMTS.length] ?? "decimal";
+  if (numberingFxp) {
+    const info = getLevelInfo(numberingFxp, numId, level);
+    if (info) {
+      fmt = info.format;
+    }
+  }
+  return `${indent}${formatNumber(count, fmt)}. `;
+}
+
+// =============================================================================
 // Markdown Projection
 // =============================================================================
 
@@ -288,9 +414,14 @@ export function projectToMarkdown(
   const includeFormatting = options.includeFormatting ?? false;
   const lines: string[] = [];
 
+  // List counter state: "numId:level" → current count
+  const listCounters = new Map<string, number>();
+  const numberingFxp = doc.xmlParts.numbering;
+
   for (const element of doc.body) {
     if (element.kind === "paragraph") {
-      lines.push(formatParagraphMarkdown(element, includeRevisions, includePageBreaks, includeFormatting));
+      const listPrefix = buildListPrefix(element, listCounters, numberingFxp);
+      lines.push(formatParagraphMarkdown(element, includeRevisions, includePageBreaks, includeFormatting, listPrefix));
     } else if (element.kind === "table" && includeTables) {
       lines.push(""); // blank line before table
       lines.push(...formatTableMarkdown(element, includeRevisions, includeFormatting));
@@ -349,9 +480,9 @@ function formatParagraphMarkdown(
   includeRevisions: boolean = false,
   includePageBreaks: boolean = false,
   includeFormatting: boolean = false,
+  listPrefix: string = "",
 ): string {
   const styleHint = para.style ? ` (${para.style})` : "";
-  const listHint = para.listInfo ? ` [list L${para.listInfo.level}]` : "";
 
   let text = includeFormatting
     ? annotateTextWithFormatting(para.text, para.runs)
@@ -405,7 +536,8 @@ function formatParagraphMarkdown(
     }
   }
 
-  return `[${para.id}]${styleHint}${listHint} ${text}`;
+  const listHint = para.listInfo ? ` {list:${para.listInfo.numId} L${para.listInfo.level}}` : "";
+  return `[${para.id}]${styleHint}${listHint} ${listPrefix}${text}`;
 }
 
 /**

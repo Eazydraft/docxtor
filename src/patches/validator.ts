@@ -250,6 +250,122 @@ export function validatePatch(
       }
       return { valid: true };
     }
+
+    // =========================================================================
+    // List operations
+    // =========================================================================
+
+    case "add_list": {
+      const validTypes = ["bullet", "ordered", "multilevel"];
+      if (!validTypes.includes(patch.listType)) {
+        return { valid: false, error: `Invalid listType: ${patch.listType}` };
+      }
+      if (!patch.items || patch.items.length === 0) {
+        return { valid: false, error: "items must be non-empty" };
+      }
+      if (patch.afterId && patch.container) {
+        return {
+          valid: false,
+          error: `"afterId" is not supported when "container" is set`,
+        };
+      }
+      if (patch.afterId) {
+        const found = findElementById(patch.afterId, doc);
+        if (!found) {
+          return { valid: false, error: `Element "${patch.afterId}" not found` };
+        }
+      }
+      if (patch.container) {
+        const containerValidation = validateContainerTarget(patch.container, doc);
+        if (!containerValidation.valid) return containerValidation;
+      }
+      return { valid: true };
+    }
+
+    case "add_list_item": {
+      const para = findParagraphById(patch.target, doc);
+      if (!para) {
+        return { valid: false, error: `Paragraph "${patch.target}" not found` };
+      }
+      if (!para.listInfo) {
+        return { valid: false, error: `Paragraph "${patch.target}" is not a list item` };
+      }
+      if (!patch.text && patch.text !== "") {
+        return { valid: false, error: "text is required" };
+      }
+      if (!["before", "after"].includes(patch.position)) {
+        return { valid: false, error: `Invalid position: ${patch.position}` };
+      }
+      if (patch.level !== undefined && patch.level < 0) {
+        return { valid: false, error: "level must be >= 0" };
+      }
+      return { valid: true };
+    }
+
+    case "remove_list_item": {
+      const para = findParagraphById(patch.target, doc);
+      if (!para) {
+        return { valid: false, error: `Paragraph "${patch.target}" not found` };
+      }
+      if (!para.listInfo) {
+        return { valid: false, error: `Paragraph "${patch.target}" is not a list item` };
+      }
+      return { valid: true };
+    }
+
+    case "convert_to_list": {
+      const validTypes = ["bullet", "ordered", "multilevel"];
+      if (!validTypes.includes(patch.listType)) {
+        return { valid: false, error: `Invalid listType: ${patch.listType}` };
+      }
+      if (!patch.targets || patch.targets.length === 0) {
+        return { valid: false, error: "targets must be non-empty" };
+      }
+      for (const target of patch.targets) {
+        const para = findParagraphById(target, doc);
+        if (!para) {
+          return { valid: false, error: `Paragraph "${target}" not found` };
+        }
+      }
+      return { valid: true };
+    }
+
+    case "remove_list": {
+      if (!patch.targets || patch.targets.length === 0) {
+        return { valid: false, error: "targets must be non-empty" };
+      }
+      for (const target of patch.targets) {
+        const para = findParagraphById(target, doc);
+        if (!para) {
+          return { valid: false, error: `Paragraph "${target}" not found` };
+        }
+        if (!para.listInfo) {
+          return { valid: false, error: `Paragraph "${target}" is not a list item` };
+        }
+      }
+      return { valid: true };
+    }
+
+    case "set_list_properties": {
+      const para = findParagraphById(patch.target, doc);
+      if (!para) {
+        return { valid: false, error: `Paragraph "${patch.target}" not found` };
+      }
+      if (!para.listInfo) {
+        return { valid: false, error: `Paragraph "${patch.target}" is not a list item` };
+      }
+      if (patch.listType === undefined && patch.level === undefined) {
+        return { valid: false, error: "At least one of listType or level must be provided" };
+      }
+      if (patch.listType !== undefined && !["bullet", "ordered", "multilevel"].includes(patch.listType)) {
+        return { valid: false, error: `Invalid listType: ${patch.listType}` };
+      }
+      if (patch.level !== undefined && patch.level < 0) {
+        return { valid: false, error: "level must be >= 0" };
+      }
+      return { valid: true };
+    }
+
     default:
       return {
         valid: false,

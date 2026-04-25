@@ -256,6 +256,9 @@ export class Docxtor {
     const settingsXml = this.doc.xmlParts.settings
       ? serializeXml(this.doc.xmlParts.settings)
       : undefined;
+    const numberingXml = this.doc.xmlParts.numbering
+      ? serializeXml(this.doc.xmlParts.numbering)
+      : undefined;
 
     return writeDocx({
       zip: this.zipEntries.zip,
@@ -265,6 +268,7 @@ export class Docxtor {
       documentRelsXml,
       contentTypesXml,
       settingsXml,
+      numberingXml,
       removedParts: removedParts.length > 0 ? removedParts : undefined,
     });
   }
@@ -389,6 +393,12 @@ export type {
   AddFooterPatch,
   RemoveHeaderPatch,
   RemoveFooterPatch,
+  AddListPatch,
+  AddListItemPatch,
+  RemoveListItemPatch,
+  ConvertToListPatch,
+  RemoveListPatch,
+  SetListPropertiesPatch,
   HeaderFooterVariant,
   FormattingUpdate,
   StyleInfo,

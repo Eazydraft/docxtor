@@ -63,6 +63,8 @@ export interface DocxXmlParts {
   settings?: FXPNode[];
   /** All other XML files in the zip (styles, numbering, etc.) — preserved as-is. */
   [key: string]: FXPNode[] | Map<string, FXPNode[]> | undefined;
+  /** Parsed word/numbering.xml for list management. */
+  numbering?: FXPNode[];
 }
 
 /** A body element is a paragraph, table, or page break. */
@@ -195,8 +197,10 @@ export interface RunFormatting {
 export interface ListInfo {
   /** Numbering ID from w:numId. */
   numId: string;
-  /** Indentation level from w:ilvl. */
+  /** Indentation level from w:ilvl (0-based). */
   level: number;
+  /** Resolved list type. Undefined if numbering.xml is unavailable or unresolvable. */
+  listType?: "bullet" | "ordered" | "multilevel";
 }
 
 // =============================================================================
@@ -255,6 +259,71 @@ export interface StyleInfo {
 }
 
 // =============================================================================
+// List Patch Types
+// =============================================================================
+
+export interface AddListPatch {
+  type: "add_list";
+  /** Bullet, ordered (independent counters per level), or multilevel (compound numbering like 1.2.3). */
+  listType: "bullet" | "ordered" | "multilevel";
+  /** Text for each list item. Supports inline formatting markers and {{FIELD}} placeholders. */
+  items: Array<string | { text: string; level?: number }>;
+  /** Default indentation level for items without explicit level. Default: 0. */
+  level?: number;
+  /** Reuse an existing numbering definition instead of creating a new one.
+   *  Pass the numId from an existing list to continue its numbering sequence. */
+  numId?: string;
+  /** Insert after this element ID. If omitted, appends to end of document body. */
+  afterId?: string;
+  /** Target a header/footer instead of the document body. */
+  container?: { type: "header" | "footer"; variant: HeaderFooterVariant };
+}
+
+export interface AddListItemPatch {
+  type: "add_list_item";
+  /** Paragraph ID of an existing list item to insert relative to. */
+  target: string;
+  /** Insert before or after the target list item. */
+  position: "before" | "after";
+  /** Text for the new list item. Supports inline formatting markers and {{FIELD}} placeholders. */
+  text: string;
+  /** Indentation level. If omitted, inherits from target. */
+  level?: number;
+}
+
+export interface RemoveListItemPatch {
+  type: "remove_list_item";
+  /** Paragraph ID of the list item to remove. */
+  target: string;
+}
+
+export interface ConvertToListPatch {
+  type: "convert_to_list";
+  /** Paragraph IDs to convert into list items. */
+  targets: string[];
+  /** List type to apply. */
+  listType: "bullet" | "ordered" | "multilevel";
+  /** Indentation level for all targets. Default: 0. */
+  level?: number;
+}
+
+export interface RemoveListPatch {
+  type: "remove_list";
+  /** Paragraph IDs to strip list formatting from (convert back to plain paragraphs). */
+  targets: string[];
+}
+
+export interface SetListPropertiesPatch {
+  type: "set_list_properties";
+  /** Paragraph ID of the list item to modify. */
+  target: string;
+  /** Change list type. Creates a new numbering definition if needed. */
+  listType?: "bullet" | "ordered" | "multilevel";
+  /** Change indentation level. */
+  level?: number;
+}
+
+// =============================================================================
 // Patch Types
 // =============================================================================
 
@@ -272,7 +341,13 @@ export type Patch =
   | AddHeaderPatch
   | AddFooterPatch
   | RemoveHeaderPatch
-  | RemoveFooterPatch;
+  | RemoveFooterPatch
+  | AddListPatch
+  | AddListItemPatch
+  | RemoveListItemPatch
+  | ConvertToListPatch
+  | RemoveListPatch
+  | SetListPropertiesPatch;
 
 export interface ReplaceTextPatch {
   type: "replace_text";

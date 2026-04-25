@@ -245,6 +245,9 @@ function extractListInfo(paragraphNode: FXPNode): ListInfo | undefined {
 
   if (!numId) return undefined;
 
+  // numId "0" means "no numbering" in OOXML (removes inherited list formatting)
+  if (numId === "0") return undefined;
+
   return {
     numId,
     level: level ? parseInt(level, 10) : 0,
