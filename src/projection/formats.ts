@@ -362,7 +362,7 @@ function buildListPrefix(
           const lvlIdx = parseInt(ph.slice(1), 10) - 1;
           const lvlCount = counters.get(`${numId}:${lvlIdx}`) ?? 1;
           const fmt = info.ancestorFormats.get(lvlIdx) ?? "decimal";
-          prefix = prefix.replace(ph, formatNumber(lvlCount, fmt));
+          prefix = prefix.replaceAll(ph, formatNumber(lvlCount, fmt));
         }
       }
       return `${indent}${prefix} `;
@@ -437,8 +437,10 @@ export function projectToMarkdown(
     for (const header of doc.headers.values()) {
       lines.push("");
       lines.push(`--- Header (${header.variant}) ---`);
+      const hdrCounters = new Map<string, number>();
       for (const para of header.paragraphs) {
-        lines.push(formatParagraphMarkdown(para, includeRevisions, false, includeFormatting));
+        const listPrefix = buildListPrefix(para, hdrCounters, numberingFxp);
+        lines.push(formatParagraphMarkdown(para, includeRevisions, false, includeFormatting, listPrefix));
       }
       if (includeTables) {
         for (const table of header.tables) {
@@ -451,8 +453,10 @@ export function projectToMarkdown(
     for (const footer of doc.footers.values()) {
       lines.push("");
       lines.push(`--- Footer (${footer.variant}) ---`);
+      const ftrCounters = new Map<string, number>();
       for (const para of footer.paragraphs) {
-        lines.push(formatParagraphMarkdown(para, includeRevisions, false, includeFormatting));
+        const listPrefix = buildListPrefix(para, ftrCounters, numberingFxp);
+        lines.push(formatParagraphMarkdown(para, includeRevisions, false, includeFormatting, listPrefix));
       }
       if (includeTables) {
         for (const table of footer.tables) {

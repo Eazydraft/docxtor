@@ -25,10 +25,11 @@ import {
   getChildren,
   getTagName,
   setAttr,
+  cloneNode,
 } from "../xml/helpers.js";
 import { buildFieldRuns } from "./field-codes.js";
 import { findParagraphById, findElementById } from "./validator.js";
-import { createInsElement, createPPrChange, type RevisionContext } from "./revision.js";
+import { createInsElement, createPPrChange, convertRunToDeleted, createDelElement, type RevisionContext } from "./revision.js";
 
 // =============================================================================
 // Helpers
@@ -170,6 +171,54 @@ function findInTable(tblNode: FXPNode, target: FXPNode): FXPNode[] | undefined {
 }
 
 /**
+ * Find the normalized paragraph array that contains a given paragraph ID.
+ * Returns { array, index } for doc.body, hf.paragraphs, or cell.paragraphs.
+ */
+function findNormalizedContainer(
+  doc: NormalizedDocument,
+  paraId: string,
+): { array: Array<import("../types.js").NormalizedParagraph | import("../types.js").NormalizedTable | import("../types.js").NormalizedPageBreak>; index: number } | undefined {
+  // Check doc.body
+  const bodyIdx = doc.body.findIndex((el) => el.id === paraId);
+  if (bodyIdx !== -1) return { array: doc.body, index: bodyIdx };
+
+  // Check header/footer paragraphs
+  for (const hf of [...doc.headers.values(), ...doc.footers.values()]) {
+    const hfIdx = hf.paragraphs.findIndex((p) => p.id === paraId);
+    if (hfIdx !== -1) return { array: hf.paragraphs as any, index: hfIdx };
+  }
+
+  // Check table cell paragraphs (body tables + hf tables)
+  const allTables: import("../types.js").NormalizedTable[] = [];
+  for (const el of doc.body) {
+    if (el.kind === "table") allTables.push(el);
+  }
+  for (const hf of [...doc.headers.values(), ...doc.footers.values()]) {
+    allTables.push(...hf.tables);
+  }
+
+  for (const table of allTables) {
+    for (const row of table.rows) {
+      for (const cell of row.cells) {
+        const cellIdx = cell.paragraphs.findIndex((p) => p.id === paraId);
+        if (cellIdx !== -1) return { array: cell.paragraphs as any, index: cellIdx };
+        // Check nested tables
+        for (const nested of cell.nestedTables) {
+          for (const nr of nested.rows) {
+            for (const nc of nr.cells) {
+              const ncIdx = nc.paragraphs.findIndex((p) => p.id === paraId);
+              if (ncIdx !== -1) return { array: nc.paragraphs as any, index: ncIdx };
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return undefined;
+}
+
+/**
  * Re-normalize a paragraph in place, enriching listType.
  */
 function reNormalize(doc: NormalizedDocument, para: NormalizedParagraph): void {
@@ -281,18 +330,18 @@ export function executeAddListItem(
     parentChildren.splice(targetIdx, 0, newNode);
   }
 
-  // Normalize and insert into doc.body at correct position
+  // Normalize and insert into the correct normalized container
   const nextPIdx = getNextPIdx(doc);
   const id = `p${nextPIdx}`;
   const normalized = normalizeParagraph(newNode, id);
   if (doc.xmlParts.numbering) enrichListType(normalized, doc.xmlParts.numbering);
 
-  const bodyIdx = doc.body.findIndex((el) => el.id === patch.target);
-  if (bodyIdx !== -1) {
+  const container = findNormalizedContainer(doc, patch.target);
+  if (container) {
     if (patch.position === "after") {
-      doc.body.splice(bodyIdx + 1, 0, normalized);
+      container.array.splice(container.index + 1, 0, normalized as any);
     } else {
-      doc.body.splice(bodyIdx, 0, normalized);
+      container.array.splice(container.index, 0, normalized as any);
     }
   } else {
     doc.body.push(normalized);
@@ -321,11 +370,10 @@ export function executeRemoveListItem(
       const child = children[i]!;
       const tag = getTagName(child);
       if (tag === "w:r") {
-        const delElement = createElement("w:del", [child], {
-          "w:id": String(revCtx.nextId++),
-          "w:author": revCtx.author,
-          "w:date": revCtx.date,
-        });
+        // Clone the run and convert w:t → w:delText for valid OOXML
+        const cloned = cloneNode(child);
+        convertRunToDeleted(cloned);
+        const delElement = createDelElement(revCtx, [cloned]);
         children[i] = delElement;
       } else if (tag === "w:ins") {
         // Inserted but not accepted text: removing the w:ins entirely is the
@@ -345,10 +393,10 @@ export function executeRemoveListItem(
     if (idx !== -1) parentChildren.splice(idx, 1);
   }
 
-  // Remove from doc.body
-  const bodyIdx = doc.body.findIndex((el) => el.id === patch.target);
-  if (bodyIdx !== -1) {
-    doc.body.splice(bodyIdx, 1);
+  // Remove from the correct normalized container (body, hf.paragraphs, or cell.paragraphs)
+  const container = findNormalizedContainer(doc, patch.target);
+  if (container) {
+    container.array.splice(container.index, 1);
   }
 }
 

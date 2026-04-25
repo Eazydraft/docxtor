@@ -9,6 +9,7 @@ import type {
   NormalizedTable,
   BodyElement,
 } from "../types.js";
+import { getChildren, getTagName, getAttr } from "../xml/helpers.js";
 
 export interface ValidationResult {
   valid: boolean;
@@ -278,6 +279,21 @@ export function validatePatch(
       if (patch.container) {
         const containerValidation = validateContainerTarget(patch.container, doc);
         if (!containerValidation.valid) return containerValidation;
+      }
+      if (patch.numId !== undefined) {
+        // Validate that the numId exists in numbering.xml
+        if (!doc.xmlParts.numbering) {
+          return { valid: false, error: `numId "${patch.numId}" specified but document has no numbering.xml` };
+        }
+        const root = doc.xmlParts.numbering.find((n) => getTagName(n) === "w:numbering");
+        const numExists = root
+          ? getChildren(root).some(
+              (c) => getTagName(c) === "w:num" && getAttr(c, "w:numId") === patch.numId,
+            )
+          : false;
+        if (!numExists) {
+          return { valid: false, error: `numId "${patch.numId}" not found in numbering.xml` };
+        }
       }
       return { valid: true };
     }

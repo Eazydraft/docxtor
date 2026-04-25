@@ -144,8 +144,18 @@ export function getNextAbstractNumId(numberingFxp: FXPNode[]): number {
 // Create numbering definitions
 // =============================================================================
 
-/** Bullet symbols per level (cycling). */
-const BULLET_CHARS = ["", "o", "", "", "o", "", "", "o", ""];
+/** Bullet symbols per level (cycling) with their required fonts. */
+const BULLET_LEVELS: Array<{ char: string; font: string }> = [
+  { char: "\uF0B7", font: "Symbol" },        // Level 0: filled bullet (Symbol)
+  { char: "o", font: "Courier New" },          // Level 1: open circle
+  { char: "\uF0A7", font: "Wingdings" },      // Level 2: filled square (Wingdings)
+  { char: "\uF0B7", font: "Symbol" },
+  { char: "o", font: "Courier New" },
+  { char: "\uF0A7", font: "Wingdings" },
+  { char: "\uF0B7", font: "Symbol" },
+  { char: "o", font: "Courier New" },
+  { char: "\uF0A7", font: "Wingdings" },
+];
 
 /** Ordered formats per level (cycling). */
 const ORDERED_FORMATS: Array<{ fmt: string; textFn: (lvl: number) => string }> = [
@@ -178,7 +188,28 @@ export function createNumberingDefinition(
 
     if (listType === "bullet") {
       fmt = "bullet";
-      lvlText = BULLET_CHARS[i % BULLET_CHARS.length] ?? "";
+      const bulletInfo = BULLET_LEVELS[i % BULLET_LEVELS.length]!;
+      lvlText = bulletInfo.char;
+
+      // Add w:rPr with w:rFonts so the bullet glyph renders correctly
+      const rPr = createElement("w:rPr", [
+        createElement("w:rFonts", [], {
+          "w:ascii": bulletInfo.font,
+          "w:hAnsi": bulletInfo.font,
+          "w:hint": "default",
+        }),
+      ]);
+
+      lvlNodes.push(
+        createElement("w:lvl", [
+          createElement("w:start", [], { "w:val": "1" }),
+          createElement("w:numFmt", [], { "w:val": fmt }),
+          createElement("w:lvlText", [], { "w:val": lvlText }),
+          createElement("w:lvlJc", [], { "w:val": "left" }),
+          rPr,
+        ], { "w:ilvl": String(i) }),
+      );
+      continue;
     } else if (listType === "multilevel") {
       fmt = "decimal";
       // Compound: "%1.%2.%3." etc.
