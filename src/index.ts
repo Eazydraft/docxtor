@@ -27,7 +27,6 @@
  * @packageDocumentation
  */
 
-import { readFile } from "node:fs/promises";
 import JSZip from "jszip";
 import type {
   NormalizedDocument,
@@ -99,6 +98,7 @@ export class Docxtor {
     let buffer: Buffer | ArrayBuffer | Uint8Array;
 
     if (typeof input === "string") {
+      const { readFile } = await import("node:fs/promises");
       buffer = await readFile(input);
     } else {
       buffer = input;
