@@ -803,7 +803,7 @@ pnpm build         # build ESM + CJS + DTS (tsup)
 pnpm lint          # type-check
 ```
 
-407 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style, append, add_table), document creation, header/footer lifecycle (add/remove with round-trip, field placeholders, container targeting, stale zip entry cleanup, even/odd settings), revision tracking (tracked changes), page breaks (explicit, lastRenderedPageBreak, pageBreakBefore, positional offset, revision interaction), integration flows, hyperlinks, entity escaping, newlines, nested tables, markdown table conversion, projection, and API surface.
+414 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style, append, add_table), document creation, header/footer lifecycle (add/remove with round-trip, field placeholders, container targeting, stale zip entry cleanup, even/odd settings), revision tracking (tracked changes), page breaks (explicit, lastRenderedPageBreak, pageBreakBefore, positional offset, revision interaction), integration flows, hyperlinks, entity escaping, newlines, nested tables, markdown table conversion, projection, and API surface.
 
 ## License
 

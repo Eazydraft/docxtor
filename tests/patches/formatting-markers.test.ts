@@ -103,6 +103,23 @@ describe("hasFormattingMarkers", () => {
   it("returns false for plain text without underscores", () => {
     expect(hasFormattingMarkers("plain text")).toBe(false);
   });
+
+  it("returns false for intra-word underscores like snake_case", () => {
+    expect(hasFormattingMarkers("snake_case")).toBe(false);
+    expect(hasFormattingMarkers("foo_bar_baz")).toBe(false);
+    expect(hasFormattingMarkers("my_var")).toBe(false);
+  });
+
+  it("detects underscore italic at word boundary", () => {
+    expect(hasFormattingMarkers("_italic_")).toBe(true);
+    expect(hasFormattingMarkers("hello _world_")).toBe(true);
+    expect(hasFormattingMarkers("_start")).toBe(true);
+    expect(hasFormattingMarkers("end_")).toBe(true);
+  });
+
+  it("detects underline markers", () => {
+    expect(hasFormattingMarkers("<u>text</u>")).toBe(true);
+  });
 });
 
 // ============================================================================
@@ -575,5 +592,74 @@ describe("formatted runs and field codes together", () => {
     // The text including braces should be bold
     expect(xml).toContain("w:b");
     expect(xml).toContain("{{UNSUPPORTED}}");
+  });
+
+  it("bold wrapping a field code applies bold to field runs, no literal **", async () => {
+    const doc = await Docxtor.create();
+    doc.applyPatches([
+      { type: "append_text", text: "**{{PAGE}}**" },
+    ]);
+
+    const xml = doc.toString();
+    // Field code should be present
+    expect(xml).toContain("w:fldChar");
+    expect(xml).toContain("PAGE");
+    // Bold should be applied to the field runs
+    expect(xml).toContain("w:b");
+    // Literal ** should NOT appear in the output
+    expect(xml).not.toContain(">**<");
+    expect(xml).not.toMatch(/w:t[^>]*>\*\*/);
+  });
+
+  it("italic wrapping a field code applies italic to field runs", async () => {
+    const doc = await Docxtor.create();
+    doc.applyPatches([
+      { type: "append_text", text: "_{{PAGE}}_" },
+    ]);
+
+    const xml = doc.toString();
+    expect(xml).toContain("w:fldChar");
+    expect(xml).toContain("w:i");
+    // No literal underscores leaked
+    expect(xml).not.toMatch(/w:t[^>]*>_</);
+  });
+
+  it("formatting carries across multiple field codes", async () => {
+    const doc = await Docxtor.create();
+    doc.applyPatches([
+      { type: "append_text", text: "**{{PAGE}} of {{NUMPAGES}}**" },
+    ]);
+
+    const xml = doc.toString();
+    // Both fields present
+    expect(xml).toContain("PAGE");
+    expect(xml).toContain("NUMPAGES");
+    // Bold on both field groups and the " of " text
+    expect(xml).toContain("w:b");
+    // No literal **
+    expect(xml).not.toMatch(/w:t[^>]*>\*\*/);
+
+    // The " of " text should also be bold
+    const ofMatch = xml.match(/<w:r>(.*?)<\/w:r>/gs);
+    const ofRun = ofMatch?.find((r) => r.includes(" of "));
+    expect(ofRun).toBeDefined();
+    expect(ofRun).toContain("w:b");
+  });
+
+  it("markers that span only text, not field, do not leak to field runs", async () => {
+    const doc = await Docxtor.create();
+    doc.applyPatches([
+      { type: "append_text", text: "**Bold** {{PAGE}} plain" },
+    ]);
+
+    const xml = doc.toString();
+    expect(xml).toContain("w:b");
+    expect(xml).toContain("w:fldChar");
+
+    // "plain" should not be bold
+    const runs = xml.match(/<w:r>(.*?)<\/w:r>/gs) ?? [];
+    const plainRun = runs.find((r) => r.includes("plain"));
+    expect(plainRun).toBeDefined();
+    expect(plainRun).not.toContain("w:b");
   });
 });

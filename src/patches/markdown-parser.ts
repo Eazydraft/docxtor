@@ -170,7 +170,29 @@ function mergeSegments(segments: FormattedSegment[]): FormattedSegment[] {
 
 /**
  * Check whether a string contains any GFM formatting markers.
+ *
+ * For underscore-italic, mirrors the boundary rules used by
+ * {@link parseFormattedText}: a lone `_` is only a marker when it sits
+ * at the start/end of the string or is adjacent to a non-word character.
+ * This avoids false positives on identifiers like `snake_case`.
  */
 export function hasFormattingMarkers(text: string): boolean {
-  return /\*\*|~~|<\/?u>/.test(text) || /_/.test(text);
+  if (/\*\*|~~|<\/?u>/.test(text)) return true;
+
+  // Check for _ at a word boundary (same rules as the parser)
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "_") continue;
+    const prev = i > 0 ? text[i - 1]! : "";
+    const next = i + 1 < text.length ? text[i + 1]! : "";
+    if (
+      i === 0 ||
+      i === text.length - 1 ||
+      /\W/.test(prev) ||
+      /\W/.test(next)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
