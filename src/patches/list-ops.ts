@@ -219,6 +219,39 @@ function findNormalizedContainer(
 }
 
 /**
+ * Derive a new paragraph ID in the same namespace as the target paragraph.
+ * E.g., target "hdr.default.p2" → "hdr.default.p3",
+ *        target "tbl0.r1.c0.p0" → "tbl0.r1.c0.p1",
+ *        target "p5" → "p6" (body namespace).
+ *
+ * Scans sibling paragraphs in the container to find the next available index.
+ */
+function deriveNewParagraphId(
+  targetId: string,
+  containerArray: readonly { id: string }[],
+): string {
+  // Extract prefix: everything up to and including the last "p" before the trailing number
+  const match = targetId.match(/^(.*p)(\d+)$/);
+  if (!match) {
+    // Fallback — shouldn't happen for valid paragraph IDs
+    return `p${Date.now()}`;
+  }
+  const prefix = match[1]!; // e.g. "hdr.default.p", "tbl0.r1.c0.p", "p"
+
+  // Find the max index among siblings with the same prefix
+  let maxIdx = -1;
+  for (const el of containerArray) {
+    if (el.id.startsWith(prefix)) {
+      const suffix = el.id.slice(prefix.length);
+      const num = parseInt(suffix, 10);
+      if (!isNaN(num) && num > maxIdx) maxIdx = num;
+    }
+  }
+
+  return `${prefix}${maxIdx + 1}`;
+}
+
+/**
  * Re-normalize a paragraph in place, enriching listType.
  */
 function reNormalize(doc: NormalizedDocument, para: NormalizedParagraph): void {
@@ -331,12 +364,12 @@ export function executeAddListItem(
   }
 
   // Normalize and insert into the correct normalized container
-  const nextPIdx = getNextPIdx(doc);
-  const id = `p${nextPIdx}`;
+  const container = findNormalizedContainer(doc, patch.target);
+  const containerArray = container ? container.array : doc.body;
+  const id = deriveNewParagraphId(patch.target, containerArray as readonly { id: string }[]);
   const normalized = normalizeParagraph(newNode, id);
   if (doc.xmlParts.numbering) enrichListType(normalized, doc.xmlParts.numbering);
 
-  const container = findNormalizedContainer(doc, patch.target);
   if (container) {
     if (patch.position === "after") {
       container.array.splice(container.index + 1, 0, normalized as any);

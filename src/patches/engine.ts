@@ -404,7 +404,6 @@ function parseTextSegments(text: string): TextSegment[] {
         // Type change breaks the list
         if (nextMatch.listType !== listType) break;
 
-        // Check for continuation lines (indented but not a list marker)
         items.push({ text: nextMatch.text, level: nextMatch.level });
         i++;
       }
@@ -702,8 +701,17 @@ function executeAppendTextToContainer(
   const segments = parseTextSegments(patch.text);
   let nextPIdx = hf.paragraphs.length;
 
+  // Track list context for numId reuse across segments (same as body path)
+  let lastListNumId: string | undefined;
+  let lastListType: "bullet" | "ordered" | undefined;
+
   for (const segment of segments) {
     if (segment.kind === "text") {
+      // A non-blank text segment resets list context
+      if (segment.lines.some((l) => l.trim().length > 0)) {
+        lastListNumId = undefined;
+        lastListType = undefined;
+      }
       for (const line of segment.lines) {
         let pNode: FXPNode;
         const runs = buildFieldRuns(line);
@@ -734,8 +742,15 @@ function executeAppendTextToContainer(
       const normalizedTbl = normalizeTable(tblNode, tblId);
       hf.tables.push(normalizedTbl);
     } else {
-      // List segment in container
-      const numId = createNumberingDefinition(doc, segment.listType);
+      // List segment in container — reuse numId if same list type
+      let numId: string;
+      if (lastListNumId && lastListType === segment.listType) {
+        numId = lastListNumId;
+      } else {
+        numId = createNumberingDefinition(doc, segment.listType);
+      }
+      lastListNumId = numId;
+      lastListType = segment.listType;
       for (const item of segment.items) {
         const numPr = createElement("w:numPr", [
           createElement("w:ilvl", [], { "w:val": String(item.level) }),
