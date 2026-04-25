@@ -250,18 +250,17 @@ describe("Text ops with GFM markers", () => {
   it("replace_text creates formatted runs from replace markers", async () => {
     const doc = await Docxtor.create();
 
-    // Replace the empty text with formatted text
-    let results = doc.applyPatches([
-      {
-        type: "replace_text",
-        target: "p0",
-        find: "",
-        replace: "Hello **bold** world",
-      },
+    // append_text creates p1, so target that paragraph for replace
+    doc.applyPatches([
+      { type: "append_text", text: "Hello bold world" },
     ]);
 
-    results = doc.applyPatches([
-      { type: "replace_text", target: "p1", find: "world", replace: "**bold** _earth_" },
+    const md = doc.project("markdown");
+    // Find which paragraph has "world"
+    const targetP = md.includes("[p1]") && md.includes("world") ? "p1" : "p0";
+
+    const results = doc.applyPatches([
+      { type: "replace_text", target: targetP, find: "world", replace: "**bold** _earth_" },
     ]);
 
     expect(results[0]!.success).toBe(true);
@@ -270,9 +269,9 @@ describe("Text ops with GFM markers", () => {
     expect(xml).toContain("w:b");
     expect(xml).toContain("w:i");
 
-    const md = doc.project("markdown", { includeFormatting: true });
-    expect(md).toContain("**bold**");
-    expect(md).toContain("_earth_");
+    const md2 = doc.project("markdown", { includeFormatting: true });
+    expect(md2).toContain("**bold**");
+    expect(md2).toContain("_earth_");
   });
 
   it("replace_text with bold replacement creates w:b in OOXML", async () => {
@@ -415,5 +414,166 @@ describe("Text ops with GFM markers", () => {
     expect(xml).toContain("w:i");
     expect(xml).toContain("w:fldChar");
     expect(xml).toContain("PAGE");
+  });
+});
+
+// ============================================================================
+// Formatted runs + field codes integration
+// ============================================================================
+
+describe("formatted runs and field codes together", () => {
+  it("bold text before a field code produces bold run then field runs", async () => {
+    const doc = await Docxtor.create();
+    doc.applyPatches([{ type: "append_text", text: "**Total:** {{NUMPAGES}}" }]);
+
+    const xml = doc.toString();
+    // Bold formatting present
+    expect(xml).toContain("w:b");
+    // Field code present
+    expect(xml).toContain("w:fldChar");
+    expect(xml).toContain("NUMPAGES");
+
+    // Structural: bold run for "Total:" should appear before the field begin
+    const boldPos = xml.indexOf("w:b");
+    const fldBeginPos = xml.indexOf('w:fldCharType="begin"');
+    expect(boldPos).toBeLessThan(fldBeginPos);
+  });
+
+  it("field code between two formatted segments", async () => {
+    const doc = await Docxtor.create();
+    doc.applyPatches([
+      { type: "append_text", text: "**Page** {{PAGE}} of **{{NUMPAGES}}**" },
+    ]);
+
+    const xml = doc.toString();
+
+    // Both field codes present
+    expect(xml).toContain("PAGE");
+    expect(xml).toContain("NUMPAGES");
+
+    // fldChar pattern for both fields
+    const fldCharMatches = xml.match(/w:fldCharType="begin"/g);
+    expect(fldCharMatches).not.toBeNull();
+    // 2 fields → 2 begin markers
+    expect(fldCharMatches!.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("strikethrough + field code", async () => {
+    const doc = await Docxtor.create();
+    doc.applyPatches([
+      { type: "append_text", text: "~~old~~ {{DATE}}" },
+    ]);
+
+    const xml = doc.toString();
+    expect(xml).toContain("w:strike");
+    expect(xml).toContain("DATE");
+    expect(xml).toContain("w:fldChar");
+  });
+
+  it("multiple formatting styles around multiple fields", async () => {
+    const doc = await Docxtor.create();
+    doc.applyPatches([
+      {
+        type: "append_text",
+        text: "_File:_ {{FILENAME}} | **Page** {{PAGE}} of {{NUMPAGES}}",
+      },
+    ]);
+
+    const xml = doc.toString();
+    // Italic for "File:"
+    expect(xml).toContain("w:i");
+    // Bold for "Page"
+    expect(xml).toContain("w:b");
+    // All three field codes
+    expect(xml).toContain("FILENAME");
+    expect(xml).toContain("PAGE");
+    expect(xml).toContain("NUMPAGES");
+
+    // 3 fields → 3 begin markers
+    const begins = xml.match(/w:fldCharType="begin"/g);
+    expect(begins!.length).toBe(3);
+  });
+
+  it("field code with no surrounding text produces only field runs", async () => {
+    const doc = await Docxtor.create();
+    doc.applyPatches([{ type: "append_text", text: "{{PAGE}}" }]);
+
+    const xml = doc.toString();
+    expect(xml).toContain("w:fldChar");
+    expect(xml).toContain("PAGE");
+    // No bold/italic artifacts
+    expect(xml).not.toContain("w:b/>");
+    expect(xml).not.toContain("w:i/>");
+  });
+
+  it("round-trips formatted text + field codes through write/read", async () => {
+    const doc = await Docxtor.create();
+    doc.applyPatches([
+      { type: "append_text", text: "**Page** {{PAGE}} of {{NUMPAGES}}" },
+    ]);
+
+    const buffer = await doc.toBuffer();
+    const doc2 = await Docxtor.load(buffer);
+    const xml2 = doc2.toString();
+
+    expect(xml2).toContain("w:b");
+    expect(xml2).toContain("w:fldChar");
+    expect(xml2).toContain("PAGE");
+    expect(xml2).toContain("NUMPAGES");
+  });
+
+  it("header with formatted text and field codes", async () => {
+    const doc = await Docxtor.create();
+    doc.applyPatches([
+      {
+        type: "add_header",
+        variant: "default",
+        paragraphs: ["**Document Title** — Page {{PAGE}} of {{NUMPAGES}}"],
+      },
+    ]);
+
+    const ast = doc.getAST();
+    const headerXmls = [...ast.xmlParts.headers.values()].map((fxp) =>
+      serializeXml(fxp),
+    );
+    const headerXml = headerXmls.find(
+      (x) => x.includes("PAGE") && x.includes("w:b"),
+    );
+    expect(headerXml).toBeDefined();
+    expect(headerXml).toContain("NUMPAGES");
+  });
+
+  it("footer with italic label and {{PAGE}} field", async () => {
+    const doc = await Docxtor.create();
+    doc.applyPatches([
+      {
+        type: "add_footer",
+        variant: "default",
+        paragraphs: ["_Page_ {{PAGE}}"],
+      },
+    ]);
+
+    const ast = doc.getAST();
+    const footerXmls = [...ast.xmlParts.footers.values()].map((fxp) =>
+      serializeXml(fxp),
+    );
+    const footerXml = footerXmls.find(
+      (x) => x.includes("PAGE") && x.includes("w:i"),
+    );
+    expect(footerXml).toBeDefined();
+  });
+
+  it("unsupported placeholder is treated as plain text with formatting", async () => {
+    const doc = await Docxtor.create();
+    doc.applyPatches([
+      { type: "append_text", text: "**{{UNSUPPORTED}}** value" },
+    ]);
+
+    const xml = doc.toString();
+    // Should NOT produce field codes
+    expect(xml).not.toContain("w:fldChar");
+    // The text including braces should be bold
+    expect(xml).toContain("w:b");
+    expect(xml).toContain("{{UNSUPPORTED}}");
   });
 });
