@@ -77,10 +77,12 @@ export function executeAddTableRow(
       // Clear existing runs and add new text
       const pChildren = getChildren(pNode);
 
-      // Remove all existing w:r runs
-      const runs = pChildren.filter((c) => "w:r" in c);
-      for (const run of runs) {
-        const idx = pChildren.indexOf(run);
+      // Remove all existing w:r runs (including those wrapped in w:ins from tracked changes)
+      const toRemove = pChildren.filter(
+        (c) => "w:r" in c || "w:ins" in c || "w:del" in c,
+      );
+      for (const node of toRemove) {
+        const idx = pChildren.indexOf(node);
         if (idx !== -1) pChildren.splice(idx, 1);
       }
 

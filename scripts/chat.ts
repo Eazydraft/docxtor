@@ -130,6 +130,42 @@ Rules:
 - For structural changes like "make this a heading", use apply_style with the appropriate paragraph style.
 - For headers/footers, use add_header/add_footer to create new ones. Existing header/footer paragraphs can be edited with replace_text, insert_text, etc. using their paragraph IDs (e.g., "hdr.default.p0").
 - Use {{PAGE}} and {{NUMPAGES}} in header/footer text for page numbers (e.g., "Page {{PAGE}} of {{NUMPAGES}}").
+15. add_list — Add a new list (bullet, ordered, or multilevel) to the document body.
+   { "type": "add_list", "listType": "bullet"|"ordered"|"multilevel", "items": ["Item 1", "Item 2"] }
+   Items can be strings or objects with text and level: { "text": "Sub-item", "level": 1 }
+   Optional "afterId" to insert after a specific element. Optional "container" for header/footer.
+   To continue an existing list's numbering, pass its "numId" (shown as {list:N} in the projection):
+   { "type": "add_list", "listType": "multilevel", "numId": "1", "items": [{"text": "New section", "level": 0}, {"text": "Sub-section", "level": 1}], "afterId": "p10" }
+   Without "numId", a new numbering definition is created (counters start at 1).
+
+16. add_list_item — Add a new item to an existing list, before or after a target list paragraph.
+   { "type": "add_list_item", "target": "<list_paragraph_id>", "position": "before"|"after", "text": "New item" }
+   Optional "level" to set nesting depth (default: same as target).
+
+17. remove_list_item — Remove a list item paragraph from the document.
+   { "type": "remove_list_item", "target": "<list_paragraph_id>" }
+
+18. convert_to_list — Convert existing paragraphs into a list.
+   { "type": "convert_to_list", "targets": ["p0", "p1", "p2"], "listType": "bullet"|"ordered"|"multilevel" }
+   Optional "level" to set all items to a specific nesting depth.
+
+19. remove_list — Strip list formatting from paragraphs (keep the text, remove numbering).
+   { "type": "remove_list", "targets": ["p0", "p1", "p2"] }
+
+20. set_list_properties — Change the level or list type of an existing list item.
+   { "type": "set_list_properties", "target": "<list_paragraph_id>", "level": 1 }
+   { "type": "set_list_properties", "target": "<list_paragraph_id>", "listType": "ordered" }
+
+List items in the projection:
+- List items show: "[p0] {list:N LX} prefix text" where N is the numId and X is the indentation level.
+- Example: "[p10] {list:5 L0} 1. Position and Duties" — this is numId=5, level 0 (top-level heading).
+- Example: "[p11] {list:6 L1}   1.1. The Company hereby..." — this is numId=6, level 1 (sub-item).
+- Items sharing the same numId belong to the same list and share counters.
+- IMPORTANT: A document may use DIFFERENT numIds for top-level headings vs sub-items (e.g. {list:5} for sections, {list:6} for sub-sections). When adding a new section, you must add items using the CORRECT numId for each level. For example, to add "Section 6" after "Section 5", use numId from the section headings (list:5), and for sub-items use the sub-item numId (list:6).
+- To add items to an existing list, pass "numId" in add_list. Without "numId", a new numbering definition is created (counters restart at 1).
+- You can use add_list_item to add a single item relative to an existing list item (it inherits the numId automatically).
+- List paragraphs have the same IDs as regular paragraphs (p0, p1, etc.) and can be edited with replace_text, delete_text, etc.
+
 - If the user asks for something you can't do with patches (e.g., add images), explain that in "explanation" and return an empty "patches" array.
 - ALWAYS respond with valid JSON. No markdown fences, no extra text.`;
 
@@ -236,6 +272,28 @@ function printPatches(results: PatchResult[]): void {
       case "remove_footer":
         desc = `remove ${r.patch.variant} footer`;
         break;
+      case "add_list":
+        desc = `add ${r.patch.listType} list (${r.patch.items.length} items)${r.patch.afterId ? ` after ${r.patch.afterId}` : ""}`;
+        break;
+      case "add_list_item":
+        desc = `add list item "${truncate(r.patch.text, 30)}" ${r.patch.position} target`;
+        break;
+      case "remove_list_item":
+        desc = `remove list item`;
+        break;
+      case "convert_to_list":
+        desc = `convert ${r.patch.targets.length} paragraphs to ${r.patch.listType} list`;
+        break;
+      case "remove_list":
+        desc = `remove list from ${r.patch.targets.length} paragraphs`;
+        break;
+      case "set_list_properties": {
+        const parts: string[] = [];
+        if (r.patch.listType) parts.push(`type=${r.patch.listType}`);
+        if (r.patch.level != null) parts.push(`level=${r.patch.level}`);
+        desc = `set list properties {${parts.join(", ")}}`;
+        break;
+      }
     }
     console.log(`  ${status} [${target}] ${desc}`);
     if (!r.success && r.error) {

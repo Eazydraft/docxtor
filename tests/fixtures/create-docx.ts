@@ -503,6 +503,81 @@ export async function createStyledDocx(): Promise<Buffer> {
   return buildDocx({ documentXml, stylesXml: TEST_STYLES_XML });
 }
 
+/**
+ * Create a DOCX with a bullet list (3 items) using numbering.xml.
+ */
+export async function createListDocx(): Promise<Buffer> {
+  const numberingXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="0">
+    <w:lvl w:ilvl="0">
+      <w:start w:val="1"/>
+      <w:numFmt w:val="bullet"/>
+      <w:lvlText w:val=""/>
+    </w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="1">
+    <w:abstractNumId w:val="0"/>
+  </w:num>
+</w:numbering>`;
+
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>
+      <w:r><w:t>Item one</w:t></w:r>
+    </w:p>
+    <w:p>
+      <w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>
+      <w:r><w:t>Item two</w:t></w:r>
+    </w:p>
+    <w:p>
+      <w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>
+      <w:r><w:t>Item three</w:t></w:r>
+    </w:p>
+  </w:body>
+</w:document>`;
+
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
+</Types>`);
+  zip.file("_rels/.rels", TOP_RELS);
+  zip.file("word/document.xml", documentXml);
+  zip.file("word/_rels/document.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
+</Relationships>`);
+  zip.file("word/numbering.xml", numberingXml);
+
+  return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }) as Promise<Buffer>;
+}
+
+/**
+ * Create a DOCX with multiple plain paragraphs (no list).
+ */
+export async function createMultiParagraphDocx(texts: string[]): Promise<Buffer> {
+  const paras = texts
+    .map((t) => `    <w:p><w:r><w:t>${escapeXml(t)}</w:t></w:r></w:p>`)
+    .join("\n");
+
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+${paras}
+  </w:body>
+</w:document>`;
+
+  return buildDocx({ documentXml });
+}
+
 function escapeXml(text: string): string {
   return text
     .replace(/&/g, "&amp;")

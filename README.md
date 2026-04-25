@@ -120,6 +120,9 @@ const md = doc.project("markdown");
 ```
 [p0] (Heading1) Master Services Agreement
 [p1] This Agreement is entered into as of the Effective Date...
+[p2] {list:1 L0} - First item
+[p3] {list:1 L0} - Second item
+[p4] {list:1 L1}   - Sub-item
 
 | [tbl0.r0.c0.p0] Term | [tbl0.r0.c1.p0] Value |
 | [tbl0.r1.c0.p0] Duration | [tbl0.r1.c1.p0] 12 months |
@@ -135,6 +138,8 @@ const md = doc.project("markdown");
 [paragraph] Heading1 — heading 1
 [character] Strong — Strong
 ```
+
+List paragraphs show a `{list:N LX}` hint where `N` is the numbering definition ID (`numId`) and `X` is the nesting level. Bullet items render with `- ` prefix, ordered items with `1. `, `2. `, etc., and multilevel items with compound prefixes like `1.2.1. `. To continue an existing list sequence when adding items, reuse the same `numId` from the hint.
 
 Every element has a stable ID (`p0`, `tbl0.r1.c0.p0`, `hdr.default.p0`, etc.) that patches use as targets.
 
@@ -399,7 +404,21 @@ doc.applyPatches([
 // doc.getTables() → [{ id: "tbl0", rows: [{ cells: ["Name", "Age"] }, ...] }]
 ```
 
-Mixed content works naturally — text lines become paragraphs, table blocks become tables:
+**Markdown list support:** If the text contains markdown list syntax (`- ` for bullets, `1. ` for ordered), items are converted to real OOXML list paragraphs with proper numbering definitions in `word/numbering.xml`. Nesting uses 2-space indentation.
+
+```ts
+// Creates a bullet list with nesting
+doc.applyPatches([
+  { type: "append_text", text: "- First item\n- Second item\n  - Sub-item\n- Third item" },
+]);
+
+// Creates an ordered list
+doc.applyPatches([
+  { type: "append_text", text: "1. Step one\n2. Step two\n3. Step three" },
+]);
+```
+
+Mixed content works naturally — text lines become paragraphs, table blocks become tables, list blocks become list paragraphs:
 
 ```ts
 doc.applyPatches([
@@ -606,6 +625,131 @@ Remove a footer from the document's last section. Cleans up the relationship, co
 }
 ```
 
+### `add_list`
+
+Create a new list (bullet, ordered, or multilevel) in the document body or a header/footer. Creates the numbering definition in `word/numbering.xml` automatically.
+
+```ts
+{
+  type: "add_list",
+  listType: "bullet",             // "bullet", "ordered", or "multilevel"
+  items: ["First item", "Second item", "Third item"],
+}
+```
+
+Items can specify individual nesting levels:
+
+```ts
+{
+  type: "add_list",
+  listType: "ordered",
+  items: [
+    { text: "Top-level item", level: 0 },
+    { text: "Sub-item", level: 1 },
+    { text: "Another top-level", level: 0 },
+  ],
+}
+```
+
+Use `afterId` to insert the list after a specific element, or `container` to add it to a header/footer:
+
+```ts
+{
+  type: "add_list",
+  listType: "bullet",
+  items: ["Item A", "Item B"],
+  afterId: "p2",                 // insert after paragraph p2
+}
+
+{
+  type: "add_list",
+  listType: "ordered",
+  items: ["Step 1", "Step 2"],
+  container: { type: "footer", variant: "default" },
+}
+```
+
+To reuse an existing numbering definition (e.g., to continue a list sequence), pass `numId`:
+
+```ts
+{
+  type: "add_list",
+  listType: "bullet",
+  numId: "3",                    // reuse existing numId from numbering.xml
+  items: ["Continuation item"],
+}
+```
+
+The `numId` is validated against `numbering.xml` — if the ID doesn't exist, the patch is rejected.
+
+### `add_list_item`
+
+Add a new item to an existing list, positioned before or after a target list paragraph.
+
+```ts
+{
+  type: "add_list_item",
+  target: "p3",                  // must be an existing list paragraph
+  position: "after",             // "before" or "after"
+  text: "New item text",
+  level: 1,                     // optional; defaults to the target's level
+}
+```
+
+The new item inherits the `numId` from the target paragraph. Works correctly for paragraphs in table cells and headers/footers.
+
+### `remove_list_item`
+
+Remove a list item paragraph entirely (or mark it as deleted with revision tracking).
+
+```ts
+{
+  type: "remove_list_item",
+  target: "p3",                  // must be a list paragraph
+}
+```
+
+With revision tracking, the paragraph's runs are wrapped in `w:del` (using proper `w:delText`) and the paragraph properties get a `w:pPrChange` record. Runs that were inside `w:ins` (unaccepted insertions) are simply removed — not re-wrapped in `w:del`.
+
+### `convert_to_list`
+
+Convert one or more existing plain paragraphs into a list by adding `w:numPr` to their `w:pPr`.
+
+```ts
+{
+  type: "convert_to_list",
+  targets: ["p2", "p3", "p4"],   // paragraph IDs to convert
+  listType: "bullet",            // "bullet", "ordered", or "multilevel"
+  level: 0,                     // optional; default 0
+}
+```
+
+All targeted paragraphs share the same numbering definition.
+
+### `remove_list`
+
+Remove list formatting from one or more paragraphs, converting them back to plain paragraphs.
+
+```ts
+{
+  type: "remove_list",
+  targets: ["p2", "p3", "p4"],
+}
+```
+
+### `set_list_properties`
+
+Change the level or list type of an existing list paragraph.
+
+```ts
+{
+  type: "set_list_properties",
+  target: "p3",
+  level: 2,                     // optional; change indentation level
+  listType: "ordered",          // optional; switch list type (creates new numbering definition)
+}
+```
+
 ## ID scheme
 
 | Location | Pattern | Example |
@@ -661,6 +805,12 @@ const results = doc.applyPatches(
 | `add_footer` | `w:ins` wrapping each paragraph's runs |
 | `remove_header` | Removes header reference, relationship, and content type (no revision markup) |
 | `remove_footer` | Removes footer reference, relationship, and content type (no revision markup) |
+| `add_list` | `w:ins` wrapping each new list paragraph's runs |
+| `add_list_item` | `w:ins` wrapping the new item's runs |
+| `remove_list_item` | Runs cloned and wrapped in `w:del` (with `w:delText`); `w:pPrChange` on paragraph properties. Runs inside `w:ins` are removed entirely. |
+| `convert_to_list` | `w:pPrChange` capturing old paragraph properties |
+| `remove_list` | `w:pPrChange` capturing old paragraph properties |
+| `set_list_properties` | `w:pPrChange` capturing old paragraph properties |
 
 ### Revision IDs
 
@@ -713,6 +863,15 @@ Patch types:
 - add_footer: { type: "add_footer", variant: "default"|"first"|"even", paragraphs: ["text", ...] }
 - remove_header: { type: "remove_header", variant: "default"|"first"|"even" }
 - remove_footer: { type: "remove_footer", variant: "default"|"first"|"even" }
+- add_list: { type: "add_list", listType: "bullet"|"ordered"|"multilevel", items: ["item1", ...], afterId?: "<id>", numId?: "<existing numId>" }
+- add_list_item: { type: "add_list_item", target: "<list paragraph id>", position: "before"|"after", text: "<text>", level?: <number> }
+- remove_list_item: { type: "remove_list_item", target: "<list paragraph id>" }
+- convert_to_list: { type: "convert_to_list", targets: ["<id>", ...], listType: "bullet"|"ordered"|"multilevel" }
+- remove_list: { type: "remove_list", targets: ["<id>", ...] }
+- set_list_properties: { type: "set_list_properties", target: "<id>", level?: <number>, listType?: "bullet"|"ordered"|"multilevel" }
+
+List paragraphs show {list:N LX} in the projection where N is the numId and X is the nesting level.
+To continue an existing list, reuse the numId from the hint.
 
 Document:
 ${projection}`,
@@ -754,7 +913,7 @@ import {
 } from "docxtor";
 
 // Types
-import type { PatchOptions, RevisionMark, NormalizedPageBreak, JsonProjectionPageBreak, JsonProjectionRunFormatting, HeaderFooterVariant, HeaderFooterRef } from "docxtor";
+import type { PatchOptions, RevisionMark, NormalizedPageBreak, JsonProjectionPageBreak, JsonProjectionRunFormatting, HeaderFooterVariant, HeaderFooterRef, AddListPatch, AddListItemPatch, RemoveListItemPatch, ConvertToListPatch, RemoveListPatch, SetListPropertiesPatch } from "docxtor";
 ```
 
 ## What it handles
@@ -782,12 +941,14 @@ import type { PatchOptions, RevisionMark, NormalizedPageBreak, JsonProjectionPag
 - Newlines in `append_text` (`\n` creates separate `w:p` paragraphs; markdown tables create `w:tbl`)
 - Newlines in run text (`\n` maps to `w:br` elements)
 - List/numbering info in projections
+- List operations (`add_list`, `add_list_item`, `remove_list_item`, `convert_to_list`, `remove_list`, `set_list_properties`)
+- Markdown list conversion in `append_text` (bullet `- ` and ordered `1. ` syntax with nesting → real OOXML lists)
+- Numbering definition management (`word/numbering.xml` auto-created with content types and relationships)
 - Styles, fonts, colors, highlighting in projections
 
 ## What it does not handle (yet)
 
 - Merged cells (`gridSpan` / `vMerge`)
-- Numbered list renumbering
 - Image manipulation
 - Style creation (can only apply pre-existing styles)
 - Comments and annotations
@@ -803,7 +964,7 @@ pnpm build         # build ESM + CJS + DTS (tsup)
 pnpm lint          # type-check
 ```
 
-414 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style, append, add_table), document creation, header/footer lifecycle (add/remove with round-trip, field placeholders, container targeting, stale zip entry cleanup, even/odd settings), revision tracking (tracked changes), page breaks (explicit, lastRenderedPageBreak, pageBreakBefore, positional offset, revision interaction), integration flows, hyperlinks, entity escaping, newlines, nested tables, markdown table conversion, projection, and API surface.
+441 tests covering ZIP I/O, XML parsing/serialization, normalization, mapping, patch operations (text, table, formatting, style, append, add_table, list operations), document creation, header/footer lifecycle (add/remove with round-trip, field placeholders, container targeting, stale zip entry cleanup, even/odd settings), revision tracking (tracked changes), page breaks (explicit, lastRenderedPageBreak, pageBreakBefore, positional offset, revision interaction), list operations (add/remove lists, add/remove items, convert to/from lists, set properties, revision tracking, projection, markdown parsing), integration flows, hyperlinks, entity escaping, newlines, nested tables, markdown table/list conversion, projection, and API surface.
 
 ## License
 

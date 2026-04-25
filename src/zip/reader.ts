@@ -23,6 +23,8 @@ export interface DocxZipEntries {
   stylesXml?: string;
   /** The settings.xml file (may not be present). */
   settingsXml?: string;
+  /** The numbering.xml file (may not be present). */
+  numberingXml?: string;
   /** The JSZip instance (kept for writing back). */
   zip: JSZip;
 }
@@ -51,6 +53,7 @@ export async function readDocx(
   const contentTypes = await readEntry(zip, "[Content_Types].xml");
   const stylesXml = await readEntry(zip, "word/styles.xml");
   const settingsXml = await readEntry(zip, "word/settings.xml");
+  const numberingXml = await readEntry(zip, "word/numbering.xml");
 
   // Extract header and footer files
   const headers = new Map<string, string>();
@@ -79,6 +82,7 @@ export async function readDocx(
     contentTypes,
     stylesXml,
     settingsXml,
+    numberingXml,
     zip,
   };
 }

@@ -16,6 +16,7 @@ import type {
   LoadOptions,
   StyleInfo,
   NormalizedPageBreak,
+  NormalizedParagraph,
 } from "../types.js";
 import type { DocxZipEntries } from "../zip/reader.js";
 import { parseXml } from "../xml/parser.js";
@@ -29,6 +30,7 @@ import {
 import { normalizeParagraph } from "./paragraph.js";
 import { normalizeTable } from "./table.js";
 import { normalizeHeaderFooter } from "./header-footer.js";
+import { resolveListType } from "../patches/numbering.js";
 
 /**
  * Normalize a full DOCX document from zip entries.
@@ -110,9 +112,17 @@ export function normalizeDocument(
     settings: zipEntries.settingsXml
       ? parseXml(zipEntries.settingsXml)
       : undefined,
+    numbering: zipEntries.numberingXml
+      ? parseXml(zipEntries.numberingXml)
+      : undefined,
   };
 
-  return { body, headers, footers, xmlParts, styles };
+  const doc: NormalizedDocument = { body, headers, footers, xmlParts, styles };
+
+  // Post-pass: enrich listType on all paragraphs with listInfo
+  enrichAllListTypes(doc);
+
+  return doc;
 }
 
 /**
@@ -285,4 +295,54 @@ function parseStyles(stylesXml: string): StyleInfo[] {
   }
 
   return styles;
+}
+
+// =============================================================================
+// List type enrichment
+// =============================================================================
+
+/**
+ * Enrich listType on all paragraphs with listInfo across the entire document.
+ */
+function enrichAllListTypes(doc: NormalizedDocument): void {
+  const numberingFxp = doc.xmlParts.numbering;
+  if (!numberingFxp) return;
+
+  for (const el of doc.body) {
+    if (el.kind === "paragraph") {
+      enrichListType(el, numberingFxp);
+    } else if (el.kind === "table") {
+      for (const row of el.rows) {
+        for (const cell of row.cells) {
+          for (const para of cell.paragraphs) {
+            enrichListType(para, numberingFxp);
+          }
+        }
+      }
+    }
+  }
+
+  for (const hdr of doc.headers.values()) {
+    for (const para of hdr.paragraphs) {
+      enrichListType(para, numberingFxp);
+    }
+  }
+
+  for (const ftr of doc.footers.values()) {
+    for (const para of ftr.paragraphs) {
+      enrichListType(para, numberingFxp);
+    }
+  }
+}
+
+/**
+ * Enrich a single paragraph's listInfo with the resolved listType.
+ * Exported for use by the patch engine after re-normalization.
+ */
+export function enrichListType(para: NormalizedParagraph, numberingFxp: FXPNode[]): void {
+  if (!para.listInfo) return;
+  const lt = resolveListType(numberingFxp, para.listInfo.numId);
+  if (lt) {
+    para.listInfo.listType = lt;
+  }
 }
