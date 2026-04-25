@@ -149,12 +149,28 @@ export function buildFlatOpc(
   parts: FlatOpcPart[],
   overrides?: Map<string, string>,
 ): string {
-  const resolved = overrides
-    ? parts.map((p) => {
-        const ov = overrides.get(p.name);
-        return ov !== undefined ? { ...p, content: ov } : p;
-      })
-    : parts;
+  let resolved: FlatOpcPart[];
+  if (overrides) {
+    const existingNames = new Set(parts.map((p) => p.name));
+    resolved = parts.map((p) => {
+      const ov = overrides.get(p.name);
+      return ov !== undefined ? { ...p, content: ov } : p;
+    });
+    // Append new parts that don't exist in the original package (e.g., a newly
+    // created header/footer XML part added by an add_header/add_footer patch).
+    for (const [name, content] of overrides) {
+      if (!existingNames.has(name)) {
+        resolved.push({
+          name,
+          contentType: opcContentType(name),
+          content,
+          isBinary: false,
+        });
+      }
+    }
+  } else {
+    resolved = parts;
+  }
 
   const partsXml = resolved.map(serializePart).join("");
 
