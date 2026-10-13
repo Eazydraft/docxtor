@@ -146,6 +146,11 @@ export function normalizeParagraph(
     listInfo: extractListInfo(paragraphNode),
   };
 
+  const paraId = getAttr(paragraphNode, "w14:paraId");
+  if (paraId) {
+    result.paraId = paraId.toUpperCase();
+  }
+
   if (revisions.length > 0) {
     result.revisions = revisions;
   }
@@ -206,6 +211,8 @@ function extractFormatting(runNode: FXPNode): RunFormatting {
       formatting.fontFamily = getAttr(child, "w:ascii") ?? getAttr(child, "w:hAnsi");
     } else if (isTag(child, "w:color")) {
       formatting.color = getAttr(child, "w:val");
+      const themeColor = getAttr(child, "w:themeColor");
+      if (themeColor) formatting.themeColor = themeColor;
     } else if (isTag(child, "w:highlight")) {
       formatting.highlight = getAttr(child, "w:val");
     }

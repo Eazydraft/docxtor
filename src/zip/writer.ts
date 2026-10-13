@@ -25,9 +25,35 @@ export interface WriteDocxOptions {
   settingsXml?: string;
   /** Modified word/numbering.xml content. */
   numberingXml?: string;
+  /** Modified word/footnotes.xml content. */
+  footnotesXml?: string;
+  /** Modified word/endnotes.xml content. */
+  endnotesXml?: string;
+  /** Modified word/comments.xml content. */
+  commentsXml?: string;
+  /** Modified docProps/core.xml content. */
+  coreXml?: string;
+  /** Modified docProps/app.xml content. */
+  appXml?: string;
+  /** Modified _rels/.rels content. */
+  rootRelsXml?: string;
   /** Zip paths to remove from the archive (e.g., deleted header/footer parts). */
   removedParts?: string[];
 }
+
+/** Fixed zip path for each optional XML part. */
+const PART_PATHS: Array<[keyof WriteDocxOptions, string]> = [
+  ["documentRelsXml", "word/_rels/document.xml.rels"],
+  ["contentTypesXml", "[Content_Types].xml"],
+  ["settingsXml", "word/settings.xml"],
+  ["numberingXml", "word/numbering.xml"],
+  ["footnotesXml", "word/footnotes.xml"],
+  ["endnotesXml", "word/endnotes.xml"],
+  ["commentsXml", "word/comments.xml"],
+  ["coreXml", "docProps/core.xml"],
+  ["appXml", "docProps/app.xml"],
+  ["rootRelsXml", "_rels/.rels"],
+];
 
 /**
  * Write modified XML back into a DOCX buffer.
@@ -39,7 +65,7 @@ export interface WriteDocxOptions {
 export async function writeDocx(
   options: WriteDocxOptions,
 ): Promise<Buffer> {
-  const { zip, documentXml, headers, footers, documentRelsXml, contentTypesXml, settingsXml, numberingXml, removedParts } = options;
+  const { zip, documentXml, headers, footers, removedParts } = options;
 
   // Remove deleted parts (e.g., header/footer XML files after remove_header/remove_footer)
   if (removedParts) {
@@ -65,24 +91,12 @@ export async function writeDocx(
     }
   }
 
-  // Replace document.xml.rels if modified
-  if (documentRelsXml) {
-    zip.file("word/_rels/document.xml.rels", documentRelsXml);
-  }
-
-  // Replace [Content_Types].xml if modified
-  if (contentTypesXml) {
-    zip.file("[Content_Types].xml", contentTypesXml);
-  }
-
-  // Replace word/settings.xml if modified
-  if (settingsXml) {
-    zip.file("word/settings.xml", settingsXml);
-  }
-
-  // Replace word/numbering.xml if modified
-  if (numberingXml) {
-    zip.file("word/numbering.xml", numberingXml);
+  // Replace every other part that was supplied
+  for (const [key, path] of PART_PATHS) {
+    const content = options[key];
+    if (typeof content === "string") {
+      zip.file(path, content);
+    }
   }
 
   // Generate the output buffer

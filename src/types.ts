@@ -49,6 +49,11 @@ export interface NormalizedDocument {
    * Empty array if styles.xml is not present.
    */
   styles: StyleInfo[];
+  /**
+   * The options the document was loaded with. Used when the document is
+   * re-normalized (e.g., after accepting revisions or an atomic batch).
+   */
+  loadOptions?: LoadOptions;
 }
 
 export interface DocxXmlParts {
@@ -65,6 +70,18 @@ export interface DocxXmlParts {
   [key: string]: FXPNode[] | Map<string, FXPNode[]> | undefined;
   /** Parsed word/numbering.xml for list management. */
   numbering?: FXPNode[];
+  /** Parsed word/footnotes.xml (if present). Walked by accept/reject revisions. */
+  footnotes?: FXPNode[];
+  /** Parsed word/endnotes.xml (if present). Walked by accept/reject revisions. */
+  endnotes?: FXPNode[];
+  /** Parsed word/comments.xml (if present, or created on demand by add_comment). */
+  comments?: FXPNode[];
+  /** Parsed docProps/core.xml (if present, or created on demand by setCoreProperties). */
+  core?: FXPNode[];
+  /** Parsed docProps/app.xml (if present). */
+  app?: FXPNode[];
+  /** Parsed _rels/.rels (package relationships). */
+  rootRels?: FXPNode[];
 }
 
 /** A body element is a paragraph, table, or page break. */
@@ -117,6 +134,13 @@ export interface NormalizedParagraph {
   kind: "paragraph";
   /** Stable ID, e.g., "p0", "tbl0.r1.c0.p0", "hdr.default.p0" */
   id: string;
+  /**
+   * Native Word paragraph identity from `w14:paraId` (8 uppercase hex chars).
+   * Survives round trips through Word, unlike the positional `id`.
+   * Present on Word 2010+ files, or on any paragraph when loaded with
+   * `assignParaIds: true`. Addressable in patches as `para:XXXXXXXX`.
+   */
+  paraId?: string;
   /** Concatenated text from all runs. */
   text: string;
   /** Ordered run mappings with character offsets and XML refs. */
@@ -190,6 +214,24 @@ export interface RunFormatting {
   strikethrough?: boolean;
   fontSize?: number;
   fontFamily?: string;
+  /** Raw `w:color w:val` (hex RGB such as "FF0000", or "auto"). */
+  color?: string;
+  /** `w:color w:themeColor` when the colour is theme-mapped (e.g., "accent2"). */
+  themeColor?: string;
+  highlight?: string;
+}
+
+/**
+ * Filter for selecting runs in a projection by their formatting.
+ * Every property given must match. String comparisons are case-insensitive
+ * (so `color: "ff0000"` matches `w:color w:val="FF0000"`).
+ */
+export interface RunFilter {
+  bold?: boolean;
+  italic?: boolean;
+  underline?: string;
+  strikethrough?: boolean;
+  /** Hex RGB colour, e.g. "FF0000". Matches the raw `w:val` regardless of theme mapping. */
   color?: string;
   highlight?: string;
 }
@@ -332,6 +374,9 @@ export type Patch =
   | InsertTextPatch
   | DeleteTextPatch
   | AppendTextPatch
+  | InsertParagraphPatch
+  | DeleteParagraphPatch
+  | AddCommentPatch
   | AddTablePatch
   | AddTableRowPatch
   | DeleteTableRowPatch
@@ -348,6 +393,49 @@ export type Patch =
   | ConvertToListPatch
   | RemoveListPatch
   | SetListPropertiesPatch;
+
+export interface InsertParagraphPatch {
+  type: "insert_paragraph";
+  /** Target paragraph ID (positional `p12` or native `para:4F2A1C7B`). */
+  target: string;
+  /** Insert before or after the target paragraph. */
+  position: "before" | "after";
+  /**
+   * Text for the new paragraph(s). Supports inline formatting markers and
+   * {{FIELD}} placeholders. `\n` splits into multiple paragraphs.
+   * Markdown tables and lists are NOT supported here — use `add_table` /
+   * `add_list` with `afterId` instead.
+   */
+  text: string;
+  /**
+   * Copy the target's paragraph properties (`w:pPr`: style, numbering,
+   * indentation, spacing) and the run formatting of its last run onto the
+   * new paragraph(s). Default: true.
+   */
+  inheritStyle?: boolean;
+}
+
+export interface DeleteParagraphPatch {
+  type: "delete_paragraph";
+  /** Target paragraph ID (positional or `para:` form). */
+  target: string;
+}
+
+export interface AddCommentPatch {
+  type: "add_comment";
+  /** Target paragraph ID (positional or `para:` form). */
+  target: string;
+  /** Optional substring to anchor the comment to. If omitted, the whole paragraph is commented. */
+  find?: string;
+  /** Which occurrence of `find` (1-based). Default: 1. */
+  occurrence?: number;
+  /** Comment text. `\n` splits into multiple paragraphs inside the comment. */
+  text: string;
+  /** Comment author. Falls back to `revisionAuthor` from PatchOptions, then "docxtor". */
+  author?: string;
+  /** Author initials shown in Word's balloon. Derived from `author` if omitted. */
+  initials?: string;
+}
 
 export interface ReplaceTextPatch {
   type: "replace_text";
@@ -563,6 +651,13 @@ export interface ProjectionOptions {
   includeRevisions?: boolean;
   /** Include page break elements and hints in the projection. Default: false. */
   includePageBreaks?: boolean;
+  /**
+   * JSON projection only. When set, every paragraph's `formatting` array
+   * contains exactly the runs matching the filter (with their offsets), and
+   * nothing else. Implies `includeFormatting`. Use it to read, e.g., answers
+   * a client typed in red: `{ runFilter: { color: "FF0000" } }`.
+   */
+  runFilter?: RunFilter;
 }
 
 // =============================================================================
@@ -577,8 +672,58 @@ export interface PatchOptions {
   trackRevisions?: boolean;
   /** The author name for revision marks. Default: "docxtor". */
   revisionAuthor?: string;
-  /** The revision date (ISO 8601). Default: current time. */
+  /**
+   * The revision date (ISO 8601, e.g. "2026-10-13T00:00:00Z") stamped on every
+   * revision mark. Default: current time. Pin it for byte-stable output.
+   */
   revisionDate?: string;
+  /**
+   * All-or-nothing batch. Patches are applied against a deep clone of the
+   * document; if every patch succeeds the clone replaces the document,
+   * otherwise the document is left untouched. The returned results still
+   * describe every patch (a `success: true` entry means the patch would have
+   * applied, not that it did). Default: false.
+   */
+  atomic?: boolean;
+}
+
+// =============================================================================
+// Revisions (accept / reject)
+// =============================================================================
+
+export interface RevisionFilterOptions {
+  /** Only process revisions by these authors. Omit to process every revision. */
+  authors?: string[];
+}
+
+// =============================================================================
+// Document metadata (docProps)
+// =============================================================================
+
+/** Core document properties from docProps/core.xml. */
+export interface CoreProperties {
+  /** dc:creator */
+  creator?: string;
+  /** cp:lastModifiedBy */
+  lastModifiedBy?: string;
+  /** dc:title */
+  title?: string;
+  /** dc:subject */
+  subject?: string;
+  /** dc:description */
+  description?: string;
+  /** cp:keywords */
+  keywords?: string;
+  /** cp:category */
+  category?: string;
+  /** cp:contentStatus */
+  contentStatus?: string;
+  /** cp:revision */
+  revision?: string;
+  /** dcterms:created (W3CDTF) */
+  created?: string;
+  /** dcterms:modified (W3CDTF) */
+  modified?: string;
 }
 
 // =============================================================================
@@ -588,4 +733,10 @@ export interface PatchOptions {
 export interface LoadOptions {
   /** Whether to normalize headers and footers. Default: true. */
   includeHeadersFooters?: boolean;
+  /**
+   * Stamp a `w14:paraId` (and `w14:textId`) on every paragraph that lacks one,
+   * in the body, headers, and footers. Declares the `w14` namespace and adds
+   * it to `mc:Ignorable` on each part's root if missing. Default: false.
+   */
+  assignParaIds?: boolean;
 }

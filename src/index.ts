@@ -42,18 +42,31 @@ import type {
   BodyElement,
   HeaderFooter,
   StyleInfo,
+  CoreProperties,
+  RevisionFilterOptions,
+  FXPNode,
 } from "./types.js";
 import { readDocx, type DocxZipEntries } from "./zip/reader.js";
 import { writeDocx } from "./zip/writer.js";
 import { serializeXml } from "./xml/serializer.js";
-import { normalizeDocument } from "./normalizer/document.js";
+import { normalizeDocument, reNormalizeDocument } from "./normalizer/document.js";
 import { applyPatches } from "./patches/engine.js";
 import { project, type JsonProjection } from "./projection/llm.js";
 import {
   findParagraphById as _findParagraphById,
+  findParagraphByParaId as _findParagraphByParaId,
   findTableById as _findTableById,
   validatePatch as _validatePatch,
 } from "./patches/validator.js";
+import {
+  acceptAllRevisions as _acceptAllRevisions,
+  rejectAllRevisions as _rejectAllRevisions,
+} from "./revisions/accept-reject.js";
+import {
+  getCoreProperties as _getCoreProperties,
+  setCoreProperties as _setCoreProperties,
+  scrubMetadata as _scrubMetadata,
+} from "./metadata/properties.js";
 
 /**
  * The main entry point for docxtor.
@@ -67,6 +80,8 @@ import {
 export class Docxtor {
   private zipEntries: DocxZipEntries;
   private doc: NormalizedDocument;
+  /** Zip paths to drop on the next export (e.g., docProps/custom.xml after a scrub). */
+  private removedParts = new Set<string>();
 
   private constructor(
     zipEntries: DocxZipEntries,
@@ -200,6 +215,61 @@ export class Docxtor {
   }
 
   // ===========================================================================
+  // Revisions
+  // ===========================================================================
+
+  /**
+   * Accept every tracked change (optionally only those by `authors`):
+   * insertions become plain content, deletions are removed, property changes
+   * are dropped, deleted rows and paragraphs disappear.
+   *
+   * Positional ids are reassigned afterwards; `paraId`s are unchanged.
+   */
+  acceptAllRevisions(options?: RevisionFilterOptions): { accepted: number } {
+    const result = _acceptAllRevisions(this.doc, options);
+    reNormalizeDocument(this.doc);
+    return result;
+  }
+
+  /**
+   * Reject every tracked change (optionally only those by `authors`):
+   * insertions are removed, deletions restored, old properties put back,
+   * inserted rows and paragraphs disappear.
+   *
+   * Positional ids are reassigned afterwards; `paraId`s are unchanged.
+   */
+  rejectAllRevisions(options?: RevisionFilterOptions): { rejected: number } {
+    const result = _rejectAllRevisions(this.doc, options);
+    reNormalizeDocument(this.doc);
+    return result;
+  }
+
+  // ===========================================================================
+  // Metadata
+  // ===========================================================================
+
+  /** Read docProps/core.xml properties. */
+  getCoreProperties(): CoreProperties {
+    return _getCoreProperties(this.doc);
+  }
+
+  /** Set docProps/core.xml properties (creating the part if needed). */
+  setCoreProperties(props: Partial<CoreProperties>): void {
+    _setCoreProperties(this.doc, props);
+  }
+
+  /**
+   * Strip identifying metadata: clears creator, lastModifiedBy, description,
+   * keywords, category and contentStatus, sets revision to "1", clears
+   * Company / Manager / HyperlinkBase in app.xml, and removes
+   * docProps/custom.xml. Title, created and modified are left untouched.
+   */
+  scrubMetadata(): void {
+    const { removedParts } = _scrubMetadata(this.doc);
+    for (const path of removedParts) this.removedParts.add(path);
+  }
+
+  // ===========================================================================
   // Export
   // ===========================================================================
 
@@ -246,29 +316,30 @@ export class Docxtor {
       }
     }
 
-    // Serialize rels and content types if they were parsed
-    const documentRelsXml = this.doc.xmlParts.documentRels
-      ? serializeXml(this.doc.xmlParts.documentRels)
-      : undefined;
-    const contentTypesXml = this.doc.xmlParts.contentTypes
-      ? serializeXml(this.doc.xmlParts.contentTypes)
-      : undefined;
-    const settingsXml = this.doc.xmlParts.settings
-      ? serializeXml(this.doc.xmlParts.settings)
-      : undefined;
-    const numberingXml = this.doc.xmlParts.numbering
-      ? serializeXml(this.doc.xmlParts.numbering)
-      : undefined;
+    for (const path of this.removedParts) {
+      if (!removedParts.includes(path)) removedParts.push(path);
+    }
+
+    // Serialize every optional part that was parsed (or created on demand)
+    const serialize = (part: FXPNode[] | undefined): string | undefined =>
+      part ? serializeXml(part) : undefined;
+    const parts = this.doc.xmlParts;
 
     return writeDocx({
       zip: this.zipEntries.zip,
       documentXml,
       headers: headers.size > 0 ? headers : undefined,
       footers: footers.size > 0 ? footers : undefined,
-      documentRelsXml,
-      contentTypesXml,
-      settingsXml,
-      numberingXml,
+      documentRelsXml: serialize(parts.documentRels),
+      contentTypesXml: serialize(parts.contentTypes),
+      settingsXml: serialize(parts.settings),
+      numberingXml: serialize(parts.numbering),
+      footnotesXml: serialize(parts.footnotes),
+      endnotesXml: serialize(parts.endnotes),
+      commentsXml: serialize(parts.comments),
+      coreXml: serialize(parts.core),
+      appXml: serialize(parts.app),
+      rootRelsXml: serialize(parts.rootRels),
       removedParts: removedParts.length > 0 ? removedParts : undefined,
     });
   }
@@ -341,6 +412,14 @@ export class Docxtor {
   }
 
   /**
+   * Find a paragraph by its native `w14:paraId` (8 hex chars, case-insensitive).
+   * Resolution order: body (including table cells), headers, footers.
+   */
+  findParagraphByParaId(paraId: string): NormalizedParagraph | undefined {
+    return _findParagraphByParaId(paraId, this.doc);
+  }
+
+  /**
    * Find a table by its ID anywhere in the document body
    * (including nested tables).
    */
@@ -375,6 +454,7 @@ export type {
   NormalizedTableCell,
   RunMapping,
   RunFormatting,
+  RunFilter,
   ListInfo,
   HeaderFooter,
   BodyElement,
@@ -383,6 +463,9 @@ export type {
   InsertTextPatch,
   DeleteTextPatch,
   AppendTextPatch,
+  InsertParagraphPatch,
+  DeleteParagraphPatch,
+  AddCommentPatch,
   AddTablePatch,
   AddTableRowPatch,
   DeleteTableRowPatch,
@@ -405,6 +488,8 @@ export type {
   PatchResult,
   PatchOptions,
   RevisionMark,
+  RevisionFilterOptions,
+  CoreProperties,
   ProjectionFormat,
   ProjectionOptions,
   LoadOptions,
@@ -416,10 +501,12 @@ export { readDocx } from "./zip/reader.js";
 export { writeDocx } from "./zip/writer.js";
 export { parseXml } from "./xml/parser.js";
 export { serializeXml } from "./xml/serializer.js";
-export { normalizeDocument } from "./normalizer/document.js";
+export { normalizeDocument, reNormalizeDocument } from "./normalizer/document.js";
 export type { HeaderFooterRef } from "./normalizer/document.js";
-export { applyPatches } from "./patches/engine.js";
+export { applyPatches, cloneDocument } from "./patches/engine.js";
 export { project, projectToJson, projectToMarkdown } from "./projection/llm.js";
 export type { JsonProjection, JsonProjectionPageBreak, JsonProjectionRunFormatting } from "./projection/llm.js";
-export { validatePatch, findParagraphById, findTableById } from "./patches/validator.js";
+export { validatePatch, findParagraphById, findParagraphByParaId, findTableById } from "./patches/validator.js";
 export type { ValidationResult } from "./patches/validator.js";
+export { acceptAllRevisions, rejectAllRevisions } from "./revisions/accept-reject.js";
+export { getCoreProperties, setCoreProperties, scrubMetadata } from "./metadata/properties.js";

@@ -10,6 +10,7 @@ import type {
   NormalizedTable,
   RevisionMark,
   RunFormatting,
+  RunFilter,
   RunMapping,
   StyleInfo,
   ProjectionOptions,
@@ -31,6 +32,8 @@ export interface JsonProjectionRunFormatting extends RunFormatting {
 
 interface JsonProjectionParagraph {
   id: string;
+  /** Native `w14:paraId`, when the paragraph has one. */
+  paraId?: string;
   text: string;
   style?: string;
   listLevel?: number;
@@ -44,6 +47,8 @@ interface JsonProjectionParagraph {
 
 interface JsonProjectionTableCell {
   id: string;
+  /** Native `w14:paraId` of the cell's first paragraph, when it has one. */
+  paraId?: string;
   text: string;
   paragraphs?: JsonProjectionParagraph[];
 }
@@ -81,7 +86,8 @@ export function projectToJson(
   doc: NormalizedDocument,
   options: ProjectionOptions = {},
 ): JsonProjection {
-  const includeFormatting = options.includeFormatting ?? false;
+  const runFilter = options.runFilter;
+  const includeFormatting = (options.includeFormatting ?? false) || runFilter !== undefined;
   const includeHeadersFooters = options.includeHeadersFooters ?? true;
   const includeTables = options.includeTables ?? true;
   const includeRevisions = options.includeRevisions ?? false;
@@ -91,9 +97,9 @@ export function projectToJson(
 
   for (const element of doc.body) {
     if (element.kind === "paragraph") {
-      body.push(projectParagraphToJson(element, includeFormatting, includeRevisions, includePageBreaks));
+      body.push(projectParagraphToJson(element, includeFormatting, includeRevisions, includePageBreaks, runFilter));
     } else if (element.kind === "table" && includeTables) {
-      body.push(projectTableToJson(element, includeFormatting, includeRevisions));
+      body.push(projectTableToJson(element, includeFormatting, includeRevisions, runFilter));
     } else if (element.kind === "page_break" && includePageBreaks) {
       body.push({ id: element.id, type: "page_break" });
     }
@@ -114,12 +120,12 @@ export function projectToJson(
           type: "header",
           variant: header.variant,
           paragraphs: header.paragraphs.map((p) =>
-            projectParagraphToJson(p, includeFormatting, includeRevisions),
+            projectParagraphToJson(p, includeFormatting, includeRevisions, false, runFilter),
           ),
         };
         if (includeTables && header.tables.length > 0) {
           hfEntry.tables = header.tables.map((t) =>
-            projectTableToJson(t, includeFormatting, includeRevisions),
+            projectTableToJson(t, includeFormatting, includeRevisions, runFilter),
           );
         }
         result.headers.push(hfEntry);
@@ -132,12 +138,12 @@ export function projectToJson(
           type: "footer",
           variant: footer.variant,
           paragraphs: footer.paragraphs.map((p) =>
-            projectParagraphToJson(p, includeFormatting, includeRevisions),
+            projectParagraphToJson(p, includeFormatting, includeRevisions, false, runFilter),
           ),
         };
         if (includeTables && footer.tables.length > 0) {
           hfEntry.tables = footer.tables.map((t) =>
-            projectTableToJson(t, includeFormatting, includeRevisions),
+            projectTableToJson(t, includeFormatting, includeRevisions, runFilter),
           );
         }
         result.footers.push(hfEntry);
@@ -148,16 +154,38 @@ export function projectToJson(
   return result;
 }
 
+/**
+ * Whether a run's formatting satisfies every property of a RunFilter.
+ * String comparisons are case-insensitive so colour hex casing doesn't matter.
+ */
+export function runMatchesFilter(formatting: RunFormatting, filter: RunFilter): boolean {
+  const eqStr = (a: string | undefined, b: string | undefined): boolean =>
+    a !== undefined && b !== undefined && a.toUpperCase() === b.toUpperCase();
+
+  if (filter.bold !== undefined && (formatting.bold ?? false) !== filter.bold) return false;
+  if (filter.italic !== undefined && (formatting.italic ?? false) !== filter.italic) return false;
+  if (filter.strikethrough !== undefined && (formatting.strikethrough ?? false) !== filter.strikethrough) return false;
+  if (filter.underline !== undefined && !eqStr(formatting.underline, filter.underline)) return false;
+  if (filter.color !== undefined && !eqStr(formatting.color, filter.color)) return false;
+  if (filter.highlight !== undefined && !eqStr(formatting.highlight, filter.highlight)) return false;
+  return true;
+}
+
 function projectParagraphToJson(
   para: NormalizedParagraph,
   includeFormatting: boolean,
   includeRevisions: boolean = false,
   includePageBreaks: boolean = false,
+  runFilter?: RunFilter,
 ): JsonProjectionParagraph {
   const result: JsonProjectionParagraph = {
     id: para.id,
     text: para.text,
   };
+
+  if (para.paraId) {
+    result.paraId = para.paraId;
+  }
 
   if (para.style) {
     result.style = para.style;
@@ -174,17 +202,21 @@ function projectParagraphToJson(
   if (includeFormatting && para.runs.length > 0) {
     const fmtRuns: JsonProjectionRunFormatting[] = [];
     for (const r of para.runs) {
-      // Only include runs that have at least one formatting property set
-      const hasAny =
-        r.formatting.bold ||
-        r.formatting.italic ||
-        r.formatting.underline ||
-        r.formatting.strikethrough ||
-        r.formatting.fontSize ||
-        r.formatting.fontFamily ||
-        r.formatting.color ||
-        r.formatting.highlight;
-      if (!hasAny) continue;
+      if (runFilter) {
+        if (!runMatchesFilter(r.formatting, runFilter)) continue;
+      } else {
+        // Only include runs that have at least one formatting property set
+        const hasAny =
+          r.formatting.bold ||
+          r.formatting.italic ||
+          r.formatting.underline ||
+          r.formatting.strikethrough ||
+          r.formatting.fontSize ||
+          r.formatting.fontFamily ||
+          r.formatting.color ||
+          r.formatting.highlight;
+        if (!hasAny) continue;
+      }
 
       const fmt: JsonProjectionRunFormatting = {
         text: r.text,
@@ -198,6 +230,7 @@ function projectParagraphToJson(
       if (r.formatting.fontSize) fmt.fontSize = r.formatting.fontSize;
       if (r.formatting.fontFamily) fmt.fontFamily = r.formatting.fontFamily;
       if (r.formatting.color) fmt.color = r.formatting.color;
+      if (r.formatting.themeColor) fmt.themeColor = r.formatting.themeColor;
       if (r.formatting.highlight) fmt.highlight = r.formatting.highlight;
       fmtRuns.push(fmt);
     }
@@ -224,6 +257,7 @@ function projectTableToJson(
   table: NormalizedTable,
   includeFormatting: boolean = false,
   includeRevisions: boolean = false,
+  runFilter?: RunFilter,
 ): JsonProjectionTable {
   const result: JsonProjectionTable = {
     id: table.id,
@@ -234,10 +268,14 @@ function projectTableToJson(
           id: cell.paragraphs[0]?.id ?? `${table.id}.r${row.index}.c${cell.colIndex}.p0`,
           text: cell.paragraphs.map((p) => p.text).join("\n"),
         };
-        // Include individual paragraph details for multi-paragraph cells
-        if (cell.paragraphs.length > 1) {
+        if (cell.paragraphs[0]?.paraId) {
+          cellResult.paraId = cell.paragraphs[0].paraId;
+        }
+        // Include individual paragraph details for multi-paragraph cells,
+        // or when filtering runs (so matching runs in cells are reported)
+        if (cell.paragraphs.length > 1 || runFilter !== undefined) {
           cellResult.paragraphs = cell.paragraphs.map((p) =>
-            projectParagraphToJson(p, includeFormatting, includeRevisions),
+            projectParagraphToJson(p, includeFormatting, includeRevisions, false, runFilter),
           );
         }
         return cellResult;
@@ -250,7 +288,7 @@ function projectTableToJson(
   for (const row of table.rows) {
     for (const cell of row.cells) {
       for (const nested of cell.nestedTables) {
-        allNested.push(projectTableToJson(nested, includeFormatting, includeRevisions));
+        allNested.push(projectTableToJson(nested, includeFormatting, includeRevisions, runFilter));
       }
     }
   }
@@ -541,7 +579,15 @@ function formatParagraphMarkdown(
   }
 
   const listHint = para.listInfo ? ` {list:${para.listInfo.numId} L${para.listInfo.level}}` : "";
-  return `[${para.id}]${styleHint}${listHint} ${listPrefix}${text}`;
+  return `[${formatIdToken(para)}]${styleHint}${listHint} ${listPrefix}${text}`;
+}
+
+/**
+ * The id token shown in markdown brackets: `p12`, or `p12 ¶4F2A1C7B` when
+ * the paragraph carries a native paraId.
+ */
+function formatIdToken(para: NormalizedParagraph): string {
+  return para.paraId ? `${para.id} ¶${para.paraId}` : para.id;
 }
 
 /**
@@ -742,7 +788,8 @@ function formatTableMarkdown(
       } else {
         text = cell.paragraphs.map((p) => p.text).join(" ");
       }
-      const id = cell.paragraphs[0]?.id ?? `${table.id}.r${row.index}.c${cell.colIndex}.p0`;
+      const first = cell.paragraphs[0];
+      const id = first ? formatIdToken(first) : `${table.id}.r${row.index}.c${cell.colIndex}.p0`;
       return `[${id}] ${text}`;
     });
     lines.push(`| ${cells.join(" | ")} |`);

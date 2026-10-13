@@ -7,7 +7,6 @@
 
 import type {
   NormalizedDocument,
-  NormalizedParagraph,
   FXPNode,
   AddListPatch,
   AddListItemPatch,
@@ -30,6 +29,16 @@ import {
 import { buildFieldRuns } from "./field-codes.js";
 import { findParagraphById, findElementById } from "./validator.js";
 import { createInsElement, createPPrChange, convertRunToDeleted, createDelElement, type RevisionContext } from "./revision.js";
+import {
+  getBodyChildren,
+  insertIntoBody,
+  getNextPIdx,
+  findParentChildren,
+  findNormalizedContainer,
+  deriveNewParagraphId,
+  reNormalizeParagraph as reNormalize,
+} from "./container-utils.js";
+import { stampNewParagraphs, findPartRootForId } from "../normalizer/para-id.js";
 
 // =============================================================================
 // Helpers
@@ -62,210 +71,6 @@ function buildListParagraphNode(
   return { "w:p": children };
 }
 
-/**
- * Get the w:body children array from the document FXP tree.
- */
-function getBodyChildren(doc: NormalizedDocument): FXPNode[] {
-  const docNode = doc.xmlParts.document.find(
-    (n) => getTagName(n) === "w:document",
-  );
-  if (!docNode) throw new Error("Cannot find w:document in FXP tree");
-  const bodyNode = findChild(docNode, "w:body");
-  if (!bodyNode) throw new Error("Cannot find w:body in FXP tree");
-  return getChildren(bodyNode);
-}
-
-/**
- * Insert FXP nodes into the body before w:sectPr, or after a specific element.
- */
-function insertIntoBody(
-  bodyChildren: FXPNode[],
-  nodes: FXPNode[],
-  afterXmlRef?: FXPNode,
-): void {
-  if (afterXmlRef) {
-    const idx = bodyChildren.indexOf(afterXmlRef);
-    if (idx !== -1) {
-      bodyChildren.splice(idx + 1, 0, ...nodes);
-      return;
-    }
-  }
-  const sectPrIndex = bodyChildren.findIndex(
-    (n) => getTagName(n) === "w:sectPr",
-  );
-  if (sectPrIndex !== -1) {
-    bodyChildren.splice(sectPrIndex, 0, ...nodes);
-  } else {
-    bodyChildren.push(...nodes);
-  }
-}
-
-/**
- * Compute the next available paragraph ID index.
- */
-function getNextPIdx(doc: NormalizedDocument): number {
-  let max = -1;
-  for (const el of doc.body) {
-    if (el.kind === "paragraph") {
-      const num = parseInt(el.id.replace("p", ""), 10);
-      if (!isNaN(num) && num > max) max = num;
-    }
-  }
-  return max + 1;
-}
-
-/**
- * Find the FXP parent container of a paragraph's xmlRef.
- * Searches w:body, w:tc (table cells), and header/footer roots.
- */
-function findParentChildren(
-  doc: NormalizedDocument,
-  xmlRef: FXPNode,
-): FXPNode[] | undefined {
-  // Check body
-  const bodyChildren = getBodyChildren(doc);
-  if (bodyChildren.includes(xmlRef)) return bodyChildren;
-
-  // Check table cells in body
-  for (const child of bodyChildren) {
-    if (getTagName(child) === "w:tbl") {
-      const result = findInTable(child, xmlRef);
-      if (result) return result;
-    }
-  }
-
-  // Check headers/footers
-  for (const hf of [...doc.headers.values(), ...doc.footers.values()]) {
-    const rootTag = hf.type === "header" ? "w:hdr" : "w:ftr";
-    const rootNode = hf.xmlRef.find((n) => getTagName(n) === rootTag);
-    if (rootNode) {
-      const rootChildren = getChildren(rootNode);
-      if (rootChildren.includes(xmlRef)) return rootChildren;
-      for (const child of rootChildren) {
-        if (getTagName(child) === "w:tbl") {
-          const result = findInTable(child, xmlRef);
-          if (result) return result;
-        }
-      }
-    }
-  }
-
-  return undefined;
-}
-
-function findInTable(tblNode: FXPNode, target: FXPNode): FXPNode[] | undefined {
-  for (const tr of getChildren(tblNode).filter((n) => getTagName(n) === "w:tr")) {
-    for (const tc of getChildren(tr).filter((n) => getTagName(n) === "w:tc")) {
-      const tcChildren = getChildren(tc);
-      if (tcChildren.includes(target)) return tcChildren;
-      // Check nested tables
-      for (const child of tcChildren) {
-        if (getTagName(child) === "w:tbl") {
-          const result = findInTable(child, target);
-          if (result) return result;
-        }
-      }
-    }
-  }
-  return undefined;
-}
-
-/**
- * Find the normalized paragraph array that contains a given paragraph ID.
- * Returns { array, index } for doc.body, hf.paragraphs, or cell.paragraphs.
- */
-function findNormalizedContainer(
-  doc: NormalizedDocument,
-  paraId: string,
-): { array: Array<import("../types.js").NormalizedParagraph | import("../types.js").NormalizedTable | import("../types.js").NormalizedPageBreak>; index: number } | undefined {
-  // Check doc.body
-  const bodyIdx = doc.body.findIndex((el) => el.id === paraId);
-  if (bodyIdx !== -1) return { array: doc.body, index: bodyIdx };
-
-  // Check header/footer paragraphs
-  for (const hf of [...doc.headers.values(), ...doc.footers.values()]) {
-    const hfIdx = hf.paragraphs.findIndex((p) => p.id === paraId);
-    if (hfIdx !== -1) return { array: hf.paragraphs as any, index: hfIdx };
-  }
-
-  // Check table cell paragraphs (body tables + hf tables)
-  const allTables: import("../types.js").NormalizedTable[] = [];
-  for (const el of doc.body) {
-    if (el.kind === "table") allTables.push(el);
-  }
-  for (const hf of [...doc.headers.values(), ...doc.footers.values()]) {
-    allTables.push(...hf.tables);
-  }
-
-  for (const table of allTables) {
-    for (const row of table.rows) {
-      for (const cell of row.cells) {
-        const cellIdx = cell.paragraphs.findIndex((p) => p.id === paraId);
-        if (cellIdx !== -1) return { array: cell.paragraphs as any, index: cellIdx };
-        // Check nested tables
-        for (const nested of cell.nestedTables) {
-          for (const nr of nested.rows) {
-            for (const nc of nr.cells) {
-              const ncIdx = nc.paragraphs.findIndex((p) => p.id === paraId);
-              if (ncIdx !== -1) return { array: nc.paragraphs as any, index: ncIdx };
-            }
-          }
-        }
-      }
-    }
-  }
-
-  return undefined;
-}
-
-/**
- * Derive a new paragraph ID in the same namespace as the target paragraph.
- * E.g., target "hdr.default.p2" → "hdr.default.p3",
- *        target "tbl0.r1.c0.p0" → "tbl0.r1.c0.p1",
- *        target "p5" → "p6" (body namespace).
- *
- * Scans sibling paragraphs in the container to find the next available index.
- */
-function deriveNewParagraphId(
-  targetId: string,
-  containerArray: readonly { id: string }[],
-): string {
-  // Extract prefix: everything up to and including the last "p" before the trailing number
-  const match = targetId.match(/^(.*p)(\d+)$/);
-  if (!match) {
-    // Fallback — shouldn't happen for valid paragraph IDs
-    return `p${Date.now()}`;
-  }
-  const prefix = match[1]!; // e.g. "hdr.default.p", "tbl0.r1.c0.p", "p"
-
-  // Find the max index among siblings with the same prefix
-  let maxIdx = -1;
-  for (const el of containerArray) {
-    if (el.id.startsWith(prefix)) {
-      const suffix = el.id.slice(prefix.length);
-      const num = parseInt(suffix, 10);
-      if (!isNaN(num) && num > maxIdx) maxIdx = num;
-    }
-  }
-
-  return `${prefix}${maxIdx + 1}`;
-}
-
-/**
- * Re-normalize a paragraph in place, enriching listType.
- */
-function reNormalize(doc: NormalizedDocument, para: NormalizedParagraph): void {
-  const fresh = normalizeParagraph(para.xmlRef, para.id);
-  para.text = fresh.text;
-  para.runs = fresh.runs;
-  para.style = fresh.style;
-  para.listInfo = fresh.listInfo;
-  para.revisions = fresh.revisions;
-  if (doc.xmlParts.numbering) {
-    enrichListType(para, doc.xmlParts.numbering);
-  }
-}
-
 // =============================================================================
 // Executors
 // =============================================================================
@@ -294,6 +99,7 @@ export function executeAddList(
         const rootNode = hf.xmlRef.find((n) => getTagName(n) === rootTag);
         if (rootNode) {
           const rootChildren = getChildren(rootNode);
+          stampNewParagraphs(doc, nodes, rootNode);
           rootChildren.push(...nodes);
           const prefix = patch.container.type === "header" ? "hdr" : "ftr";
           let nextPIdx = hf.paragraphs.length;
@@ -314,17 +120,22 @@ export function executeAddList(
 
   const bodyChildren = getBodyChildren(doc);
   let afterXmlRef: FXPNode | undefined;
+  let afterElementId: string | undefined;
   if (patch.afterId) {
     const target = findElementById(patch.afterId, doc);
-    if (target) afterXmlRef = target.xmlRef;
+    if (target) {
+      afterXmlRef = target.xmlRef;
+      afterElementId = target.id;
+    }
   }
 
+  stampNewParagraphs(doc, nodes, findPartRootForId(doc, "body"));
   insertIntoBody(bodyChildren, nodes, afterXmlRef);
 
   // Normalize and add to doc.body
   let nextPIdx = getNextPIdx(doc);
-  const insertIdx = patch.afterId
-    ? doc.body.findIndex((el) => el.id === patch.afterId)
+  const insertIdx = afterElementId !== undefined
+    ? doc.body.findIndex((el) => el.id === afterElementId)
     : -1;
 
   for (let i = 0; i < nodes.length; i++) {
@@ -349,6 +160,7 @@ export function executeAddListItem(
   const level = patch.level ?? targetPara.listInfo!.level;
 
   const newNode = buildListParagraphNode(patch.text, numId, level, revCtx);
+  stampNewParagraphs(doc, [newNode], findPartRootForId(doc, targetPara.id));
 
   // Find the parent FXP container
   const parentChildren = findParentChildren(doc, targetPara.xmlRef);
@@ -364,17 +176,17 @@ export function executeAddListItem(
   }
 
   // Normalize and insert into the correct normalized container
-  const container = findNormalizedContainer(doc, patch.target);
+  const container = findNormalizedContainer(doc, targetPara.id);
   const containerArray = container ? container.array : doc.body;
-  const id = deriveNewParagraphId(patch.target, containerArray as readonly { id: string }[]);
+  const id = deriveNewParagraphId(targetPara.id, containerArray);
   const normalized = normalizeParagraph(newNode, id);
   if (doc.xmlParts.numbering) enrichListType(normalized, doc.xmlParts.numbering);
 
   if (container) {
     if (patch.position === "after") {
-      container.array.splice(container.index + 1, 0, normalized as any);
+      container.array.splice(container.index + 1, 0, normalized);
     } else {
-      container.array.splice(container.index, 0, normalized as any);
+      container.array.splice(container.index, 0, normalized);
     }
   } else {
     doc.body.push(normalized);
@@ -427,7 +239,7 @@ export function executeRemoveListItem(
   }
 
   // Remove from the correct normalized container (body, hf.paragraphs, or cell.paragraphs)
-  const container = findNormalizedContainer(doc, patch.target);
+  const container = findNormalizedContainer(doc, targetPara.id);
   if (container) {
     container.array.splice(container.index, 1);
   }
