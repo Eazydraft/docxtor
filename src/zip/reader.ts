@@ -25,6 +25,18 @@ export interface DocxZipEntries {
   settingsXml?: string;
   /** The numbering.xml file (may not be present). */
   numberingXml?: string;
+  /** The footnotes.xml file (may not be present). */
+  footnotesXml?: string;
+  /** The endnotes.xml file (may not be present). */
+  endnotesXml?: string;
+  /** The comments.xml file (may not be present). */
+  commentsXml?: string;
+  /** docProps/core.xml (may not be present). */
+  coreXml?: string;
+  /** docProps/app.xml (may not be present). */
+  appXml?: string;
+  /** _rels/.rels — package-level relationships (may not be present). */
+  rootRels?: string;
   /** The JSZip instance (kept for writing back). */
   zip: JSZip;
 }
@@ -54,6 +66,12 @@ export async function readDocx(
   const stylesXml = await readEntry(zip, "word/styles.xml");
   const settingsXml = await readEntry(zip, "word/settings.xml");
   const numberingXml = await readEntry(zip, "word/numbering.xml");
+  const footnotesXml = await readEntry(zip, "word/footnotes.xml");
+  const endnotesXml = await readEntry(zip, "word/endnotes.xml");
+  const commentsXml = await readEntry(zip, "word/comments.xml");
+  const coreXml = await readEntry(zip, "docProps/core.xml");
+  const appXml = await readEntry(zip, "docProps/app.xml");
+  const rootRels = await readEntry(zip, "_rels/.rels");
 
   // Extract header and footer files
   const headers = new Map<string, string>();
@@ -83,6 +101,12 @@ export async function readDocx(
     stylesXml,
     settingsXml,
     numberingXml,
+    footnotesXml,
+    endnotesXml,
+    commentsXml,
+    coreXml,
+    appXml,
+    rootRels,
     zip,
   };
 }

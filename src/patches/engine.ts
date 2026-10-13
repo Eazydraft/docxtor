@@ -7,17 +7,20 @@
  *
  * This is the "Option A: re-normalize after each patch" approach — simple
  * and correct. Can be optimized to incremental updates later.
+ *
+ * With `atomic: true`, the whole batch runs against a deep clone of the
+ * document; the clone replaces the document only if every patch succeeds.
  */
 
 import type {
   NormalizedDocument,
-  NormalizedParagraph,
   NormalizedTable,
   Patch,
   PatchResult,
   PatchOptions,
   AppendTextPatch,
   AddTablePatch,
+  DocxXmlParts,
   FXPNode,
 } from "../types.js";
 import {
@@ -41,10 +44,9 @@ import { executeApplyFormatting } from "./format-ops.js";
 import { executeApplyStyle } from "./style-ops.js";
 import { normalizeParagraph } from "../normalizer/paragraph.js";
 import { normalizeTable } from "../normalizer/table.js";
-import { enrichListType } from "../normalizer/document.js";
+import { enrichListType, reNormalizeDocument } from "../normalizer/document.js";
 import { createRevisionContext, type RevisionContext } from "./revision.js";
 import {
-  findChild,
   findChildren,
   getChildren,
   getTagName,
@@ -67,6 +69,15 @@ import {
   executeSetListProperties,
 } from "./list-ops.js";
 import { createNumberingDefinition } from "./numbering.js";
+import { parseTextSegments } from "./text-segments.js";
+import {
+  getBodyChildren,
+  insertIntoBody,
+  reNormalizeParagraph,
+} from "./container-utils.js";
+import { executeInsertParagraph, executeDeleteParagraph } from "./paragraph-ops.js";
+import { executeAddComment } from "./comment-ops.js";
+import { stampNewParagraphs, findPartRootForId } from "../normalizer/para-id.js";
 
 /**
  * Apply a list of patches to a NormalizedDocument.
@@ -75,10 +86,21 @@ import { createNumberingDefinition } from "./numbering.js";
  * the affected elements are re-normalized so subsequent patches
  * operate on updated text/mappings.
  *
- * @param options - Optional patch options (e.g., revision tracking)
+ * @param options - Optional patch options (e.g., revision tracking, atomic)
  * @returns Array of PatchResult for each patch
  */
 export function applyPatches(
+  doc: NormalizedDocument,
+  patches: Patch[],
+  options?: PatchOptions,
+): PatchResult[] {
+  if (options?.atomic) {
+    return applyPatchesAtomic(doc, patches, options);
+  }
+  return applyPatchesSequential(doc, patches, options);
+}
+
+function applyPatchesSequential(
   doc: NormalizedDocument,
   patches: Patch[],
   options?: PatchOptions,
@@ -91,11 +113,62 @@ export function applyPatches(
     : undefined;
 
   for (const patch of patches) {
-    const result = applySinglePatch(doc, patch, revCtx);
+    const result = applySinglePatch(doc, patch, revCtx, options);
     results.push(result);
   }
 
   return results;
+}
+
+/**
+ * All-or-nothing: apply every patch to a deep clone; swap the clone in only
+ * if every patch succeeded. The results describe every patch either way.
+ */
+function applyPatchesAtomic(
+  doc: NormalizedDocument,
+  patches: Patch[],
+  options: PatchOptions,
+): PatchResult[] {
+  const clone = cloneDocument(doc);
+  const results = applyPatchesSequential(clone, patches, { ...options, atomic: false });
+
+  if (results.every((r) => r.success)) {
+    doc.body = clone.body;
+    doc.headers = clone.headers;
+    doc.footers = clone.footers;
+    doc.xmlParts = clone.xmlParts;
+  }
+
+  return results;
+}
+
+/**
+ * Deep-clone a document's XML parts and rebuild the normalized view over
+ * the clone, so no xmlRef points back into the original.
+ */
+export function cloneDocument(doc: NormalizedDocument): NormalizedDocument {
+  const xmlParts = {} as DocxXmlParts;
+  for (const [key, value] of Object.entries(doc.xmlParts)) {
+    if (value === undefined) continue;
+    if (value instanceof Map) {
+      const copy = new Map<string, FXPNode[]>();
+      for (const [k, v] of value) copy.set(k, JSON.parse(JSON.stringify(v)) as FXPNode[]);
+      xmlParts[key] = copy;
+    } else {
+      xmlParts[key] = JSON.parse(JSON.stringify(value)) as FXPNode[];
+    }
+  }
+
+  const clone: NormalizedDocument = {
+    body: [],
+    headers: new Map(),
+    footers: new Map(),
+    xmlParts,
+    styles: doc.styles,
+    loadOptions: doc.loadOptions,
+  };
+  reNormalizeDocument(clone);
+  return clone;
 }
 
 /**
@@ -105,6 +178,7 @@ function applySinglePatch(
   doc: NormalizedDocument,
   patch: Patch,
   revCtx?: RevisionContext,
+  options?: PatchOptions,
 ): PatchResult {
   // Validate
   const validation = validatePatch(patch, doc);
@@ -132,6 +206,25 @@ function applySinglePatch(
         reNormalizeParagraph(doc, para);
         break;
       }
+      case "insert_paragraph": {
+        const para = findParagraphById(patch.target, doc)!;
+        executeInsertParagraph(doc, para, patch, revCtx);
+        break;
+      }
+      case "delete_paragraph": {
+        const para = findParagraphById(patch.target, doc)!;
+        executeDeleteParagraph(doc, para, patch, revCtx);
+        break;
+      }
+      case "add_comment": {
+        const para = findParagraphById(patch.target, doc)!;
+        executeAddComment(doc, para, patch, {
+          defaultAuthor: options?.revisionAuthor ?? "docxtor",
+          date: options?.revisionDate ?? new Date().toISOString(),
+        });
+        reNormalizeParagraph(doc, para);
+        break;
+      }
       case "replace_cell_text": {
         const para = findParagraphById(patch.target, doc)!;
         executeReplaceCellText(para, patch, revCtx);
@@ -140,7 +233,9 @@ function applySinglePatch(
       }
       case "add_table_row": {
         const table = findTableById(patch.target, doc)!;
-        executeAddTableRow(table, patch, revCtx);
+        const newRow = executeAddTableRow(table, patch, revCtx);
+        // The cloned row carries the source row's paraIds — give it fresh ones
+        stampNewParagraphs(doc, [newRow], findPartRootForId(doc, table.id), true);
         reNormalizeTable(doc, table);
         break;
       }
@@ -223,34 +318,11 @@ function applySinglePatch(
 }
 
 /**
- * Re-normalize a paragraph after a patch mutated its XML.
- * Updates the paragraph's text, runs, and mappings in-place.
- */
-function reNormalizeParagraph(
-  doc: NormalizedDocument,
-  paragraph: NormalizedParagraph,
-): void {
-  const fresh = normalizeParagraph(paragraph.xmlRef, paragraph.id);
-
-  // Update in-place
-  paragraph.text = fresh.text;
-  paragraph.runs = fresh.runs;
-  paragraph.style = fresh.style;
-  paragraph.listInfo = fresh.listInfo;
-  paragraph.revisions = fresh.revisions;
-
-  // Enrich listType from numbering.xml
-  if (doc.xmlParts.numbering) {
-    enrichListType(paragraph, doc.xmlParts.numbering);
-  }
-}
-
-/**
  * Re-normalize a table after a structural change (row add/delete).
  * This replaces the table's rows/cells with fresh normalized data.
  */
 function reNormalizeTable(
-  _doc: NormalizedDocument,
+  doc: NormalizedDocument,
   table: NormalizedTable,
 ): void {
   const fresh = normalizeTable(table.xmlRef, table.id);
@@ -258,58 +330,21 @@ function reNormalizeTable(
   // Update in-place
   table.rows = fresh.rows;
   table.style = fresh.style;
+
+  if (doc.xmlParts.numbering) {
+    for (const row of table.rows) {
+      for (const cell of row.cells) {
+        for (const para of cell.paragraphs) {
+          enrichListType(para, doc.xmlParts.numbering);
+        }
+      }
+    }
+  }
 }
 
 // =============================================================================
 // Append text (document-level operation)
 // =============================================================================
-
-/**
- * Get the w:body node and its children from the document FXP tree.
- */
-function getBodyNode(doc: NormalizedDocument): {
-  bodyNode: FXPNode;
-  bodyChildren: FXPNode[];
-} {
-  const docNode = doc.xmlParts.document.find(
-    (n) => getTagName(n) === "w:document",
-  );
-  if (!docNode) {
-    throw new Error("Cannot find w:document in FXP tree");
-  }
-  const bodyNode = findChild(docNode, "w:body");
-  if (!bodyNode) {
-    throw new Error("Cannot find w:body in FXP tree");
-  }
-  return { bodyNode, bodyChildren: getChildren(bodyNode) };
-}
-
-/**
- * Insert FXP nodes into the body before w:sectPr, or after a specific element.
- * Returns the insertion index.
- */
-function insertIntoBody(
-  bodyChildren: FXPNode[],
-  nodes: FXPNode[],
-  afterXmlRef?: FXPNode,
-): void {
-  if (afterXmlRef) {
-    const idx = bodyChildren.indexOf(afterXmlRef);
-    if (idx !== -1) {
-      bodyChildren.splice(idx + 1, 0, ...nodes);
-      return;
-    }
-  }
-  // Default: insert before w:sectPr if present, otherwise append
-  const sectPrIndex = bodyChildren.findIndex(
-    (n) => getTagName(n) === "w:sectPr",
-  );
-  if (sectPrIndex !== -1) {
-    bodyChildren.splice(sectPrIndex, 0, ...nodes);
-  } else {
-    bodyChildren.push(...nodes);
-  }
-}
 
 /**
  * Compute the next available paragraph and table IDs.
@@ -330,143 +365,6 @@ function getNextIds(doc: NormalizedDocument): {
     }
   }
   return { nextPIdx: maxPIdx + 1, nextTblIdx: maxTblIdx + 1 };
-}
-
-// =============================================================================
-// Markdown table parsing
-// =============================================================================
-
-/** A contiguous block of text lines, a markdown table, or a markdown list. */
-type TextSegment =
-  | { kind: "text"; lines: string[] }
-  | { kind: "table"; headers: string[]; rows: string[][] }
-  | { kind: "list"; listType: "bullet" | "ordered"; items: { text: string; level: number }[] };
-
-/**
- * Parse text into segments of plain lines, markdown tables, and markdown lists.
- *
- * A markdown table is detected as:
- * - A header row: `| col1 | col2 | ...`
- * - A separator row: `| --- | --- | ...` (dashes, colons, spaces)
- * - Zero or more data rows: `| val1 | val2 | ...`
- *
- * A markdown list is detected as consecutive lines starting with:
- * - Bullet: `- `, `* `, `+ ` (after optional whitespace)
- * - Ordered: `\d+\. ` (after optional whitespace)
- * Nesting uses 2-space increments. Blank lines within a list don't break it.
- */
-function parseTextSegments(text: string): TextSegment[] {
-  const lines = text.split("\n");
-  const segments: TextSegment[] = [];
-  let i = 0;
-
-  while (i < lines.length) {
-    // Try to detect a markdown table starting at line i
-    if (
-      i + 1 < lines.length &&
-      isMarkdownTableRow(lines[i]!) &&
-      isMarkdownSeparator(lines[i + 1]!)
-    ) {
-      const headerCells = parseMarkdownRow(lines[i]!);
-      // Skip header and separator
-      i += 2;
-      const dataRows: string[][] = [];
-      while (i < lines.length && isMarkdownTableRow(lines[i]!)) {
-        const cells = parseMarkdownRow(lines[i]!);
-        // Pad or trim to match header count
-        while (cells.length < headerCells.length) cells.push("");
-        if (cells.length > headerCells.length)
-          cells.length = headerCells.length;
-        dataRows.push(cells);
-        i++;
-      }
-      segments.push({ kind: "table", headers: headerCells, rows: dataRows });
-      continue;
-    }
-
-    // Try to detect a markdown list
-    const listMatch = parseListLine(lines[i]!);
-    if (listMatch) {
-      const items: { text: string; level: number }[] = [];
-      const listType = listMatch.listType;
-      items.push({ text: listMatch.text, level: listMatch.level });
-      i++;
-
-      while (i < lines.length) {
-        const line = lines[i]!;
-        // Blank lines don't break the list
-        if (line.trim().length === 0) {
-          i++;
-          continue;
-        }
-        const nextMatch = parseListLine(line);
-        if (!nextMatch) break;
-        // Type change breaks the list
-        if (nextMatch.listType !== listType) break;
-
-        items.push({ text: nextMatch.text, level: nextMatch.level });
-        i++;
-      }
-
-      segments.push({ kind: "list", listType, items });
-      continue;
-    }
-
-    // Plain text line
-    const last = segments[segments.length - 1];
-    if (last && last.kind === "text") {
-      last.lines.push(lines[i]!);
-    } else {
-      segments.push({ kind: "text", lines: [lines[i]!] });
-    }
-    i++;
-  }
-
-  return segments;
-}
-
-/** Bullet pattern: optional whitespace + `- `, `* `, or `+ ` */
-const BULLET_RE = /^(\s*)[*+-]\s(.*)$/;
-/** Ordered pattern: optional whitespace + `N. ` */
-const ORDERED_RE = /^(\s*)\d+\.\s(.*)$/;
-
-function parseListLine(
-  line: string,
-): { listType: "bullet" | "ordered"; text: string; level: number } | undefined {
-  // Normalize tabs to 2 spaces
-  const normalized = line.replace(/\t/g, "  ");
-  let m = BULLET_RE.exec(normalized);
-  if (m) {
-    const indent = m[1]!.length;
-    return { listType: "bullet", text: m[2]!, level: Math.floor(indent / 2) };
-  }
-  m = ORDERED_RE.exec(normalized);
-  if (m) {
-    const indent = m[1]!.length;
-    return { listType: "ordered", text: m[2]!, level: Math.floor(indent / 2) };
-  }
-  return undefined;
-}
-
-function isMarkdownTableRow(line: string): boolean {
-  const trimmed = line.trim();
-  return trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.length > 1;
-}
-
-function isMarkdownSeparator(line: string): boolean {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) return false;
-  // Each cell should be dashes (with optional colons for alignment)
-  const cells = trimmed.slice(1, -1).split("|");
-  return cells.every((cell) => /^\s*:?-+:?\s*$/.test(cell));
-}
-
-function parseMarkdownRow(line: string): string[] {
-  const trimmed = line.trim();
-  // Remove leading/trailing pipes and split
-  const inner = trimmed.startsWith("|") ? trimmed.slice(1) : trimmed;
-  const content = inner.endsWith("|") ? inner.slice(0, -1) : inner;
-  return content.split("|").map((cell) => cell.trim());
 }
 
 // =============================================================================
@@ -520,7 +418,7 @@ function executeAppendText(
     return;
   }
 
-  const { bodyChildren } = getBodyNode(doc);
+  const bodyChildren = getBodyChildren(doc);
   const segments = parseTextSegments(patch.text);
   const newNodes: FXPNode[] = [];
 
@@ -579,6 +477,8 @@ function executeAppendText(
     }
   }
 
+  stampNewParagraphs(doc, newNodes, findPartRootForId(doc, "body"));
+
   // Insert all new nodes before w:sectPr
   insertIntoBody(bodyChildren, newNodes);
 
@@ -621,19 +521,23 @@ function executeAddTablePatch(
     return;
   }
 
-  const { bodyChildren } = getBodyNode(doc);
+  const bodyChildren = getBodyChildren(doc);
   const tableNode = buildTableNode(patch.headers, patch.rows);
 
   if (revCtx) {
     markTableRowsAsInserted(tableNode, revCtx);
   }
 
+  stampNewParagraphs(doc, [tableNode], findPartRootForId(doc, "body"));
+
   // Find the afterId target's xmlRef if specified
   let afterXmlRef: FXPNode | undefined;
+  let afterElementId: string | undefined;
   if (patch.afterId) {
     const target = findElementById(patch.afterId, doc);
     if (target) {
       afterXmlRef = target.xmlRef;
+      afterElementId = target.id;
     }
   }
 
@@ -645,8 +549,8 @@ function executeAddTablePatch(
   const normalized = normalizeTable(tableNode, id);
 
   // Insert into body array at correct position (after the target element)
-  if (patch.afterId) {
-    const targetIdx = doc.body.findIndex((el) => el.id === patch.afterId);
+  if (afterElementId !== undefined) {
+    const targetIdx = doc.body.findIndex((el) => el.id === afterElementId);
     if (targetIdx !== -1) {
       doc.body.splice(targetIdx + 1, 0, normalized);
       return;
@@ -721,6 +625,7 @@ function executeAppendTextToContainer(
         } else {
           pNode = { "w:p": runs };
         }
+        stampNewParagraphs(doc, [pNode], rootNode);
         rootChildren.push(pNode);
         const normalized = normalizeParagraph(
           pNode,
@@ -734,6 +639,7 @@ function executeAppendTextToContainer(
       if (revCtx) {
         markTableRowsAsInserted(tblNode, revCtx);
       }
+      stampNewParagraphs(doc, [tblNode], rootNode);
       rootChildren.push(tblNode);
 
       // Normalize and track
@@ -765,6 +671,7 @@ function executeAppendTextToContainer(
         } else {
           pNode = { "w:p": [pPr, ...runs] };
         }
+        stampNewParagraphs(doc, [pNode], rootNode);
         rootChildren.push(pNode);
         const normalized = normalizeParagraph(
           pNode,
@@ -803,6 +710,7 @@ function executeAddTableToContainer(
     markTableRowsAsInserted(tableNode, revCtx);
   }
 
+  stampNewParagraphs(doc, [tableNode], rootNode);
   rootChildren.push(tableNode);
 
   // Normalize and track

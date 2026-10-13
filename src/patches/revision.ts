@@ -247,6 +247,11 @@ export function convertRunToDeleted(runNode: FXPNode): void {
         newNode[":@"] = attrs;
       }
       children[i] = newNode;
+    } else if ("w:instrText" in child) {
+      // Field instructions inside a deleted run use w:delInstrText
+      const newNode: FXPNode = { "w:delInstrText": child["w:instrText"] as FXPNode[] };
+      if (child[":@"]) newNode[":@"] = child[":@"];
+      children[i] = newNode;
     }
   }
 }

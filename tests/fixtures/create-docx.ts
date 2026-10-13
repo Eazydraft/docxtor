@@ -868,3 +868,172 @@ export async function createRevisionWithPageBreakDocx(): Promise<Buffer> {
 
   return buildDocx({ documentXml });
 }
+
+// =============================================================================
+// Synthetic lease fixture (lease review additions)
+// =============================================================================
+
+export interface LeaseDocxOptions {
+  /** Stamp w14:paraId on every paragraph and declare the w14 namespace. Default: true. */
+  withParaIds?: boolean;
+}
+
+const W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml";
+const MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+
+/**
+ * Create a synthetic landlord-form lease with the shape the lease review
+ * rebuild needs to exercise:
+ *
+ * - `w14:paraId` on every paragraph (body, table cells, header, footer)
+ * - multilevel numbering (1., 1.1, ...) via numbering.xml
+ * - a 2x2 table
+ * - default header and footer
+ * - an existing round of tracked changes by "Opposing Counsel" (p8)
+ * - client answers typed in red (p9), one theme-mapped
+ * - footnotes.xml with a tracked insertion
+ * - docProps/core.xml (creator, lastModifiedBy, title, ...), docProps/app.xml
+ *   (Company, Manager) and docProps/custom.xml
+ *
+ * Body paragraphs (positional id → paraId → text):
+ *   p0  0A000001  OFFICE LEASE                       (Title style)
+ *   p1  0A000002  PREMISES                           (list L0)
+ *   p2  0A000003  Landlord leases to Tenant ...      (list L1)
+ *   p3  0A000004  INDEMNITY                          (list L0)
+ *   p4  0A000005  Tenant shall indemnify ...         (list L1)
+ *   p5  0A000006  RECAPTURE                          (list L0)
+ *   p6  0A000007  Landlord may recapture ...         (list L1)
+ *   p7  0A000008  RENT                               (list L0)
+ *   p8  0A000009  Base Rent shall be $42.00 ...      (list L1, has other-author ins/del)
+ *   p9  0A00000A  Security deposit amount: two months. Guarantor: Parent Co.  (red runs)
+ *   tbl0            2x2 exhibit table (cells 0A000010..0A000013; r1c1 has a red run)
+ *   p10 0A000014  Signature page follows.
+ *   header: 0A000020, footer: 0A000021
+ */
+export async function createLeaseDocx(options: LeaseDocxOptions = {}): Promise<Buffer> {
+  const withParaIds = options.withParaIds ?? true;
+  const pid = (id: string): string => (withParaIds ? ` w14:paraId="${id}" w14:textId="${id}"` : "");
+  const nsDecl = withParaIds
+    ? ` xmlns:w14="${W14_NS}" xmlns:mc="${MC_NS}" mc:Ignorable="w14"`
+    : "";
+
+  const list = (level: number): string =>
+    `<w:pPr><w:numPr><w:ilvl w:val="${level}"/><w:numId w:val="1"/></w:numPr></w:pPr>`;
+  const run = (text: string, rPr = ""): string =>
+    `<w:r>${rPr}<w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r>`;
+  const cell = (id: string, content: string): string =>
+    `<w:tc><w:tcPr><w:tcW w:w="4788" w:type="dxa"/></w:tcPr><w:p${pid(id)}>${content}</w:p></w:tc>`;
+
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"${nsDecl}>
+<w:body>
+<w:p${pid("0A000001")}><w:pPr><w:pStyle w:val="Title"/></w:pPr>${run("OFFICE LEASE")}</w:p>
+<w:p${pid("0A000002")}>${list(0)}${run("PREMISES")}</w:p>
+<w:p${pid("0A000003")}>${list(1)}${run("Landlord leases to Tenant the Premises described in Exhibit A.")}</w:p>
+<w:p${pid("0A000004")}>${list(0)}${run("INDEMNITY")}</w:p>
+<w:p${pid("0A000005")}>${list(1)}${run("Tenant shall indemnify, defend and hold harmless Landlord from all claims arising from Tenant's use of the Premises.")}</w:p>
+<w:p${pid("0A000006")}>${list(0)}${run("RECAPTURE")}</w:p>
+<w:p${pid("0A000007")}>${list(1)}${run("Landlord may recapture the Premises upon any request to assign or sublet.")}</w:p>
+<w:p${pid("0A000008")}>${list(0)}${run("RENT")}</w:p>
+<w:p${pid("0A000009")}>${list(1)}${run("Base Rent shall be ")}<w:del w:id="1" w:author="Opposing Counsel" w:date="2026-01-01T00:00:00Z"><w:r><w:delText>$40.00</w:delText></w:r></w:del><w:ins w:id="2" w:author="Opposing Counsel" w:date="2026-01-01T00:00:00Z">${run("$42.00")}</w:ins>${run(" per rentable square foot per year.")}</w:p>
+<w:p${pid("0A00000A")}>${run("Security deposit amount: ")}${run("two months", '<w:rPr><w:color w:val="FF0000"/></w:rPr>')}${run(". Guarantor: ")}${run("Parent Co", '<w:rPr><w:color w:val="FF0000" w:themeColor="accent2"/></w:rPr>')}${run(".")}</w:p>
+<w:tbl>
+<w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="0" w:type="auto"/></w:tblPr>
+<w:tblGrid><w:gridCol w:w="4788"/><w:gridCol w:w="4788"/></w:tblGrid>
+<w:tr>${cell("0A000010", run("Item", "<w:rPr><w:b/></w:rPr>"))}${cell("0A000011", run("Amount", "<w:rPr><w:b/></w:rPr>"))}</w:tr>
+<w:tr>${cell("0A000012", run("Operating Expenses"))}${cell("0A000013", run("Capped at ") + run("5%", '<w:rPr><w:color w:val="FF0000"/></w:rPr>'))}</w:tr>
+</w:tbl>
+<w:p${pid("0A000014")}>${run("Signature page follows.")}</w:p>
+<w:sectPr>
+<w:headerReference w:type="default" r:id="rId1"/>
+<w:footerReference w:type="default" r:id="rId2"/>
+<w:pgSz w:w="12240" w:h="15840"/>
+<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/>
+</w:sectPr>
+</w:body>
+</w:document>`;
+
+  const headerXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"${nsDecl}>
+<w:p${pid("0A000020")}>${run("Landlord Form Lease - CONFIDENTIAL")}</w:p>
+</w:hdr>`;
+
+  const footerXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"${nsDecl}>
+<w:p${pid("0A000021")}>${run("Page ")}<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+</w:ftr>`;
+
+  const footnotesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>
+<w:footnote w:id="1"><w:p><w:r><w:t xml:space="preserve">See </w:t></w:r><w:ins w:id="3" w:author="Opposing Counsel" w:date="2026-01-01T00:00:00Z"><w:r><w:t>revised </w:t></w:r></w:ins><w:r><w:t>Exhibit B.</w:t></w:r></w:p></w:footnote>
+</w:footnotes>`;
+
+  const numberingXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="0">
+    <w:multiLevelType w:val="multilevel"/>
+    <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="720" w:hanging="720"/></w:pPr></w:lvl>
+    <w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1.%2"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="1440" w:hanging="720"/></w:pPr></w:lvl>
+    <w:lvl w:ilvl="2"><w:start w:val="1"/><w:numFmt w:val="lowerLetter"/><w:lvlText w:val="(%3)"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="2160" w:hanging="720"/></w:pPr></w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+</w:numbering>`;
+
+  const coreXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>Office Lease</dc:title><dc:subject>Lease</dc:subject><dc:creator>Jane Doe (Opposing Counsel LLP)</dc:creator><cp:keywords>lease;landlord</cp:keywords><dc:description>Landlord form</dc:description><cp:lastModifiedBy>Jane Doe</cp:lastModifiedBy><cp:revision>17</cp:revision><cp:category>Real Estate</cp:category><cp:contentStatus>Draft</cp:contentStatus><dcterms:created xsi:type="dcterms:W3CDTF">2025-12-01T10:00:00Z</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">2026-01-01T12:00:00Z</dcterms:modified></cp:coreProperties>`;
+
+  const appXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Template>Normal.dotm</Template><TotalTime>42</TotalTime><Pages>3</Pages><Words>250</Words><Application>Microsoft Office Word</Application><Company>Opposing Counsel LLP</Company><Manager>Senior Partner</Manager><HyperlinkBase>https://example.com</HyperlinkBase><AppVersion>16.0000</AppVersion></Properties>`;
+
+  const customXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="ClientMatter"><vt:lpwstr>12345-001</vt:lpwstr></property></Properties>`;
+
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
+  <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
+  <Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>
+  <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+  <Override PartName="/docProps/custom.xml" ContentType="application/vnd.openxmlformats-officedocument.custom-properties+xml"/>
+</Types>`;
+
+  const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+  <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom-properties" Target="docProps/custom.xml"/>
+</Relationships>`;
+
+  const docRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
+  <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+  <Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>
+</Relationships>`;
+
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", contentTypes);
+  zip.file("_rels/.rels", rootRels);
+  zip.file("word/document.xml", documentXml);
+  zip.file("word/_rels/document.xml.rels", docRels);
+  zip.file("word/header1.xml", headerXml);
+  zip.file("word/footer1.xml", footerXml);
+  zip.file("word/footnotes.xml", footnotesXml);
+  zip.file("word/numbering.xml", numberingXml);
+  zip.file("word/styles.xml", TEST_STYLES_XML);
+  zip.file("docProps/core.xml", coreXml);
+  zip.file("docProps/app.xml", appXml);
+  zip.file("docProps/custom.xml", customXml);
+
+  return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }) as Promise<Buffer>;
+}

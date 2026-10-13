@@ -10,11 +10,15 @@ import type {
   BodyElement,
 } from "../types.js";
 import { getChildren, getTagName, getAttr } from "../xml/helpers.js";
+import { hasBlockMarkdown } from "./text-segments.js";
 
 export interface ValidationResult {
   valid: boolean;
   error?: string;
 }
+
+/** Prefix for native paragraph identity targets: `para:4F2A1C7B`. */
+export const PARA_ID_PREFIX = "para:";
 
 /**
  * Validate a single patch against the document.
@@ -24,6 +28,54 @@ export function validatePatch(
   doc: NormalizedDocument,
 ): ValidationResult {
   switch (patch.type) {
+    case "insert_paragraph": {
+      const para = findParagraphById(patch.target, doc);
+      if (!para) {
+        return { valid: false, error: `Paragraph "${patch.target}" not found` };
+      }
+      if (!patch.text || patch.text.length === 0) {
+        return { valid: false, error: "Empty paragraph text" };
+      }
+      if (!["before", "after"].includes(patch.position)) {
+        return { valid: false, error: `Invalid position: ${patch.position}` };
+      }
+      if (hasBlockMarkdown(patch.text)) {
+        return {
+          valid: false,
+          error:
+            "Markdown tables and lists are not supported in insert_paragraph; use add_table or add_list with afterId",
+        };
+      }
+      return { valid: true };
+    }
+    case "delete_paragraph": {
+      const para = findParagraphById(patch.target, doc);
+      if (!para) {
+        return { valid: false, error: `Paragraph "${patch.target}" not found` };
+      }
+      return { valid: true };
+    }
+    case "add_comment": {
+      const para = findParagraphById(patch.target, doc);
+      if (!para) {
+        return { valid: false, error: `Paragraph "${patch.target}" not found` };
+      }
+      if (!patch.text || patch.text.length === 0) {
+        return { valid: false, error: "Empty comment text" };
+      }
+      if (patch.find !== undefined && patch.find.length === 0) {
+        return { valid: false, error: "Empty find string" };
+      }
+      if (patch.find !== undefined && patch.occurrence !== undefined) {
+        if (patch.occurrence < 1 || !Number.isInteger(patch.occurrence)) {
+          return {
+            valid: false,
+            error: `Invalid occurrence: ${patch.occurrence} (must be a positive integer)`,
+          };
+        }
+      }
+      return { valid: true };
+    }
     case "replace_text":
     case "insert_text":
     case "delete_text":
@@ -416,28 +468,62 @@ function validateContainerTarget(
 /**
  * Find a paragraph by its ID anywhere in the document
  * (body, tables, headers, footers).
+ *
+ * Accepts either a positional id (`p12`, `tbl0.r1.c0.p0`, `hdr.default.p0`)
+ * or a native id in the form `para:4F2A1C7B`.
  */
 export function findParagraphById(
   id: string,
   doc: NormalizedDocument,
 ): NormalizedParagraph | undefined {
+  if (id.startsWith(PARA_ID_PREFIX)) {
+    return findParagraphByParaId(id.slice(PARA_ID_PREFIX.length), doc);
+  }
+  return findParagraph(doc, (p) => p.id === id);
+}
+
+/**
+ * Find a paragraph by its native `w14:paraId` anywhere in the document.
+ * Resolution order: body (paragraphs and table cells in document order),
+ * headers, footers. Case-insensitive.
+ */
+export function findParagraphByParaId(
+  paraId: string,
+  doc: NormalizedDocument,
+): NormalizedParagraph | undefined {
+  const wanted = paraId.toUpperCase();
+  return findParagraph(doc, (p) => p.paraId === wanted);
+}
+
+function findParagraph(
+  doc: NormalizedDocument,
+  predicate: (p: NormalizedParagraph) => boolean,
+): NormalizedParagraph | undefined {
   // Search body elements
   for (const element of doc.body) {
-    const found = searchParagraphInElement(id, element);
+    const found = searchParagraphInElement(predicate, element);
     if (found) return found;
   }
 
-  // Search headers
+  // Search headers (paragraphs, then tables)
   for (const header of doc.headers.values()) {
     for (const para of header.paragraphs) {
-      if (para.id === id) return para;
+      if (predicate(para)) return para;
+    }
+    for (const table of header.tables) {
+      const found = searchParagraphInTable(predicate, table);
+      if (found) return found;
     }
   }
 
   // Search footers
   for (const footer of doc.footers.values()) {
     for (const para of footer.paragraphs) {
-      if (para.id === id) return para;
+      if (predicate(para)) return para;
+    }
+    for (const table of footer.tables) {
+      const found = searchParagraphInTable(predicate, table);
+      if (found) return found;
     }
   }
 
@@ -497,32 +583,32 @@ function searchTableInTable(
 }
 
 function searchParagraphInElement(
-  id: string,
+  predicate: (p: NormalizedParagraph) => boolean,
   element: BodyElement,
 ): NormalizedParagraph | undefined {
   if (element.kind === "paragraph") {
-    return element.id === id ? element : undefined;
+    return predicate(element) ? element : undefined;
   }
 
   if (element.kind === "table") {
-    return searchParagraphInTable(id, element);
+    return searchParagraphInTable(predicate, element);
   }
 
   return undefined;
 }
 
 function searchParagraphInTable(
-  id: string,
+  predicate: (p: NormalizedParagraph) => boolean,
   table: NormalizedTable,
 ): NormalizedParagraph | undefined {
   for (const row of table.rows) {
     for (const cell of row.cells) {
       for (const para of cell.paragraphs) {
-        if (para.id === id) return para;
+        if (predicate(para)) return para;
       }
       // Search nested tables
       for (const nested of cell.nestedTables) {
-        const found = searchParagraphInTable(id, nested);
+        const found = searchParagraphInTable(predicate, nested);
         if (found) return found;
       }
     }
@@ -531,12 +617,17 @@ function searchParagraphInTable(
 }
 
 /**
- * Find any body element (paragraph or table) by its ID.
+ * Find any top-level body element (paragraph or table) by its ID.
+ * Accepts `para:` ids for body paragraphs.
  */
 export function findElementById(
   id: string,
   doc: NormalizedDocument,
 ): BodyElement | undefined {
+  if (id.startsWith(PARA_ID_PREFIX)) {
+    const wanted = id.slice(PARA_ID_PREFIX.length).toUpperCase();
+    return doc.body.find((el) => el.kind === "paragraph" && el.paraId === wanted);
+  }
   for (const element of doc.body) {
     if (element.kind === "paragraph" && element.id === id) return element;
     if (element.kind === "table") {

@@ -31,6 +31,7 @@ import { normalizeParagraph } from "./paragraph.js";
 import { normalizeTable } from "./table.js";
 import { normalizeHeaderFooter } from "./header-footer.js";
 import { resolveListType } from "../patches/numbering.js";
+import { assignParaIdsToDocument } from "./para-id.js";
 
 /**
  * Normalize a full DOCX document from zip entries.
@@ -43,8 +44,6 @@ export function normalizeDocument(
   zipEntries: DocxZipEntries,
   options?: LoadOptions,
 ): NormalizedDocument {
-  const includeHeadersFooters = options?.includeHeadersFooters ?? true;
-
   // Parse all XML parts
   const documentFxp = parseXml(zipEntries.documentXml);
 
@@ -58,24 +57,67 @@ export function normalizeDocument(
     footersFxp.set(path, parseXml(xml));
   }
 
-  // Parse document relationships to map rId → filename
-  const relMap = parseRelationships(zipEntries.documentRels);
-
   // Parse styles.xml if present
   const styles = zipEntries.stylesXml
     ? parseStyles(zipEntries.stylesXml)
     : [];
 
-  // Normalize body elements
-  const body = normalizeBody(documentFxp);
+  const parseOptional = (xml: string | undefined): FXPNode[] | undefined =>
+    xml ? parseXml(xml) : undefined;
 
-  // Normalize headers and footers (unless disabled)
-  const headers = new Map<string, HeaderFooter>();
-  const footers = new Map<string, HeaderFooter>();
+  const xmlParts: DocxXmlParts = {
+    document: documentFxp,
+    headers: headersFxp,
+    footers: footersFxp,
+    documentRels: parseOptional(zipEntries.documentRels),
+    contentTypes: parseOptional(zipEntries.contentTypes),
+    settings: parseOptional(zipEntries.settingsXml),
+    numbering: parseOptional(zipEntries.numberingXml),
+    footnotes: parseOptional(zipEntries.footnotesXml),
+    endnotes: parseOptional(zipEntries.endnotesXml),
+    comments: parseOptional(zipEntries.commentsXml),
+    core: parseOptional(zipEntries.coreXml),
+    app: parseOptional(zipEntries.appXml),
+    rootRels: parseOptional(zipEntries.rootRels),
+  };
+
+  // Stamp native paragraph ids before normalizing so they show up in the AST
+  if (options?.assignParaIds) {
+    assignParaIdsToDocument(xmlParts);
+  }
+
+  const doc: NormalizedDocument = {
+    body: [],
+    headers: new Map(),
+    footers: new Map(),
+    xmlParts,
+    styles,
+    loadOptions: options,
+  };
+
+  reNormalizeDocument(doc);
+
+  return doc;
+}
+
+/**
+ * Rebuild the normalized view (body, headers, footers, list types) of a
+ * document from its current XML parts, in place.
+ *
+ * Call this after a structural change that invalidates positional ids
+ * across the whole document — e.g., accepting/rejecting all revisions.
+ * `paraId`s are read from the XML so they are unaffected.
+ */
+export function reNormalizeDocument(doc: NormalizedDocument): void {
+  const includeHeadersFooters = doc.loadOptions?.includeHeadersFooters ?? true;
+
+  doc.body = normalizeBody(doc.xmlParts.document);
+  doc.headers = new Map<string, HeaderFooter>();
+  doc.footers = new Map<string, HeaderFooter>();
 
   if (includeHeadersFooters) {
-    // Find section properties to discover header/footer references
-    const sectPrRefs = findHeaderFooterRefs(documentFxp);
+    const relMap = parseRelationshipsFxp(doc.xmlParts.documentRels);
+    const sectPrRefs = findHeaderFooterRefs(doc.xmlParts.document);
 
     for (const ref of sectPrRefs) {
       const target = relMap.get(ref.rId);
@@ -84,45 +126,21 @@ export function normalizeDocument(
       const fullPath = `word/${target}`;
 
       if (ref.type === "header") {
-        const fxp = headersFxp.get(fullPath);
+        const fxp = doc.xmlParts.headers.get(fullPath);
         if (fxp) {
-          const hdr = normalizeHeaderFooter(fxp, "header", ref.variant, ref.rId);
-          headers.set(ref.rId, hdr);
+          doc.headers.set(ref.rId, normalizeHeaderFooter(fxp, "header", ref.variant, ref.rId));
         }
       } else {
-        const fxp = footersFxp.get(fullPath);
+        const fxp = doc.xmlParts.footers.get(fullPath);
         if (fxp) {
-          const ftr = normalizeHeaderFooter(fxp, "footer", ref.variant, ref.rId);
-          footers.set(ref.rId, ftr);
+          doc.footers.set(ref.rId, normalizeHeaderFooter(fxp, "footer", ref.variant, ref.rId));
         }
       }
     }
   }
 
-  const xmlParts: DocxXmlParts = {
-    document: documentFxp,
-    headers: headersFxp,
-    footers: footersFxp,
-    documentRels: zipEntries.documentRels
-      ? parseXml(zipEntries.documentRels)
-      : undefined,
-    contentTypes: zipEntries.contentTypes
-      ? parseXml(zipEntries.contentTypes)
-      : undefined,
-    settings: zipEntries.settingsXml
-      ? parseXml(zipEntries.settingsXml)
-      : undefined,
-    numbering: zipEntries.numberingXml
-      ? parseXml(zipEntries.numberingXml)
-      : undefined,
-  };
-
-  const doc: NormalizedDocument = { body, headers, footers, xmlParts, styles };
-
   // Post-pass: enrich listType on all paragraphs with listInfo
   enrichAllListTypes(doc);
-
-  return doc;
 }
 
 /**
@@ -178,15 +196,14 @@ function normalizeBody(documentFxp: FXPNode[]): BodyElement[] {
 }
 
 /**
- * Parse document.xml.rels to build a relationship map (rId → target filename).
+ * Build a relationship map (rId → target filename) from parsed
+ * document.xml.rels nodes.
  */
-function parseRelationships(
-  relsXml: string | undefined,
+function parseRelationshipsFxp(
+  parsed: FXPNode[] | undefined,
 ): Map<string, string> {
   const map = new Map<string, string>();
-  if (!relsXml) return map;
-
-  const parsed = parseXml(relsXml);
+  if (!parsed) return map;
 
   // Find the Relationships root element
   const relsNode = parsed.find(

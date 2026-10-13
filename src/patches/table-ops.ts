@@ -34,12 +34,15 @@ import { createTrPrIns, createTrPrDel } from "./revision.js";
  * Execute an add_table_row patch.
  *
  * Clones an existing row to preserve styling, then replaces cell text.
+ *
+ * @returns the new w:tr node (so the caller can re-stamp paragraph ids
+ *          that were duplicated by cloning)
  */
 export function executeAddTableRow(
   table: NormalizedTable,
   patch: AddTableRowPatch,
   revCtx?: RevisionContext,
-): void {
+): FXPNode {
   if (table.rows.length === 0) {
     throw new Error(`Table "${table.id}" has no rows to clone from`);
   }
@@ -128,6 +131,8 @@ export function executeAddTableRow(
     const trPrChildren = getChildren(trPr);
     trPrChildren.push(createTrPrIns(revCtx));
   }
+
+  return newRowNode;
 }
 
 /**

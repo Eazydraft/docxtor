@@ -82,7 +82,15 @@ Load a DOCX document. `input` can be a file path (`string`), `Buffer`, `ArrayBuf
 const doc = await Docxtor.load("file.docx");
 const doc = await Docxtor.load(buffer);
 const doc = await Docxtor.load(buffer, { includeHeadersFooters: false });
+const doc = await Docxtor.load(buffer, { assignParaIds: true });  // stamp w14:paraId on every paragraph
 ```
+
+Options:
+
+| Option | Default | Description |
+|---|---|---|
+| `includeHeadersFooters` | `true` | Normalize headers and footers. |
+| `assignParaIds` | `false` | Stamp a native `w14:paraId` (and `w14:textId`) on every paragraph in the body, headers and footers that lacks one, declaring the `w14` namespace and adding it to `mc:Ignorable`. See [Native paragraph identity](#native-paragraph-identity-w14paraid). |
 
 ### `Docxtor.create(input?, options?)`
 
@@ -173,6 +181,7 @@ const json = doc.project("json");
 const json = doc.project("json", {
   includeFormatting: true,      // include bold/italic/underline/etc per run
   includeHeadersFooters: true,  // include headers and footers (default: true)
+  runFilter: { color: "FF0000" }, // JSON only: report exactly the runs matching this filter (see below)
   includeTables: true,          // include tables (default: true)
   includeRevisions: true,       // include revision marks from tracked changes (default: false)
   includePageBreaks: true,      // include page break elements and hints (default: false)
@@ -233,12 +242,55 @@ With revision tracking enabled, patches produce OOXML tracked-change markup (`w:
 
 ```ts
 const results = doc.applyPatches(patches, {
-  trackRevisions: true,          // enable tracked changes (default: false)
-  revisionAuthor: "AI Editor",   // author name shown in Word's review pane (default: "docxtor")
+  trackRevisions: true,                  // enable tracked changes (default: false)
+  revisionAuthor: "AI Editor",           // author name shown in Word's review pane (default: "docxtor")
+  revisionDate: "2026-10-13T00:00:00Z",  // ISO 8601 date on every revision mark (default: now)
+  atomic: true,                          // all-or-nothing batch (default: false)
 });
 ```
 
+`revisionDate` is stamped on every `w:ins` / `w:del` / `w:*Change` element the batch creates. Pin it when you need byte-stable output (e.g., fixed-point tests that compare `document.xml`).
+
+**Atomic batches.** With `atomic: true` the patches run against a deep clone of the document. If every patch succeeds the clone replaces the document; if any patch fails the document is left exactly as it was, and `toBuffer()` produces the same file as before the batch. The returned `PatchResult[]` still has one entry per patch so you can see what would have applied and what failed — in atomic mode a `success: true` entry means "would have applied", not "did apply"; check `results.every(r => r.success)` for the batch outcome. Because the batch runs on the clone, a patch may target a paragraph created by an earlier patch in the same batch.
+
 See [Revision Tracking](#revision-tracking-tracked-changes) below for details.
+
+### `doc.acceptAllRevisions(options?)` / `doc.rejectAllRevisions(options?)`
+
+Resolve every tracked change in the document — body, headers, footers, footnotes, endnotes and comments.
+
+```ts
+const { accepted } = doc.acceptAllRevisions();                        // everything
+const { accepted } = doc.acceptAllRevisions({ authors: ["AI Editor"] }); // only this author's marks
+const { rejected } = doc.rejectAllRevisions({ authors: ["AI Editor"] });
+```
+
+| Element | Accept | Reject |
+|---|---|---|
+| `w:ins` / `w:moveTo` (runs) | unwrapped | removed |
+| `w:del` / `w:moveFrom` (runs) | removed | unwrapped, `w:delText` → `w:t` |
+| `w:rPrChange`, `w:pPrChange`, `w:trPrChange`, `w:tblPrChange`, `w:tcPrChange`, `w:sectPrChange` | dropped (new properties kept) | old properties restored |
+| Row `w:trPr/w:ins` / `w:trPr/w:del` | marker dropped / row removed | row removed / marker dropped |
+| Paragraph mark `w:pPr/w:rPr/w:ins` | marker dropped | paragraph merged into the next |
+| Paragraph mark `w:pPr/w:rPr/w:del` | paragraph merged into the next | marker dropped |
+
+With `authors`, only revisions by those authors are touched; an attorney's hand edits survive while the tool's own marks are accepted. The document is re-normalized afterwards: positional ids are reassigned, `paraId`s are not. Use these to produce the clean final document from a redline (accept the tool's author, then strip any remaining bracket tokens with `delete_text`).
+
+### Metadata: `doc.getCoreProperties()` / `doc.setCoreProperties(props)` / `doc.scrubMetadata()`
+
+```ts
+doc.getCoreProperties();
+// { creator, lastModifiedBy, title, subject, description, keywords, category, contentStatus, revision, created, modified }
+
+doc.setCoreProperties({ creator: "Your Firm", title: "Lease (Tenant Draft)", modified: "2026-10-13T00:00:00Z" });
+// creates docProps/core.xml (plus its relationship and content type) if the file has none
+
+doc.scrubMetadata();
+// core.xml: removes creator, lastModifiedBy, description, keywords, category, contentStatus; sets revision = "1"
+// app.xml:  removes Company, Manager, HyperlinkBase
+// removes docProps/custom.xml and its relationship / content-type entries
+// leaves title, created and modified untouched
+```
 
 ### `doc.validatePatches(patches)`
 
@@ -273,6 +325,8 @@ const xml = doc.toString();
 ```
 
 ### Inspection methods
+
+`doc.findParagraphByParaId("4F2A1C7B")` resolves a paragraph by its native `w14:paraId` (case-insensitive; body including table cells, then headers, then footers).
 
 ```ts
 doc.getAST();                    // Full NormalizedDocument
@@ -431,6 +485,53 @@ doc.applyPatches([
 ```
 
 With revision tracking enabled, each appended paragraph's run is wrapped in `w:ins`, and each table row gets `w:ins` in its `w:trPr`, so all content appears as tracked insertions in Word.
+
+### `insert_paragraph`
+
+Insert one or more new paragraphs immediately before or after an existing paragraph — in the body, inside a table cell (a sibling `w:p` in the same `w:tc`), or in a header/footer.
+
+```ts
+{
+  type: "insert_paragraph",
+  target: "p12",                 // or "para:4F2A1C7B"
+  position: "after",             // "before" | "after"
+  text: "Landlord shall indemnify, defend and hold harmless Tenant ...",
+  inheritStyle: true,            // default true
+}
+```
+
+- `text` supports inline formatting markers and `{{FIELD}}` placeholders; `\n` creates multiple paragraphs. Markdown tables and lists are **not** supported here (the validator rejects them) — use `add_table` / `add_list` with `afterId`.
+- `inheritStyle` copies the target's `w:pPr` (paragraph style, numbering `numId`/`ilvl`, indentation, spacing — not section breaks or revision state) and gives the new text the formatting of the target's last run, which is what Word does when you press Enter at the end of a paragraph.
+- New paragraphs get the next free positional id in the target's container (e.g. `p13`, `tbl0.r1.c0.p1`), a fresh `paraId` when the part declares `w14`, and are addressable by later patches in the same batch.
+- With `trackRevisions`, the runs are wrapped in `w:ins` **and** the paragraph mark carries `w:pPr/w:rPr/w:ins`, so accepting the change leaves exactly one new paragraph and no stray blank one.
+
+### `delete_paragraph`
+
+Delete a whole paragraph.
+
+```ts
+{ type: "delete_paragraph", target: "p12" }   // or "para:4F2A1C7B"
+```
+
+- With `trackRevisions`: every run is wrapped in `w:del` (`w:t` → `w:delText`, `w:instrText` → `w:delInstrText`) and the paragraph mark gets `w:pPr/w:rPr/w:del` — Word's convention for a deleted paragraph. Runs already inside a `w:ins` by the same author are removed outright rather than double-marked; another author's insertion gets the `w:del` nested inside it. Accepting removes the paragraph with no empty paragraph left behind.
+- Without tracking: the `w:p` is removed. The only paragraph of a table cell is emptied instead, since a cell must keep one paragraph.
+
+### `add_comment`
+
+Attach a Word comment to a paragraph or to a substring of it. Creates `word/comments.xml` (with its relationship and content type) on demand.
+
+```ts
+{
+  type: "add_comment",
+  target: "p12",                 // or "para:4F2A1C7B"
+  find: "recapture",             // optional: anchor the comment to this text (occurrence? default 1)
+  text: "Delete per firm rule R-12.\nSecond paragraph of the comment.",
+  author: "USI Legal AI",        // defaults to PatchOptions.revisionAuthor, then "docxtor"
+  initials: "ULA",               // optional; derived from author if omitted
+}
+```
+
+The comment date comes from `PatchOptions.revisionDate` (default: now). Comments are left alone by `acceptAllRevisions` / `rejectAllRevisions`.
 
 ### `replace_cell_text`
 
@@ -767,6 +868,28 @@ Change the level or list type of an existing list paragraph.
 
 IDs are positional and stable within a single editing session. They are reassigned if you re-load the document.
 
+### Native paragraph identity (`w14:paraId`)
+
+Word 2010+ files stamp every paragraph with a `w14:paraId` (8 uppercase hex chars) that survives round trips through Word, hand edits and re-saves — unlike positional ids, which shift whenever a paragraph is inserted or deleted. docxtor exposes it everywhere a paragraph appears:
+
+```ts
+doc.findParagraphById("p12").paraId;         // "4F2A1C7B" (undefined if the file has none)
+doc.findParagraphByParaId("4F2A1C7B");       // → NormalizedParagraph
+doc.project("markdown");                     // "[p12 ¶4F2A1C7B] text..."
+doc.project("json").body[12].paraId;         // "4F2A1C7B"
+```
+
+Any patch `target` (and `afterId`) accepts the `para:` form interchangeably with a positional id:
+
+```ts
+{ type: "replace_text", target: "para:4F2A1C7B", find: "...", replace: "..." }
+{ type: "replace_text", target: "p12", ... }   // unchanged
+```
+
+Resolution order for `para:` targets is body (paragraphs and table cells in document order), headers, footers.
+
+Files that lack paraIds (older Word versions, generated files) can be stamped on load with `Docxtor.load(buffer, { assignParaIds: true })`. Ids are unique within the document and in the range Word accepts (`< 0x80000000`); `w14:textId` is set to the same value if absent. Paragraphs created by patches (`insert_paragraph`, `append_text`, `add_list`, `add_list_item`, table cells of `add_table`, rows cloned by `add_table_row`) receive fresh ids whenever the part they land in declares the `w14` namespace.
+
 ## Revision Tracking (Tracked Changes)
 
 When `trackRevisions: true` is passed to `applyPatches()`, every edit produces OOXML tracked-change markup instead of destructive modifications. The resulting `.docx` opens in Word with redline marks that a human reviewer can accept or reject.
@@ -795,6 +918,9 @@ const results = doc.applyPatches(
 | `insert_text` | `w:ins` wrapping the new runs |
 | `delete_text` | `w:del` wrapping the deleted runs (text preserved in XML) |
 | `append_text` | `w:ins` wrapping each new paragraph's run; markdown tables get `w:ins` in each row's `w:trPr` |
+| `insert_paragraph` | `w:ins` wrapping the new runs **and** `w:ins` on the paragraph mark (`w:pPr/w:rPr/w:ins`) |
+| `delete_paragraph` | All runs wrapped in `w:del` (`w:delText`) plus `w:del` on the paragraph mark (`w:pPr/w:rPr/w:del`); own unaccepted insertions removed outright |
+| `add_comment` | No revision markup — comments are annotations, not changes |
 | `apply_formatting` | `w:rPrChange` inside each affected run's `w:rPr` (captures old formatting) |
 | `apply_style` (paragraph) | `w:pPrChange` inside `w:pPr` (captures old paragraph style) |
 | `apply_style` (character) | `w:rPrChange` inside each affected run's `w:rPr` |
@@ -828,9 +954,22 @@ const json = doc.project("json", { includeRevisions: true });
 const md = doc.project("markdown", { includeRevisions: true });
 ```
 
+### Reading coloured runs (e.g. answers typed in red)
+
+The JSON projection can report exactly the runs matching a formatting filter, with their paragraph id, `paraId` and character offsets. Black text in the same paragraph is excluded; paragraphs with no matching run have no `formatting` array; table cells get a `paragraphs` array so their matches are reported too.
+
+```ts
+const json = doc.project("json", { runFilter: { color: "FF0000" } });
+// body[9].formatting → [{ text: "two months", startOffset: 25, endOffset: 35, color: "FF0000" },
+//                       { text: "Parent Co",  startOffset: 48, endOffset: 57, color: "FF0000", themeColor: "accent2" }]
+```
+
+Colour comparison is case-insensitive on the raw `w:color w:val`, which Word also writes for theme-mapped colours (the resolved RGB), so theme reds and literal reds match alike; `themeColor` is exposed when present. The filter may also include `bold`, `italic`, `underline`, `strikethrough` and `highlight`; every property given must match.
+
 ### Behavior notes
 
 - Without `trackRevisions`, all patches work exactly as before (destructive edits). The option is fully backward-compatible.
+- `acceptAllRevisions` after a tracked batch yields the same text (and, for `replace_text`, `insert_paragraph`, `delete_paragraph` and `replace_cell_text`, the same `document.xml`) as applying the batch untracked — the engine is a fixed point under accept.
 - Sequential patches within the same `applyPatches()` call share a single revision context: IDs auto-increment, and re-normalization between patches correctly handles the `w:ins`/`w:del` wrappers.
 - The normalizer's `collectRuns()` recurses into `w:ins` (treats the content as current text) and skips `w:del` (excludes deleted text from `.text`). This means subsequent patches in the same batch correctly see the post-edit text.
 
@@ -856,6 +995,9 @@ Patch types:
 - insert_text: { type: "insert_text", target: "<id>", position: "before"|"after", anchor: "<text>", text: "<text>" }
 - delete_text: { type: "delete_text", target: "<id>", find: "<text>" }
 - append_text: { type: "append_text", text: "<text>" } (supports markdown tables, {{FIELD}} placeholders, and inline formatting)
+- insert_paragraph: { type: "insert_paragraph", target: "<id>", position: "before"|"after", text: "<text>" } (inherits the target's style and numbering)
+- delete_paragraph: { type: "delete_paragraph", target: "<id>" }
+- add_comment: { type: "add_comment", target: "<id>", find?: "<text>", text: "<comment>" }
 - add_table: { type: "add_table", headers: ["col1", ...], rows: [["val1", ...], ...], afterId: "<id>" }
 - apply_formatting: { type: "apply_formatting", target: "<id>", find: "<text>", formatting: { bold: true, color: "FF0000" } }
 - apply_style: { type: "apply_style", target: "<id>", style: "Heading1" }
@@ -909,17 +1051,33 @@ import {
   projectToMarkdown,
   validatePatch,
   findParagraphById,
+  findParagraphByParaId,
   findTableById,
+  reNormalizeDocument,  // rebuild body/headers/footers from the XML parts in place
+  cloneDocument,        // deep clone (used by atomic batches)
+  acceptAllRevisions,   // operate on a NormalizedDocument directly (call reNormalizeDocument after)
+  rejectAllRevisions,
+  getCoreProperties,
+  setCoreProperties,
+  scrubMetadata,
 } from "docxtor";
 
 // Types
-import type { PatchOptions, RevisionMark, NormalizedPageBreak, JsonProjectionPageBreak, JsonProjectionRunFormatting, HeaderFooterVariant, HeaderFooterRef, AddListPatch, AddListItemPatch, RemoveListItemPatch, ConvertToListPatch, RemoveListPatch, SetListPropertiesPatch } from "docxtor";
+import type { PatchOptions, RevisionMark, RevisionFilterOptions, CoreProperties, RunFilter, NormalizedPageBreak, JsonProjectionPageBreak, JsonProjectionRunFormatting, HeaderFooterVariant, HeaderFooterRef, InsertParagraphPatch, DeleteParagraphPatch, AddCommentPatch, AddListPatch, AddListItemPatch, RemoveListItemPatch, ConvertToListPatch, RemoveListPatch, SetListPropertiesPatch } from "docxtor";
 ```
 
 ## What it handles
 
 - Document creation from scratch (`Docxtor.create()`)
 - Paragraph appending (`append_text` — document-level, no target needed)
+- Paragraph insertion at a location and whole-paragraph deletion (`insert_paragraph`, `delete_paragraph`), tracked or not
+- Native paragraph identity (`w14:paraId` read, `para:` targets, `assignParaIds` on load, fresh ids on new paragraphs)
+- Accept / reject all revisions, optionally per author (`acceptAllRevisions`, `rejectAllRevisions`)
+- Atomic (all-or-nothing) patch batches (`atomic: true`)
+- Document metadata (`getCoreProperties`, `setCoreProperties`, `scrubMetadata`)
+- Comments (`add_comment`, creating `word/comments.xml` on demand)
+- Reading runs by formatting, e.g. red-text answers (`runFilter` in the JSON projection)
+- Footnotes and endnotes parts (preserved, and walked by accept/reject)
 - Table creation (`add_table` — inserts a new table with TableGrid style)
 - Markdown table conversion in `append_text` (pipe-delimited syntax → real OOXML tables)
 - Paragraphs, runs, and text across split runs
@@ -951,7 +1109,8 @@ import type { PatchOptions, RevisionMark, NormalizedPageBreak, JsonProjectionPag
 - Merged cells (`gridSpan` / `vMerge`)
 - Image manipulation
 - Style creation (can only apply pre-existing styles)
-- Comments and annotations
+- Reading or resolving existing comments (only `add_comment` is supported)
+- Document compare (clean vs original is a different algorithm — use an external engine)
 - Math equations
 
 ## Development
