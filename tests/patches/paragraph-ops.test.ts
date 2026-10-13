@@ -294,3 +294,30 @@ describe("delete_paragraph", () => {
     expect(v!.valid).toBe(false);
   });
 });
+
+describe("delete_paragraph keeps every story valid (untracked)", () => {
+  it("keeps an empty paragraph when deleting the only header paragraph", async () => {
+    const doc = await Docxtor.load(await createLeaseDocx());
+    const [r] = doc.applyPatches([{ type: "delete_paragraph", target: "hdr.default.p0" }]);
+    expect(r!.success).toBe(true);
+    const hdr = [...doc.getHeaders().values()][0]!;
+    expect(hdr.paragraphs.length).toBe(1);
+    expect(hdr.paragraphs[0]!.text).toBe("");
+    expect(serializeXml(hdr.xmlRef)).toMatch(/<w:hdr[^>]*>\s*<w:p[^>]*><\/w:p>\s*<\/w:hdr>/);
+  });
+
+  it("keeps an empty paragraph when deleting the only body paragraph", async () => {
+    const doc = await Docxtor.load(await createSimpleDocx("Only one"));
+    doc.applyPatches([{ type: "delete_paragraph", target: "p0" }]);
+    expect(doc.getParagraphs().length).toBe(1);
+    expect(doc.getParagraphs()[0]!.text).toBe("");
+    expect(doc.toString()).toContain("<w:p>");
+  });
+
+  it("removes a body paragraph outright when a table remains", async () => {
+    const doc = await Docxtor.load(await createTableDocx());
+    doc.applyPatches([{ type: "delete_paragraph", target: "p0" }, { type: "delete_paragraph", target: "p1" }]);
+    expect(doc.getParagraphs().length).toBe(0);
+    expect(doc.getTables().length).toBe(1);
+  });
+});

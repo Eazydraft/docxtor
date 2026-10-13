@@ -47,6 +47,8 @@ interface JsonProjectionParagraph {
 
 interface JsonProjectionTableCell {
   id: string;
+  /** Native `w14:paraId` of the cell's first paragraph, when it has one. */
+  paraId?: string;
   text: string;
   paragraphs?: JsonProjectionParagraph[];
 }
@@ -266,6 +268,9 @@ function projectTableToJson(
           id: cell.paragraphs[0]?.id ?? `${table.id}.r${row.index}.c${cell.colIndex}.p0`,
           text: cell.paragraphs.map((p) => p.text).join("\n"),
         };
+        if (cell.paragraphs[0]?.paraId) {
+          cellResult.paraId = cell.paragraphs[0].paraId;
+        }
         // Include individual paragraph details for multi-paragraph cells,
         // or when filtering runs (so matching runs in cells are reported)
         if (cell.paragraphs.length > 1 || runFilter !== undefined) {

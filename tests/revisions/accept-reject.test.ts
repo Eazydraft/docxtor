@@ -329,3 +329,84 @@ describe("author filter", () => {
     expect(doc.toString()).toBe(before);
   });
 });
+
+// =============================================================================
+// Moves and tracked cell merges (review follow-ups)
+// =============================================================================
+
+describe("moves with an author filter", () => {
+  const MOVE_BODY = `
+<w:p><w:moveFromRangeStart w:id="10" w:author="Mover" w:date="2026-01-01T00:00:00Z" w:name="move1"/><w:moveFrom w:id="11" w:author="Mover" w:date="2026-01-01T00:00:00Z"><w:r><w:delText>Moved text.</w:delText></w:r></w:moveFrom><w:moveFromRangeEnd w:id="10"/></w:p>
+<w:p><w:r><w:t>Stays.</w:t></w:r></w:p>
+<w:p><w:moveToRangeStart w:id="12" w:author="Mover" w:date="2026-01-01T00:00:00Z" w:name="move1"/><w:moveTo w:id="13" w:author="Mover" w:date="2026-01-01T00:00:00Z"><w:r><w:t>Moved text.</w:t></w:r></w:moveTo><w:moveToRangeEnd w:id="12"/></w:p>`;
+
+  it("accepting the mover's changes removes both range start and end markers", async () => {
+    const { createBodyDocx } = await import("../fixtures/create-docx.js");
+    const doc = await Docxtor.load(await createBodyDocx(MOVE_BODY));
+    doc.acceptAllRevisions({ authors: ["Mover"] });
+    const xml = doc.toString();
+    expect(xml).not.toContain("moveFromRange");
+    expect(xml).not.toContain("moveToRange");
+    expect(xml).not.toContain("w:moveFrom");
+    expect(xml).not.toContain("w:moveTo");
+    expect(doc.getParagraphs().map((p) => p.text)).toEqual(["", "Stays.", "Moved text."]);
+  });
+
+  it("rejecting the mover's changes restores the source and removes all markers", async () => {
+    const { createBodyDocx } = await import("../fixtures/create-docx.js");
+    const doc = await Docxtor.load(await createBodyDocx(MOVE_BODY));
+    doc.rejectAllRevisions({ authors: ["Mover"] });
+    const xml = doc.toString();
+    expect(xml).not.toContain("RangeStart");
+    expect(xml).not.toContain("RangeEnd");
+    expect(doc.getParagraphs().map((p) => p.text)).toEqual(["Moved text.", "Stays.", ""]);
+  });
+
+  it("another author's filter leaves the move and its markers untouched", async () => {
+    const { createBodyDocx } = await import("../fixtures/create-docx.js");
+    const doc = await Docxtor.load(await createBodyDocx(MOVE_BODY));
+    const before = doc.toString();
+    expect(doc.acceptAllRevisions({ authors: ["Someone Else"] })).toEqual({ accepted: 0 });
+    expect(doc.toString()).toBe(before);
+    expect(doc.toString()).toContain('<w:moveFromRangeEnd w:id="10">');
+  });
+});
+
+describe("tracked cell merges", () => {
+  const cellMergeBody = (vMergeOrig: string | undefined, currentVMerge: string): string => `
+<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/></w:tblPr><w:tblGrid><w:gridCol w:w="4788"/></w:tblGrid>
+<w:tr><w:tc><w:tcPr><w:tcW w:w="4788" w:type="dxa"/>${currentVMerge}<w:cellMerge w:id="20" w:author="Merger" w:date="2026-01-01T00:00:00Z" w:vMerge="rest"${vMergeOrig ? ` w:vMergeOrig="${vMergeOrig}"` : ""}/></w:tcPr><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:tcPr><w:tcW w:w="4788" w:type="dxa"/><w:vMerge/></w:tcPr><w:p/></w:tc></w:tr>
+</w:tbl><w:p><w:r><w:t>After</w:t></w:r></w:p>`;
+
+  it("accept keeps the merged state and drops the marker", async () => {
+    const { createBodyDocx } = await import("../fixtures/create-docx.js");
+    const doc = await Docxtor.load(await createBodyDocx(cellMergeBody(undefined, '<w:vMerge w:val="restart"/>')));
+    expect(doc.acceptAllRevisions()).toEqual({ accepted: 1 });
+    const xml = doc.toString();
+    expect(xml).not.toContain("w:cellMerge");
+    expect(xml).toContain('<w:vMerge w:val="restart">');
+  });
+
+  it("reject with no vMergeOrig removes w:vMerge (the cell was not merged before)", async () => {
+    const { createBodyDocx } = await import("../fixtures/create-docx.js");
+    const doc = await Docxtor.load(await createBodyDocx(cellMergeBody(undefined, '<w:vMerge w:val="restart"/>')));
+    expect(doc.rejectAllRevisions()).toEqual({ rejected: 1 });
+    const xml = doc.toString();
+    expect(xml).not.toContain("w:cellMerge");
+    expect(xml).not.toContain('w:val="restart"');
+    // The second row's own (untracked) vMerge is untouched
+    expect((xml.match(/<w:vMerge>/g) ?? []).length).toBe(1);
+  });
+
+  it("reject restores the recorded original merge state", async () => {
+    const { createBodyDocx } = await import("../fixtures/create-docx.js");
+    const cont = await Docxtor.load(await createBodyDocx(cellMergeBody("cont", '<w:vMerge w:val="restart"/>')));
+    cont.rejectAllRevisions();
+    expect(cont.toString()).toMatch(/<w:tcPr><w:tcW[^>]*><\/w:tcW><w:vMerge><\/w:vMerge><\/w:tcPr>/);
+
+    const rest = await Docxtor.load(await createBodyDocx(cellMergeBody("rest", "")));
+    rest.rejectAllRevisions();
+    expect(rest.toString()).toMatch(/<w:tcPr><w:tcW[^>]*><\/w:tcW><w:vMerge w:val="restart"><\/w:vMerge><\/w:tcPr>/);
+  });
+});

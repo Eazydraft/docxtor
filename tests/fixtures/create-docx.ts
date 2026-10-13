@@ -1037,3 +1037,13 @@ export async function createLeaseDocx(options: LeaseDocxOptions = {}): Promise<B
 
   return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }) as Promise<Buffer>;
 }
+
+/**
+ * Create a DOCX from a raw `w:body` inner XML string (for revision edge cases
+ * that need hand-built markup such as moves or tracked cell merges).
+ */
+export async function createBodyDocx(bodyInnerXml: string): Promise<Buffer> {
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${bodyInnerXml}</w:body></w:document>`;
+  return buildDocx({ documentXml });
+}

@@ -38,6 +38,12 @@ interface WalkContext {
   mode: Mode;
   authors?: Set<string>;
   count: number;
+  /**
+   * Ids of `w:moveFromRangeStart` / `w:moveToRangeStart` markers that match
+   * the author filter, collected per part. Range *end* markers carry only an
+   * id, so they are matched through this set.
+   */
+  moveRangeIds: Set<string>;
 }
 
 /** Property-change elements and the siblings to keep when restoring the snapshot. */
@@ -55,12 +61,8 @@ const PROP_CHANGE_KEEP: Record<string, Set<string>> = {
 /** Parents whose `w:ins` / `w:del` children are markers owned by w:p / w:tr, not run containers. */
 const MARKER_PARENTS = new Set(["w:rPr", "w:trPr", "w:tcPr"]);
 
-const MOVE_RANGE_TAGS = new Set([
-  "w:moveFromRangeStart",
-  "w:moveFromRangeEnd",
-  "w:moveToRangeStart",
-  "w:moveToRangeEnd",
-]);
+const MOVE_RANGE_START_TAGS = new Set(["w:moveFromRangeStart", "w:moveToRangeStart"]);
+const MOVE_RANGE_END_TAGS = new Set(["w:moveFromRangeEnd", "w:moveToRangeEnd"]);
 
 /** Elements that may sit between two paragraphs without separating them. */
 const TRANSPARENT_SIBLINGS = new Set([
@@ -104,16 +106,23 @@ function makeContext(mode: Mode, options?: RevisionFilterOptions): WalkContext {
     mode,
     authors: options?.authors ? new Set(options.authors) : undefined,
     count: 0,
+    moveRangeIds: new Set(),
   };
 }
 
 function walkAllParts(doc: NormalizedDocument, ctx: WalkContext): void {
-  processChildren(doc.xmlParts.document, undefined, ctx);
-  for (const part of doc.xmlParts.headers.values()) processChildren(part, undefined, ctx);
-  for (const part of doc.xmlParts.footers.values()) processChildren(part, undefined, ctx);
+  const parts: FXPNode[][] = [
+    doc.xmlParts.document,
+    ...doc.xmlParts.headers.values(),
+    ...doc.xmlParts.footers.values(),
+  ];
   for (const key of ["footnotes", "endnotes", "comments"] as const) {
     const part = doc.xmlParts[key];
-    if (part) processChildren(part, undefined, ctx);
+    if (part) parts.push(part);
+  }
+  for (const part of parts) {
+    ctx.moveRangeIds = collectMatchingMoveRangeIds(part, ctx);
+    processChildren(part, undefined, ctx);
   }
 }
 
@@ -121,6 +130,28 @@ function matches(node: FXPNode, ctx: WalkContext): boolean {
   if (!ctx.authors) return true;
   const author = getAttr(node, "w:author");
   return author !== undefined && ctx.authors.has(author);
+}
+
+/**
+ * Pre-pass: ids of move range start markers that match the author filter,
+ * so the author-less end markers can be removed together with them.
+ */
+function collectMatchingMoveRangeIds(nodes: FXPNode[], ctx: WalkContext): Set<string> {
+  const ids = new Set<string>();
+  const visit = (list: FXPNode[]): void => {
+    for (const node of list) {
+      const tag = getTagName(node);
+      if (!tag) continue;
+      if (MOVE_RANGE_START_TAGS.has(tag) && matches(node, ctx)) {
+        const id = getAttr(node, "w:id");
+        if (id !== undefined) ids.add(id);
+      }
+      const children = getChildren(node);
+      if (children.length > 0) visit(children);
+    }
+  };
+  visit(nodes);
+  return ids;
 }
 
 // =============================================================================
@@ -182,8 +213,14 @@ function processChildren(
     }
 
     // --- Move range markers ---------------------------------------------
-    if (MOVE_RANGE_TAGS.has(tag)) {
-      if (matches(child, ctx)) {
+    // Start markers carry w:author; end markers only an id, matched through
+    // the ids collected from their start markers.
+    if (MOVE_RANGE_START_TAGS.has(tag) || MOVE_RANGE_END_TAGS.has(tag)) {
+      const id = getAttr(child, "w:id");
+      const remove = MOVE_RANGE_START_TAGS.has(tag)
+        ? matches(child, ctx)
+        : id !== undefined && ctx.moveRangeIds.has(id);
+      if (remove) {
         children.splice(i, 1);
         continue;
       }
@@ -469,11 +506,46 @@ function handleCellMarkers(
     tcPrChildren.splice(cellDel, 1);
   }
 
-  const cellMerge = tcPrChildren.findIndex((c) => getTagName(c) === "w:cellMerge");
-  if (cellMerge !== -1 && matches(tcPrChildren[cellMerge]!, ctx)) {
+  const cellMerge = tcPrChildren.find((c) => getTagName(c) === "w:cellMerge");
+  if (cellMerge && matches(cellMerge, ctx)) {
     ctx.count++;
-    tcPrChildren.splice(cellMerge, 1);
+    if (ctx.mode === "reject") {
+      restoreVerticalMerge(tcPrChildren, cellMerge); // may insert before the marker
+    }
+    tcPrChildren.splice(tcPrChildren.indexOf(cellMerge), 1);
   }
 
   return false;
+}
+
+/**
+ * Rejecting a tracked vertical cell merge: put `w:vMerge` back to the state
+ * recorded in `w:cellMerge/@w:vMergeOrig` ("rest" → restart, "cont" →
+ * continue, absent → the cell was not merged, so drop `w:vMerge`).
+ */
+function restoreVerticalMerge(tcPrChildren: FXPNode[], cellMerge: FXPNode): void {
+  const orig = getAttr(cellMerge, "w:vMergeOrig");
+  const existingIdx = tcPrChildren.findIndex((c) => getTagName(c) === "w:vMerge");
+
+  if (orig === undefined) {
+    if (existingIdx !== -1) tcPrChildren.splice(existingIdx, 1);
+    return;
+  }
+
+  const vMerge: FXPNode = { "w:vMerge": [] };
+  if (orig === "rest") setAttr(vMerge, "w:val", "restart");
+
+  if (existingIdx !== -1) {
+    tcPrChildren[existingIdx] = vMerge;
+  } else {
+    // Keep schema order: w:vMerge precedes w:tcBorders and the cell markers
+    const beforeIdx = tcPrChildren.findIndex((c) => {
+      const t = getTagName(c);
+      return t === "w:tcBorders" || t === "w:shd" || t === "w:noWrap" || t === "w:tcMar" ||
+        t === "w:textDirection" || t === "w:tcFitText" || t === "w:vAlign" || t === "w:hideMark" ||
+        t === "w:cellIns" || t === "w:cellDel" || t === "w:cellMerge" || t === "w:tcPrChange";
+    });
+    if (beforeIdx === -1) tcPrChildren.push(vMerge);
+    else tcPrChildren.splice(beforeIdx, 0, vMerge);
+  }
 }

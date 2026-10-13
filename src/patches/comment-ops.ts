@@ -147,13 +147,9 @@ export function executeAddComment(
   const author = patch.author && patch.author.length > 0 ? patch.author : options.defaultAuthor;
   const initials = patch.initials ?? deriveInitials(author);
 
-  const commentsRoot = ensureCommentsPart(doc);
-  const id = nextCommentId(commentsRoot);
-
-  const rangeStart = createElement("w:commentRangeStart", [], { "w:id": id });
-  const rangeEnd = createElement("w:commentRangeEnd", [], { "w:id": id });
-  const refRun = buildReferenceRun(id, doc);
-
+  // Resolve the anchor before touching the package, so a failed patch has
+  // no side effects (no empty comments part, relationship or content type).
+  let matchedRuns: FXPNode[] | undefined;
   if (patch.find !== undefined && patch.find.length > 0) {
     const occurrence = patch.occurrence ?? 1;
     const plainFind = stripFormattingMarkers(patch.find);
@@ -164,11 +160,23 @@ export function executeAddComment(
       );
     }
     const ranges = resolveRunRanges(paragraph.runs, matchStart, matchStart + plainFind.length);
-    const matchedRuns = splitRunsForMatch(paragraph.xmlRef, ranges);
+    if (ranges.length === 0) {
+      throw new Error(`No runs found for "${plainFind}" in paragraph "${paragraph.id}"`);
+    }
+    matchedRuns = splitRunsForMatch(paragraph.xmlRef, ranges);
     if (matchedRuns.length === 0) {
       throw new Error(`Failed to isolate matched runs in paragraph "${paragraph.id}"`);
     }
+  }
 
+  const commentsRoot = ensureCommentsPart(doc);
+  const id = nextCommentId(commentsRoot);
+
+  const rangeStart = createElement("w:commentRangeStart", [], { "w:id": id });
+  const rangeEnd = createElement("w:commentRangeEnd", [], { "w:id": id });
+  const refRun = buildReferenceRun(id, doc);
+
+  if (matchedRuns) {
     const firstRun = matchedRuns[0]!;
     const lastRun = matchedRuns[matchedRuns.length - 1]!;
 

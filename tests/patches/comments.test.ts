@@ -101,3 +101,16 @@ describe("add_comment", () => {
     expect(doc.getParagraphs()[0]!.text).toBe("Hi World");
   });
 });
+
+describe("add_comment failure has no side effects", () => {
+  it("does not create comments.xml, a relationship or a content type when the anchor is missing", async () => {
+    const doc = await Docxtor.load(await createSimpleDocx("Hello World"));
+    const [r] = doc.applyPatches([{ type: "add_comment", target: "p0", find: "nope", text: "x" }]);
+    expect(r!.success).toBe(false);
+    const out = await doc.toBuffer();
+    expect(await entry(out, "word/comments.xml")).toBeUndefined();
+    expect(await entry(out, "word/_rels/document.xml.rels") ?? "").not.toContain("comments.xml");
+    expect((await entry(out, "[Content_Types].xml"))!).not.toContain("comments.xml");
+    expect(doc.toString()).not.toContain("commentRange");
+  });
+});

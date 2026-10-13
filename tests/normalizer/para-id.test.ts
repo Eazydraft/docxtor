@@ -255,3 +255,20 @@ describe("paraId: identity stability (§3.1 acceptance)", () => {
     expect(mirror.listInfo).toEqual({ numId: "1", level: 1, listType: "multilevel" });
   });
 });
+
+describe("paraId: table cells in the JSON projection", () => {
+  it("single-paragraph cells carry paraId without extra options", async () => {
+    const doc = await Docxtor.load(await createLeaseDocx());
+    const json = doc.project("json");
+    const table = json.body.find((el) => "rows" in el) as { rows: Array<Array<{ id: string; paraId?: string; paragraphs?: unknown }>> };
+    expect(table.rows[0]![0]).toEqual({ id: "tbl0.r0.c0.p0", paraId: "0A000010", text: "Item" });
+    expect(table.rows[1]![1]!.paraId).toBe("0A000013");
+    expect(table.rows[1]![1]!.paragraphs).toBeUndefined();
+  });
+
+  it("cells without ids have no paraId key", async () => {
+    const doc = await Docxtor.load(await createTableDocx());
+    const table = doc.project("json").body.find((el) => "rows" in el) as { rows: Array<Array<{ paraId?: string }>> };
+    expect("paraId" in table.rows[0]![0]!).toBe(false);
+  });
+});

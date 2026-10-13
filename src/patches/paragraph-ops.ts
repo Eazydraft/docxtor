@@ -345,8 +345,10 @@ function isWhollyOwnInsertion(pNode: FXPNode, author: string): boolean {
 
 /**
  * Physically remove a paragraph from the XML and the normalized view.
- * If it is the only paragraph in a table cell, it is emptied instead
- * (a `w:tc` must contain at least one `w:p`).
+ *
+ * Every story (table cell, header, footer, body) must keep at least one
+ * block element, so the last paragraph of a container is emptied instead
+ * of removed. For the body, a table counts as a block element too.
  */
 function removeParagraph(doc: NormalizedDocument, para: NormalizedParagraph): void {
   const parentChildren = findParentChildren(doc, para.xmlRef);
@@ -359,13 +361,13 @@ function removeParagraph(doc: NormalizedDocument, para: NormalizedParagraph): vo
   }
 
   const isBody = container.array === doc.body;
-  const isHeaderFooter = [...doc.headers.values(), ...doc.footers.values()]
-    .some((hf) => hf.paragraphs === container.array);
-  const isCell = !isBody && !isHeaderFooter;
-  const paragraphCount = parentChildren.filter((c) => getTagName(c) === "w:p").length;
+  const blockCount = parentChildren.filter((c) => {
+    const t = getTagName(c);
+    return t === "w:p" || (isBody && t === "w:tbl");
+  }).length;
 
-  if (isCell && paragraphCount === 1) {
-    // Keep the cell valid: strip content, keep w:pPr
+  if (blockCount === 1) {
+    // Keep the story valid: strip content, keep w:pPr
     const pChildren = getChildren(para.xmlRef);
     const pPr = findChild(para.xmlRef, "w:pPr");
     pChildren.length = 0;
