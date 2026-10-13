@@ -144,3 +144,22 @@ describe("round trip of extra parts", () => {
     }
   });
 });
+
+describe("setCoreProperties on a core.xml with missing namespace declarations", () => {
+  it("declares dcterms and xsi before writing created/modified", async () => {
+    const { parseXml } = await import("../../src/index.js");
+    const doc = await Docxtor.load(await createSimpleDocx("Hello"));
+    doc.getAST().xmlParts.core = parseXml(
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Bare</dc:title></cp:coreProperties>`,
+    );
+    doc.setCoreProperties({ modified: "2026-10-13T00:00:00Z", created: "2026-10-01T00:00:00Z" });
+    const core = (await entry(await doc.toBuffer(), "docProps/core.xml"))!;
+    expect(core).toContain('xmlns:dcterms="http://purl.org/dc/terms/"');
+    expect(core).toContain('xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"');
+    expect(core).toContain('<dcterms:modified xsi:type="dcterms:W3CDTF">2026-10-13T00:00:00Z</dcterms:modified>');
+    // existing declarations are not duplicated
+    expect((core.match(/xmlns:cp=/g) ?? []).length).toBe(1);
+    expect((await Docxtor.load(await doc.toBuffer())).getCoreProperties().title).toBe("Bare");
+  });
+});

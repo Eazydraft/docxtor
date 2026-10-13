@@ -410,3 +410,16 @@ describe("tracked cell merges", () => {
     expect(rest.toString()).toMatch(/<w:tcPr><w:tcW[^>]*><\/w:tcW><w:vMerge w:val="restart"><\/w:vMerge><\/w:tcPr>/);
   });
 });
+
+describe("revision id allocation", () => {
+  it("skips ids used in footnotes, endnotes and comments", async () => {
+    // The lease fixture's body uses ids 1-2 and its footnote uses id 3
+    const doc = await Docxtor.load(await createLeaseDocx());
+    doc.applyPatches([
+      { type: "replace_text", target: "p6", find: "may recapture", replace: "may not recapture" },
+    ], TRACKED);
+    const ours = [...doc.toString().matchAll(/<w:(?:ins|del) w:id="(\d+)" w:author="USI Legal AI"/g)].map((m) => Number(m[1]));
+    expect(ours.length).toBe(2);
+    expect(Math.min(...ours)).toBeGreaterThanOrEqual(4);
+  });
+});

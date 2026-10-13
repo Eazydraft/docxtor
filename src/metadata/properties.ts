@@ -11,6 +11,7 @@ import type { NormalizedDocument, CoreProperties, FXPNode } from "../types.js";
 import {
   createElement,
   escapeXmlText,
+  getAttr,
   getChildren,
   getTagName,
   setAttr,
@@ -130,8 +131,19 @@ function createCorePart(): FXPNode[] {
   ];
 }
 
+/** Namespace declarations every element we may write into core.xml relies on. */
+const CORE_NAMESPACES: Record<string, string> = {
+  "xmlns:cp": CP_NS,
+  "xmlns:dc": DC_NS,
+  "xmlns:dcterms": DCTERMS_NS,
+  "xmlns:dcmitype": DCMITYPE_NS,
+  "xmlns:xsi": XSI_NS,
+};
+
 /**
- * Ensure docProps/core.xml exists as a parsed part, wired into the package.
+ * Ensure docProps/core.xml exists as a parsed part, wired into the package,
+ * and that its root declares every prefix we write (an existing file with no
+ * date fields may lack `dcterms` / `xsi`).
  */
 function ensureCorePart(doc: NormalizedDocument): FXPNode {
   if (!doc.xmlParts.core) {
@@ -143,6 +155,9 @@ function ensureCorePart(doc: NormalizedDocument): FXPNode {
   }
   const root = findRoot(doc.xmlParts.core, "coreProperties");
   if (!root) throw new Error("docProps/core.xml has no coreProperties root");
+  for (const [attr, uri] of Object.entries(CORE_NAMESPACES)) {
+    if (getAttr(root, attr) === undefined) setAttr(root, attr, uri);
+  }
   return root;
 }
 

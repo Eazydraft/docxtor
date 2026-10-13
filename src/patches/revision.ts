@@ -102,6 +102,12 @@ export function scanMaxRevisionId(doc: NormalizedDocument): number {
     maxId = Math.max(maxId, scanNodesForMaxId(fxp));
   }
 
+  // Scan the other revision-bearing parts so new ids never collide
+  for (const key of ["footnotes", "endnotes", "comments"] as const) {
+    const fxp = doc.xmlParts[key];
+    if (fxp) maxId = Math.max(maxId, scanNodesForMaxId(fxp));
+  }
+
   return maxId;
 }
 
