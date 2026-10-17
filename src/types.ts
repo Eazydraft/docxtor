@@ -201,8 +201,12 @@ export interface RunMapping {
   endOffset: number;
   /** Direct reference to the w:r FXP node. */
   xmlRef: FXPNode;
-  /** Direct reference to the w:t FXP node within this run. */
-  textXmlRef: FXPNode;
+  /**
+   * Direct reference to the w:t FXP node within this run.
+   * Absent for runs that carry no `w:t` — a run holding only a line break
+   * (`<w:r><w:br/></w:r>`) still maps to a `\n` in the paragraph text.
+   */
+  textXmlRef?: FXPNode;
   /** Captured formatting properties. */
   formatting: RunFormatting;
 }
@@ -319,6 +323,11 @@ export interface AddListPatch {
   afterId?: string;
   /** Target a header/footer instead of the document body. */
   container?: { type: "header" | "footer"; variant: HeaderFooterVariant };
+  /**
+   * Parse inline formatting markers in this patch's text fields. Overrides
+   * `PatchOptions.inlineMarkers`. Set `false` to write the text verbatim.
+   */
+  markers?: boolean;
 }
 
 export interface AddListItemPatch {
@@ -331,6 +340,11 @@ export interface AddListItemPatch {
   text: string;
   /** Indentation level. If omitted, inherits from target. */
   level?: number;
+  /**
+   * Parse inline formatting markers in this patch's text fields. Overrides
+   * `PatchOptions.inlineMarkers`. Set `false` to write the text verbatim.
+   */
+  markers?: boolean;
 }
 
 export interface RemoveListItemPatch {
@@ -413,6 +427,11 @@ export interface InsertParagraphPatch {
    * new paragraph(s). Default: true.
    */
   inheritStyle?: boolean;
+  /**
+   * Parse inline formatting markers in this patch's text fields. Overrides
+   * `PatchOptions.inlineMarkers`. Set `false` to write the text verbatim.
+   */
+  markers?: boolean;
 }
 
 export interface DeleteParagraphPatch {
@@ -435,6 +454,11 @@ export interface AddCommentPatch {
   author?: string;
   /** Author initials shown in Word's balloon. Derived from `author` if omitted. */
   initials?: string;
+  /**
+   * Parse inline formatting markers in this patch's text fields. Overrides
+   * `PatchOptions.inlineMarkers`. Set `false` to write the text verbatim.
+   */
+  markers?: boolean;
 }
 
 export interface ReplaceTextPatch {
@@ -447,6 +471,11 @@ export interface ReplaceTextPatch {
   replace: string;
   /** Which occurrence to replace (1-based). Default: 1. */
   occurrence?: number;
+  /**
+   * Parse inline formatting markers in this patch's text fields. Overrides
+   * `PatchOptions.inlineMarkers`. Set `false` to write the text verbatim.
+   */
+  markers?: boolean;
 }
 
 export interface InsertTextPatch {
@@ -461,6 +490,11 @@ export interface InsertTextPatch {
   text: string;
   /** Which occurrence of the anchor (1-based). Default: 1. */
   occurrence?: number;
+  /**
+   * Parse inline formatting markers in this patch's text fields. Overrides
+   * `PatchOptions.inlineMarkers`. Set `false` to write the text verbatim.
+   */
+  markers?: boolean;
 }
 
 export interface DeleteTextPatch {
@@ -471,6 +505,11 @@ export interface DeleteTextPatch {
   find: string;
   /** Which occurrence to delete (1-based). Default: 1. */
   occurrence?: number;
+  /**
+   * Parse inline formatting markers in this patch's text fields. Overrides
+   * `PatchOptions.inlineMarkers`. Set `false` to write the text verbatim.
+   */
+  markers?: boolean;
 }
 
 export interface AppendTextPatch {
@@ -482,6 +521,11 @@ export interface AppendTextPatch {
   text: string;
   /** Target a header/footer instead of the document body. */
   container?: { type: "header" | "footer"; variant: HeaderFooterVariant };
+  /**
+   * Parse inline formatting markers in this patch's text fields. Overrides
+   * `PatchOptions.inlineMarkers`. Set `false` to write the text verbatim.
+   */
+  markers?: boolean;
 }
 
 export interface AddTablePatch {
@@ -524,6 +568,11 @@ export interface ReplaceCellTextPatch {
   replace: string;
   /** Which occurrence (1-based). Default: 1. */
   occurrence?: number;
+  /**
+   * Parse inline formatting markers in this patch's text fields. Overrides
+   * `PatchOptions.inlineMarkers`. Set `false` to write the text verbatim.
+   */
+  markers?: boolean;
 }
 
 export interface ApplyFormattingPatch {
@@ -597,16 +646,26 @@ export interface AddHeaderPatch {
   type: "add_header";
   /** Which header variant to create. */
   variant: HeaderFooterVariant;
-  /** Text content for each paragraph. Supports {{FIELD}} placeholders. */
+  /** Text content for each paragraph. Supports inline formatting markers and {{FIELD}} placeholders. */
   paragraphs: string[];
+  /**
+   * Parse inline formatting markers in this patch's text fields. Overrides
+   * `PatchOptions.inlineMarkers`. Set `false` to write the text verbatim.
+   */
+  markers?: boolean;
 }
 
 export interface AddFooterPatch {
   type: "add_footer";
   /** Which footer variant to create. */
   variant: HeaderFooterVariant;
-  /** Text content for each paragraph. Supports {{FIELD}} placeholders. */
+  /** Text content for each paragraph. Supports inline formatting markers and {{FIELD}} placeholders. */
   paragraphs: string[];
+  /**
+   * Parse inline formatting markers in this patch's text fields. Overrides
+   * `PatchOptions.inlineMarkers`. Set `false` to write the text verbatim.
+   */
+  markers?: boolean;
 }
 
 export interface RemoveHeaderPatch {
@@ -685,6 +744,14 @@ export interface PatchOptions {
    * applied, not that it did). Default: false.
    */
   atomic?: boolean;
+  /**
+   * Parse GFM inline formatting markers (`**bold**`, `_italic_`,
+   * `~~strike~~`, `<u>underline</u>`) and backslash escapes in patch text
+   * fields (`find`, `replace`, `anchor`, `text`, list items, header and
+   * footer paragraphs, comment text). Default: true. Set `false` to write
+   * and match text verbatim; a patch's own `markers` field overrides this.
+   */
+  inlineMarkers?: boolean;
 }
 
 // =============================================================================

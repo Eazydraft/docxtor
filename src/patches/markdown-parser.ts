@@ -10,7 +10,21 @@
  * - ~~strikethrough~~
  * - <u>underline</u>
  * - Nesting: **_bold+italic_**, _**bold+italic**_
+ *
+ * Escapes: a backslash before `*`, `_`, `~`, `<` or `\` writes that
+ * character literally (`\_` → `_`). Any other backslash is kept as-is.
+ *
+ * Underscore rules: a `_` is an italic marker only when it stands alone
+ * (not next to another `_`) at a word boundary. Runs of underscores such as
+ * signature blanks (`Name: ______`) and intra-word underscores
+ * (`snake_case`) are literal text.
+ *
+ * Every entry point takes a `markers` flag; with `false` the text is
+ * returned verbatim — no markers, no escapes.
  */
+
+/** Characters a backslash may escape when markers are enabled. */
+const ESCAPABLE = new Set(["*", "_", "~", "<", "\\"]);
 
 /**
  * A segment of text with its inline formatting flags.
@@ -30,7 +44,8 @@ export interface FormattedSegment {
  * Used to normalize `find` / `anchor` fields in patches so they
  * match against the plain paragraph text.
  */
-export function stripFormattingMarkers(text: string): string {
+export function stripFormattingMarkers(text: string, markers: boolean = true): string {
+  if (!markers) return text;
   // Process by walking the string and removing marker characters.
   // We use the same parser and concatenate the text segments.
   const segments = parseFormattedText(text);
@@ -49,8 +64,11 @@ export function stripFormattingMarkers(text: string): string {
  * - Nesting in any order: **_text_**, _**text**_
  *
  * Plain text without markers returns a single segment with no flags.
+ * With `markers: false` the input is returned as one verbatim segment.
  */
-export function parseFormattedText(input: string): FormattedSegment[] {
+export function parseFormattedText(input: string, markers: boolean = true): FormattedSegment[] {
+  if (!markers) return input.length > 0 ? [{ text: input }] : [];
+
   const segments: FormattedSegment[] = [];
   let pos = 0;
   let currentText = "";
@@ -72,6 +90,13 @@ export function parseFormattedText(input: string): FormattedSegment[] {
   }
 
   while (pos < input.length) {
+    // Backslash escape: the next character is literal
+    if (input[pos] === "\\" && pos + 1 < input.length && ESCAPABLE.has(input[pos + 1]!)) {
+      currentText += input[pos + 1];
+      pos += 2;
+      continue;
+    }
+
     // Check for <u> (underline open)
     if (input.slice(pos, pos + 3) === "<u>") {
       flush();
@@ -105,30 +130,11 @@ export function parseFormattedText(input: string): FormattedSegment[] {
     }
 
     // Check for _ (italic toggle)
-    // Only treat as marker if:
-    // - at start/end of input, or
-    // - preceded/followed by a non-word character or is at a word boundary
-    if (input[pos] === "_") {
-      const prevChar = pos > 0 ? input[pos - 1]! : "";
-      const nextChar = pos + 1 < input.length ? input[pos + 1]! : "";
-
-      // Treat _ as italic marker when it's at a boundary:
-      // - start or end of string
-      // - preceded or followed by whitespace/punctuation
-      // - or when italic is already open (closing)
-      const atBoundary =
-        pos === 0 ||
-        pos === input.length - 1 ||
-        /\W/.test(prevChar) ||
-        /\W/.test(nextChar) ||
-        italic;
-
-      if (atBoundary) {
-        flush();
-        italic = !italic;
-        pos += 1;
-        continue;
-      }
+    if (input[pos] === "_" && isItalicMarker(input, pos, italic)) {
+      flush();
+      italic = !italic;
+      pos += 1;
+      continue;
     }
 
     currentText += input[pos];
@@ -139,6 +145,32 @@ export function parseFormattedText(input: string): FormattedSegment[] {
 
   // Merge adjacent segments with identical formatting
   return mergeSegments(segments);
+}
+
+/**
+ * Decide whether the `_` at `pos` is an italic marker.
+ *
+ * - Never when it touches another `_` (underscore blanks, `__init__`).
+ * - Opening: at the start of the string or after a non-word character, and
+ *   followed by something that is not whitespace.
+ * - Closing (italic already open): preceded by something that is not
+ *   whitespace.
+ * - Otherwise only at the end of the string or next to a non-word
+ *   character — the word-boundary rule that keeps `snake_case` literal.
+ */
+function isItalicMarker(input: string, pos: number, italicOpen: boolean): boolean {
+  const prevChar = pos > 0 ? input[pos - 1]! : "";
+  const nextChar = pos + 1 < input.length ? input[pos + 1]! : "";
+  if (prevChar === "_" || nextChar === "_") return false;
+
+  if (italicOpen) {
+    return prevChar !== "" && !/\s/.test(prevChar);
+  }
+  const opensAtBoundary = pos === 0 || /\W/.test(prevChar);
+  if (opensAtBoundary) {
+    return nextChar !== "" && !/\s/.test(nextChar);
+  }
+  return pos === input.length - 1 || /\W/.test(nextChar);
 }
 
 /**
@@ -169,30 +201,9 @@ function mergeSegments(segments: FormattedSegment[]): FormattedSegment[] {
 }
 
 /**
- * Check whether a string contains any GFM formatting markers.
- *
- * For underscore-italic, mirrors the boundary rules used by
- * {@link parseFormattedText}: a lone `_` is only a marker when it sits
- * at the start/end of the string or is adjacent to a non-word character.
- * This avoids false positives on identifiers like `snake_case`.
+ * Check whether a string contains any GFM formatting markers or escapes,
+ * i.e. whether {@link parseFormattedText} would change it.
  */
 export function hasFormattingMarkers(text: string): boolean {
-  if (/\*\*|~~|<\/?u>/.test(text)) return true;
-
-  // Check for _ at a word boundary (same rules as the parser)
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] !== "_") continue;
-    const prev = i > 0 ? text[i - 1]! : "";
-    const next = i + 1 < text.length ? text[i + 1]! : "";
-    if (
-      i === 0 ||
-      i === text.length - 1 ||
-      /\W/.test(prev) ||
-      /\W/.test(next)
-    ) {
-      return true;
-    }
-  }
-
-  return false;
+  return stripFormattingMarkers(text) !== text;
 }

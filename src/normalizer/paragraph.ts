@@ -112,21 +112,24 @@ export function normalizeParagraph(
       }
     }
 
-    if (text.length === 0) continue; // Skip runs with no text (e.g., break-only runs)
+    // Skip runs that contribute nothing to the text (empty w:t, page-break-only,
+    // field chars, drawings). A run holding only a line break still yields "\n",
+    // so every w:br is one character in .text — the same text the projection
+    // shows, so offsets and occurrences computed from it resolve correctly.
+    if (text.length === 0) continue;
 
     const textNode = findTextNode(runNode);
-    if (!textNode) continue;
-
     const formatting = extractFormatting(runNode);
 
-    runMappings.push({
+    const mapping: RunMapping = {
       text,
       startOffset: offset,
       endOffset: offset + text.length,
       xmlRef: runNode,
-      textXmlRef: textNode,
       formatting,
-    });
+    };
+    if (textNode) mapping.textXmlRef = textNode;
+    runMappings.push(mapping);
 
     offset += text.length;
   }
@@ -447,7 +450,8 @@ function walkForDeletions(
 
 /**
  * Extract text content from runs inside a w:del element.
- * Reads from both w:delText and w:t elements (some docs use w:t inside w:del).
+ * Reads from both w:delText and w:t elements (some docs use w:t inside w:del);
+ * a deleted soft line break (w:br) reads as "\n", as in live text.
  */
 function getDeletedText(delNode: FXPNode): string {
   const children = getChildren(delNode);
@@ -457,7 +461,10 @@ function getDeletedText(delNode: FXPNode): string {
     if (tag === "w:r") {
       const runChildren = getChildren(child);
       for (const rc of runChildren) {
-        if ("w:delText" in rc) {
+        if ("w:br" in rc) {
+          const brType = getAttr(rc, "w:type");
+          if (!brType || brType === "textWrapping") text += "\n";
+        } else if ("w:delText" in rc) {
           const dtChildren = rc["w:delText"];
           if (Array.isArray(dtChildren)) {
             for (const dtChild of dtChildren as FXPNode[]) {

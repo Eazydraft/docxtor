@@ -172,6 +172,15 @@ export function cloneDocument(doc: NormalizedDocument): NormalizedDocument {
 }
 
 /**
+ * Whether inline formatting markers apply to a patch: the patch's own
+ * `markers` field wins, then `PatchOptions.inlineMarkers`, then `true`.
+ */
+function markersFor(patch: Patch, options?: PatchOptions): boolean {
+  const own = (patch as { markers?: boolean }).markers;
+  return own ?? options?.inlineMarkers ?? true;
+}
+
+/**
  * Apply a single patch and re-normalize affected elements.
  */
 function applySinglePatch(
@@ -186,29 +195,31 @@ function applySinglePatch(
     return { success: false, patch, error: validation.error };
   }
 
+  const markers = markersFor(patch, options);
+
   try {
     switch (patch.type) {
       case "replace_text": {
         const para = findParagraphById(patch.target, doc)!;
-        executeReplaceText(para, patch, revCtx);
+        executeReplaceText(para, patch, revCtx, markers);
         reNormalizeParagraph(doc, para);
         break;
       }
       case "insert_text": {
         const para = findParagraphById(patch.target, doc)!;
-        executeInsertText(para, patch, revCtx);
+        executeInsertText(para, patch, revCtx, markers);
         reNormalizeParagraph(doc, para);
         break;
       }
       case "delete_text": {
         const para = findParagraphById(patch.target, doc)!;
-        executeDeleteText(para, patch, revCtx);
+        executeDeleteText(para, patch, revCtx, markers);
         reNormalizeParagraph(doc, para);
         break;
       }
       case "insert_paragraph": {
         const para = findParagraphById(patch.target, doc)!;
-        executeInsertParagraph(doc, para, patch, revCtx);
+        executeInsertParagraph(doc, para, patch, revCtx, markers);
         break;
       }
       case "delete_paragraph": {
@@ -221,13 +232,14 @@ function applySinglePatch(
         executeAddComment(doc, para, patch, {
           defaultAuthor: options?.revisionAuthor ?? "docxtor",
           date: options?.revisionDate ?? new Date().toISOString(),
+          markers,
         });
         reNormalizeParagraph(doc, para);
         break;
       }
       case "replace_cell_text": {
         const para = findParagraphById(patch.target, doc)!;
-        executeReplaceCellText(para, patch, revCtx);
+        executeReplaceCellText(para, patch, revCtx, markers);
         reNormalizeParagraph(doc, para);
         break;
       }
@@ -258,7 +270,7 @@ function applySinglePatch(
         break;
       }
       case "append_text": {
-        executeAppendText(doc, patch, revCtx);
+        executeAppendText(doc, patch, revCtx, markers);
         break;
       }
       case "add_table": {
@@ -266,11 +278,11 @@ function applySinglePatch(
         break;
       }
       case "add_header": {
-        executeAddHeader(doc, patch, revCtx);
+        executeAddHeader(doc, patch, revCtx, markers);
         break;
       }
       case "add_footer": {
-        executeAddFooter(doc, patch, revCtx);
+        executeAddFooter(doc, patch, revCtx, markers);
         break;
       }
       case "remove_header": {
@@ -282,11 +294,11 @@ function applySinglePatch(
         break;
       }
       case "add_list": {
-        executeAddList(doc, patch, revCtx);
+        executeAddList(doc, patch, revCtx, markers);
         break;
       }
       case "add_list_item": {
-        executeAddListItem(doc, patch, revCtx);
+        executeAddListItem(doc, patch, revCtx, markers);
         break;
       }
       case "remove_list_item": {
@@ -410,11 +422,12 @@ function markTableRowsAsInserted(
 function executeAppendText(
   doc: NormalizedDocument,
   patch: AppendTextPatch,
-  revCtx?: RevisionContext,
+  revCtx: RevisionContext | undefined,
+  markers: boolean,
 ): void {
   if (patch.container) {
     // Target a header/footer container
-    executeAppendTextToContainer(doc, patch, revCtx);
+    executeAppendTextToContainer(doc, patch, revCtx, markers);
     return;
   }
 
@@ -434,7 +447,7 @@ function executeAppendText(
         lastListType = undefined;
       }
       for (const line of segment.lines) {
-        const runs = buildFieldRuns(line);
+        const runs = buildFieldRuns(line, undefined, markers);
         if (revCtx) {
           const insElement = createInsElement(revCtx, runs);
           newNodes.push({ "w:p": [insElement] });
@@ -466,7 +479,7 @@ function executeAppendText(
           createElement("w:numId", [], { "w:val": numId }),
         ]);
         const pPr = createElement("w:pPr", [numPr]);
-        const runs = buildFieldRuns(item.text);
+        const runs = buildFieldRuns(item.text, undefined, markers);
         if (revCtx) {
           const insElement = createInsElement(revCtx, runs);
           newNodes.push({ "w:p": [pPr, insElement] });
@@ -588,7 +601,8 @@ function findContainerRoot(
 function executeAppendTextToContainer(
   doc: NormalizedDocument,
   patch: AppendTextPatch,
-  revCtx?: RevisionContext,
+  revCtx: RevisionContext | undefined,
+  markers: boolean,
 ): void {
   const container = patch.container!;
   const result = findContainerRoot(doc, container.type, container.variant);
@@ -618,7 +632,7 @@ function executeAppendTextToContainer(
       }
       for (const line of segment.lines) {
         let pNode: FXPNode;
-        const runs = buildFieldRuns(line);
+        const runs = buildFieldRuns(line, undefined, markers);
         if (revCtx) {
           const insElement = createInsElement(revCtx, runs);
           pNode = { "w:p": [insElement] };
@@ -663,7 +677,7 @@ function executeAppendTextToContainer(
           createElement("w:numId", [], { "w:val": numId }),
         ]);
         const pPr = createElement("w:pPr", [numPr]);
-        const runs = buildFieldRuns(item.text);
+        const runs = buildFieldRuns(item.text, undefined, markers);
         let pNode: FXPNode;
         if (revCtx) {
           const insElement = createInsElement(revCtx, runs);

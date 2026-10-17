@@ -24,8 +24,7 @@ import {
   getAttr,
 } from "../xml/helpers.js";
 import { normalizeHeaderFooter } from "../normalizer/header-footer.js";
-import { buildFieldRuns, hasFieldPlaceholders } from "./field-codes.js";
-import { createRun } from "../xml/helpers.js";
+import { buildFieldRuns } from "./field-codes.js";
 import type { RevisionContext } from "./revision.js";
 import { createInsElement } from "./revision.js";
 
@@ -52,8 +51,9 @@ export function executeAddHeader(
   doc: NormalizedDocument,
   patch: AddHeaderPatch,
   revCtx?: RevisionContext,
+  markers: boolean = true,
 ): void {
-  executeAddHeaderFooter(doc, "header", patch.variant, patch.paragraphs, revCtx);
+  executeAddHeaderFooter(doc, "header", patch.variant, patch.paragraphs, revCtx, markers);
 }
 
 // =============================================================================
@@ -68,8 +68,9 @@ export function executeAddFooter(
   doc: NormalizedDocument,
   patch: AddFooterPatch,
   revCtx?: RevisionContext,
+  markers: boolean = true,
 ): void {
-  executeAddHeaderFooter(doc, "footer", patch.variant, patch.paragraphs, revCtx);
+  executeAddHeaderFooter(doc, "footer", patch.variant, patch.paragraphs, revCtx, markers);
 }
 
 // =============================================================================
@@ -115,6 +116,7 @@ function executeAddHeaderFooter(
   variant: HeaderFooterVariant,
   paragraphs: string[],
   revCtx?: RevisionContext,
+  markers: boolean = true,
 ): void {
   // 1. Determine next available filename number
   const existingParts = type === "header" ? doc.xmlParts.headers : doc.xmlParts.footers;
@@ -127,12 +129,7 @@ function executeAddHeaderFooter(
   const pNodes: FXPNode[] = [];
 
   for (const text of paragraphs) {
-    let runs: FXPNode[];
-    if (hasFieldPlaceholders(text)) {
-      runs = buildFieldRuns(text);
-    } else {
-      runs = [createRun(text)];
-    }
+    const runs = buildFieldRuns(text, undefined, markers);
 
     if (revCtx) {
       // Wrap runs in w:ins for revision tracking

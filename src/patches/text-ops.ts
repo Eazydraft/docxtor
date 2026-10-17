@@ -36,6 +36,7 @@ import {
   findChild,
   cloneNode,
   createElement,
+  getAttr,
 } from "../xml/helpers.js";
 import type { RevisionContext } from "./revision.js";
 import {
@@ -43,6 +44,7 @@ import {
   createDelElement,
   convertRunToDeleted,
   createRevisionRun,
+  nextRevisionId,
 } from "./revision.js";
 import {
   stripFormattingMarkers,
@@ -118,9 +120,10 @@ export function executeReplaceText(
   paragraph: NormalizedParagraph,
   patch: ReplaceTextPatch,
   revCtx?: RevisionContext,
+  markers: boolean = true,
 ): void {
   const occurrence = patch.occurrence ?? 1;
-  const plainFind = stripFormattingMarkers(patch.find);
+  const plainFind = stripFormattingMarkers(patch.find, markers);
   const matchStart = findOccurrence(paragraph.text, plainFind, occurrence);
 
   if (matchStart === -1) {
@@ -139,9 +142,9 @@ export function executeReplaceText(
   }
 
   if (revCtx) {
-    executeReplaceTextRevision(paragraph, patch, ranges, revCtx);
+    executeReplaceTextRevision(paragraph, patch, ranges, revCtx, markers);
   } else {
-    executeReplaceTextDirect(paragraph, patch, ranges);
+    executeReplaceTextDirect(paragraph, patch, ranges, markers);
   }
 }
 
@@ -157,9 +160,11 @@ function executeReplaceTextDirect(
   paragraph: NormalizedParagraph,
   patch: ReplaceTextPatch,
   ranges: ReturnType<typeof resolveRunRanges>,
+  markers: boolean,
 ): void {
-  const segments = parseFormattedText(patch.replace);
+  const segments = parseFormattedText(patch.replace, markers);
   const hasFormatting = segments.some((s) => s.bold || s.italic || s.strikethrough || s.underline);
+  const plainText = stripFormattingMarkers(patch.replace, markers);
 
   if (ranges.length === 1) {
     const range = ranges[0]!;
@@ -167,7 +172,6 @@ function executeReplaceTextDirect(
 
     if (!hasFormatting) {
       // Simple plain text replacement
-      const plainText = stripFormattingMarkers(patch.replace);
       setRunText(splitResult.matched, plainText);
     } else {
       // Replace the matched run with formatted runs
@@ -183,7 +187,6 @@ function executeReplaceTextDirect(
     }
 
     if (!hasFormatting) {
-      const plainText = stripFormattingMarkers(patch.replace);
       setRunText(matchedRuns[0]!, plainText);
     } else {
       replaceRunWithFormattedRuns(paragraph.xmlRef, matchedRuns[0]!, segments);
@@ -208,6 +211,7 @@ function executeReplaceTextRevision(
   patch: ReplaceTextPatch,
   ranges: ReturnType<typeof resolveRunRanges>,
   revCtx: RevisionContext,
+  markers: boolean,
 ): void {
   // Split runs to isolate the matched text
   let matchedRuns: FXPNode[];
@@ -240,21 +244,18 @@ function executeReplaceTextRevision(
   const container = findRunContainer(paragraph.xmlRef, matchedRuns[0]!);
   const insideIns = container != null && getTagName(container) === "w:ins";
 
-  // Create the replacement run(s) wrapped in w:ins
-  let insElement: FXPNode | undefined;
-  const segments = parseFormattedText(patch.replace);
+  // Create the replacement run(s); wrapped in w:ins below
+  const segments = parseFormattedText(patch.replace, markers);
   const hasFormatting = segments.some((s) => s.bold || s.italic || s.strikethrough || s.underline);
+  const plainText = stripFormattingMarkers(patch.replace, markers);
 
-  if (segments.length > 0 && stripFormattingMarkers(patch.replace).length > 0) {
-    if (hasFormatting) {
-      const newRuns = createFormattedRuns(segments, rPrNode);
-      insElement = createInsElement(revCtx, newRuns);
-    } else {
-      const plainText = stripFormattingMarkers(patch.replace);
-      const newRun = createRevisionRun(plainText, rPrNode);
-      insElement = createInsElement(revCtx, [newRun]);
-    }
+  let newRuns: FXPNode[] = [];
+  if (segments.length > 0 && plainText.length > 0) {
+    newRuns = hasFormatting
+      ? createFormattedRuns(segments, rPrNode)
+      : [createRevisionRun(plainText, rPrNode)];
   }
+  const insElement = newRuns.length > 0 ? createInsElement(revCtx, newRuns) : undefined;
 
   // Find the position of the first matched run in the parent
   const firstRunIndex = parentChildren.indexOf(matchedRuns[0]!);
@@ -268,26 +269,10 @@ function executeReplaceTextRevision(
   }
 
   if (insideIns) {
-    // Runs were inside w:ins — remove the w:ins if now empty, then insert
-    // replacement at the paragraph level (inside a new w:ins).
-    if (parentChildren.length === 0 && container) {
-      const paraChildren = getChildren(paragraph.xmlRef);
-      const containerIdx = paraChildren.indexOf(container);
-      if (containerIdx !== -1) {
-        paraChildren.splice(containerIdx, 1);
-        // Insert replacement at the container's former position
-        if (insElement) {
-          paraChildren.splice(containerIdx, 0, insElement);
-        }
-      }
-    } else if (insElement) {
-      // w:ins still has other runs; insert replacement after the w:ins
-      const paraChildren = getChildren(paragraph.xmlRef);
-      const containerIdx = paraChildren.indexOf(container!);
-      if (containerIdx !== -1) {
-        paraChildren.splice(containerIdx + 1, 0, insElement);
-      }
-    }
+    // The matched runs were an unaccepted insertion, so there is nothing to
+    // mark deleted — they are simply gone. The replacement must still land
+    // exactly where they were, not after the surrounding w:ins.
+    insertIntoInsertion(paragraph.xmlRef, container!, firstRunIndex, newRuns, revCtx);
   } else {
     // Normal case: insert w:del and w:ins at the position of the first matched run
     // Clone matched runs and convert to deleted runs
@@ -305,6 +290,54 @@ function executeReplaceTextRevision(
       parentChildren.splice(firstRunIndex, 0, delElement);
     }
   }
+}
+
+/**
+ * Put `newRuns` at `index` among the children of an existing `w:ins`.
+ *
+ * - Same author: the runs join that insertion in place.
+ * - Another author: the insertion is split around `index`; the new runs go
+ *   between the halves in their own `w:ins`, so attribution and order are
+ *   both kept. An empty half is dropped (and the whole container, if it
+ *   ends up empty).
+ */
+function insertIntoInsertion(
+  paragraphNode: FXPNode,
+  container: FXPNode,
+  index: number,
+  newRuns: FXPNode[],
+  revCtx: RevisionContext,
+): void {
+  const containerChildren = getChildren(container);
+  const containerParent = findRunParentChildren(paragraphNode, container);
+  if (!containerParent) {
+    throw new Error("Insertion container not found in paragraph");
+  }
+  const containerIdx = containerParent.indexOf(container);
+
+  if (newRuns.length === 0) {
+    if (containerChildren.length === 0) containerParent.splice(containerIdx, 1);
+    return;
+  }
+
+  if (getAttr(container, "w:author") === revCtx.author) {
+    containerChildren.splice(index, 0, ...newRuns);
+    return;
+  }
+
+  const tail = containerChildren.splice(index);
+  const replacement: FXPNode[] = [];
+  if (containerChildren.length > 0) replacement.push(container);
+  replacement.push(createInsElement(revCtx, newRuns));
+  if (tail.length > 0) {
+    const second = createElement("w:ins", tail, {
+      "w:id": nextRevisionId(revCtx),
+      "w:author": getAttr(container, "w:author") ?? "",
+      "w:date": getAttr(container, "w:date") ?? "",
+    });
+    replacement.push(second);
+  }
+  containerParent.splice(containerIdx, 1, ...replacement);
 }
 
 // =============================================================================
@@ -325,9 +358,10 @@ export function executeInsertText(
   paragraph: NormalizedParagraph,
   patch: InsertTextPatch,
   revCtx?: RevisionContext,
+  markers: boolean = true,
 ): void {
   const occurrence = patch.occurrence ?? 1;
-  const plainAnchor = stripFormattingMarkers(patch.anchor);
+  const plainAnchor = stripFormattingMarkers(patch.anchor, markers);
   const anchorStart = findOccurrence(paragraph.text, plainAnchor, occurrence);
 
   if (anchorStart === -1) {
@@ -343,9 +377,9 @@ export function executeInsertText(
       : anchorStart + plainAnchor.length;
 
   if (revCtx) {
-    executeInsertTextRevision(paragraph, patch, insertOffset, revCtx);
+    executeInsertTextRevision(paragraph, patch, insertOffset, revCtx, markers);
   } else {
-    executeInsertTextDirect(paragraph, patch, insertOffset);
+    executeInsertTextDirect(paragraph, patch, insertOffset, markers);
   }
 }
 
@@ -357,6 +391,7 @@ function executeInsertTextDirect(
   paragraph: NormalizedParagraph,
   patch: InsertTextPatch,
   insertOffset: number,
+  markers: boolean,
 ): void {
   let targetRun: typeof paragraph.runs[number] | undefined;
 
@@ -377,12 +412,12 @@ function executeInsertTextDirect(
     targetRun = lastRun;
   }
 
-  const segments = parseFormattedText(patch.text);
+  const segments = parseFormattedText(patch.text, markers);
   const hasFormatting = segments.some((s) => s.bold || s.italic || s.strikethrough || s.underline);
 
   if (!hasFormatting) {
     // Simple plain text insertion
-    const plainText = stripFormattingMarkers(patch.text);
+    const plainText = stripFormattingMarkers(patch.text, markers);
     const localInsertOffset = insertOffset - targetRun.startOffset;
     const currentText = getRunText(targetRun.xmlRef);
     const newText =
@@ -438,6 +473,7 @@ function executeInsertTextRevision(
   patch: InsertTextPatch,
   insertOffset: number,
   revCtx: RevisionContext,
+  markers: boolean,
 ): void {
   let targetRun: typeof paragraph.runs[number] | undefined;
 
@@ -464,14 +500,14 @@ function executeInsertTextRevision(
   const rPrNode = findChild(targetRun.xmlRef, "w:rPr");
 
   // Create the new run(s) with inserted text wrapped in w:ins
-  const segments = parseFormattedText(patch.text);
+  const segments = parseFormattedText(patch.text, markers);
   const hasFormatting = segments.some((s) => s.bold || s.italic || s.strikethrough || s.underline);
 
   let insRuns: FXPNode[];
   if (hasFormatting) {
     insRuns = createFormattedRuns(segments, rPrNode);
   } else {
-    const plainText = stripFormattingMarkers(patch.text);
+    const plainText = stripFormattingMarkers(patch.text, markers);
     insRuns = [createRevisionRun(plainText, rPrNode)];
   }
   const insElement = createInsElement(revCtx, insRuns);
@@ -570,17 +606,23 @@ export function executeDeleteText(
   paragraph: NormalizedParagraph,
   patch: DeleteTextPatch,
   revCtx?: RevisionContext,
+  markers: boolean = true,
 ): void {
   if (revCtx) {
-    executeDeleteTextRevision(paragraph, patch, revCtx);
+    executeDeleteTextRevision(paragraph, patch, revCtx, markers);
   } else {
-    executeReplaceText(paragraph, {
-      type: "replace_text",
-      target: patch.target,
-      find: patch.find,
-      replace: "",
-      occurrence: patch.occurrence,
-    });
+    executeReplaceText(
+      paragraph,
+      {
+        type: "replace_text",
+        target: patch.target,
+        find: patch.find,
+        replace: "",
+        occurrence: patch.occurrence,
+      },
+      undefined,
+      markers,
+    );
   }
 }
 
@@ -594,9 +636,10 @@ function executeDeleteTextRevision(
   paragraph: NormalizedParagraph,
   patch: DeleteTextPatch,
   revCtx: RevisionContext,
+  markers: boolean,
 ): void {
   const occurrence = patch.occurrence ?? 1;
-  const plainFind = stripFormattingMarkers(patch.find);
+  const plainFind = stripFormattingMarkers(patch.find, markers);
   const matchStart = findOccurrence(paragraph.text, plainFind, occurrence);
 
   if (matchStart === -1) {

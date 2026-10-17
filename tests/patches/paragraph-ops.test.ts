@@ -144,6 +144,55 @@ describe("insert_paragraph", () => {
     expect(doc.findParagraphById("tbl0.r1.c0.p1")!.text).toBe("Second line");
   });
 
+  it("multi-line insert in a table cell keeps every line, in order, directly after the target (issue #36)", async () => {
+    const u = "_".repeat(29);
+    const signature = `<w:p>
+      <w:pPr><w:pStyle w:val="Normal"/><w:rPr><w:b/></w:rPr></w:pPr>
+      <w:r><w:t>[CLIENT]</w:t></w:r><w:r><w:t xml:space="preserve"> LLC,</w:t></w:r>
+      <w:r><w:br/></w:r><w:r><w:br/></w:r><w:r><w:br/></w:r>
+      <w:r><w:t>By:</w:t></w:r><w:r><w:br/></w:r>
+      <w:r><w:t>Name:</w:t></w:r><w:r><w:t xml:space="preserve">  _</w:t></w:r><w:r><w:t>${"_".repeat(28)}</w:t></w:r><w:r><w:br/></w:r>
+      <w:r><w:t>Title:</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">  ${u}</w:t></w:r>
+    </w:p>`;
+    const { createBodyDocx } = await import("../fixtures/create-docx.js");
+    const buffer = await createBodyDocx(
+      `<w:p><w:r><w:t>Intro</w:t></w:r></w:p>
+       <w:tbl><w:tr>
+         <w:tc><w:p><w:r><w:t>LANDLORD:</w:t></w:r></w:p></w:tc>
+         <w:tc>${signature}<w:p><w:r><w:t>By:</w:t></w:r></w:p></w:tc>
+       </w:tr></w:tbl>`,
+    );
+    const doc = await Docxtor.load(buffer, { assignParaIds: true });
+    const target = `para:${doc.findParagraphById("tbl0.r0.c1.p0")!.paraId}`;
+    const text = `[CLIENT] LLC, REVISED\nBy:\nName:  ${u}\nTitle:  ${u}`;
+
+    const results = doc.applyPatches(
+      [
+        { type: "insert_paragraph", target, position: "after", text, inheritStyle: true },
+        { type: "delete_paragraph", target },
+      ],
+      TRACKED,
+    );
+    expect(results.every((r) => r.success)).toBe(true);
+
+    const cellTexts = (d: Docxtor): string[] => {
+      const json = d.project("json") as { body: Array<{ rows?: Array<Array<{ paragraphs?: Array<{ text: string }> }>> }> };
+      return json.body[1]!.rows![0]![1]!.paragraphs!.map((p) => p.text);
+    };
+    const expected = ["", "[CLIENT] LLC, REVISED", "By:", `Name:  ${u}`, `Title:  ${u}`, "By:"];
+    expect(cellTexts(doc)).toEqual(expected);
+
+    // Same after a round trip, and the new paragraphs carry the inherited style
+    const reloaded = await Docxtor.load(await doc.toBuffer());
+    expect(cellTexts(reloaded)).toEqual(expected);
+    expect(reloaded.findParagraphById("tbl0.r0.c1.p3")!.style).toBe("Normal");
+    expect(reloaded.findParagraphById("tbl0.r0.c1.p3")!.runs[0]!.formatting.bold).toBe(true);
+
+    // Accepting leaves the four new lines plus the pre-existing one
+    reloaded.acceptAllRevisions();
+    expect(cellTexts(reloaded)).toEqual(expected.slice(1));
+  });
+
   it("works inside a header", async () => {
     const doc = await Docxtor.load(await createLeaseDocx());
     doc.applyPatches([
