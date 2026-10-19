@@ -164,6 +164,18 @@ describe("verbatim patch text (issue #35)", () => {
     expect(listDoc.getParagraphs().some((p) => p.text === "**raw**")).toBe(true);
   });
 
+  it("a literal U+FFFC next to a field placeholder is kept, with markers on and off", async () => {
+    for (const markers of [true, false]) {
+      const doc = await Docxtor.create();
+      doc.applyPatches([{ type: "append_text", text: "\uFFFC {{PAGE}} \uFFFC", markers }]);
+      const para = doc.getParagraphs().at(-1)!;
+      expect(para.text).toBe("\uFFFC  \uFFFC");
+      const xml = doc.toString();
+      expect((xml.match(/w:instrText[^>]*> PAGE /g) ?? []).length).toBe(1);
+      expect(xml).not.toContain("undefined");
+    }
+  });
+
   it("validatePatches accepts the markers field", async () => {
     const doc = await Docxtor.load(await createSimpleDocx("Hello"));
     const v = doc.validatePatches([{ type: "replace_text", target: "p0", find: "Hello", replace: "x", markers: false }]);

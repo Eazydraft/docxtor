@@ -119,6 +119,47 @@ describe("w:br in paragraph text (issue #33)", () => {
     expect((xml.match(/<w:br>/g) ?? []).length).toBe(1);
   });
 
+  it("untracked: deleting a break from a run that holds text on both sides removes the w:br", async () => {
+    const doc = await Docxtor.load(
+      await createBodyDocx(`<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Hello</w:t><w:br/><w:t>World</w:t></w:r></w:p>`),
+    );
+    const [r] = doc.applyPatches([{ type: "delete_text", target: "p0", find: "\n" }]);
+    expect(r!.success).toBe(true);
+    expect(doc.getParagraphs()[0]!.text).toBe("HelloWorld");
+    const xml = doc.toString();
+    expect(xml).not.toContain("<w:br>");
+    expect(xml).toContain("<w:b>"); // formatting kept on the rebuilt runs
+    expect(await Docxtor.load(await doc.toBuffer()).then((d) => d.getParagraphs()[0]!.text)).toBe("HelloWorld");
+  });
+
+  it("untracked: replacing a break-only run's newline with text drops the w:br", async () => {
+    const doc = await Docxtor.load(
+      await createBodyDocx(`<w:p><w:r><w:t>A</w:t></w:r><w:r><w:br/></w:r><w:r><w:t>B</w:t></w:r></w:p>`),
+    );
+    const [r] = doc.applyPatches([{ type: "replace_text", target: "p0", find: "\n", replace: "-" }]);
+    expect(r!.success).toBe(true);
+    expect(doc.getParagraphs()[0]!.text).toBe("A-B");
+    expect(doc.toString()).not.toContain("<w:br>");
+  });
+
+  it("untracked: replacing text that spans a break within one run, with a single-line replacement", async () => {
+    const doc = await Docxtor.load(
+      await createBodyDocx(`<w:p><w:r><w:t>By:</w:t><w:br/><w:t>Name:</w:t></w:r></w:p>`),
+    );
+    doc.applyPatches([{ type: "replace_text", target: "p0", find: ":\nName", replace: " / Name" }]);
+    expect(doc.getParagraphs()[0]!.text).toBe("By / Name:");
+    expect(doc.toString()).not.toContain("<w:br>");
+  });
+
+  it("untracked: a page break in the matched run survives a single-line replacement", async () => {
+    const doc = await Docxtor.load(
+      await createBodyDocx(`<w:p><w:r><w:t>Hello</w:t><w:br/><w:t>World</w:t><w:br w:type="page"/></w:r></w:p>`),
+    );
+    doc.applyPatches([{ type: "replace_text", target: "p0", find: "Hello\nWorld", replace: "Hi" }]);
+    expect(doc.getParagraphs()[0]!.text).toBe("Hi");
+    expect(doc.toString()).toContain('<w:br w:type="page">');
+  });
+
   it("page and column breaks still contribute no text", async () => {
     const doc = await Docxtor.load(
       await createBodyDocx(`<w:p><w:r><w:t>A</w:t></w:r><w:r><w:br w:type="page"/></w:r><w:r><w:br w:type="column"/></w:r><w:r><w:t>B</w:t></w:r></w:p>`),

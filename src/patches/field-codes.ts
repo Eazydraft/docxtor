@@ -94,8 +94,21 @@ export function hasFieldPlaceholders(text: string): boolean {
   return false;
 }
 
-/** Stands in for a field while inline markers are parsed around it. */
-const FIELD_PLACEHOLDER = "\uFFFC";
+/**
+ * Pick a character that does not occur in `text` to stand in for a field
+ * while inline markers are parsed around it. U+FFFC (object replacement
+ * character) is the first choice; if the text happens to contain it, a
+ * private-use character that the text does not contain is used instead, so
+ * literal text is never mistaken for a field.
+ */
+function pickFieldPlaceholder(text: string): string {
+  if (!text.includes("\uFFFC")) return "\uFFFC";
+  for (let cp = 0xe000; cp <= 0xf8ff; cp++) {
+    const ch = String.fromCharCode(cp);
+    if (!text.includes(ch)) return ch;
+  }
+  throw new Error("Cannot find a placeholder character for field codes");
+}
 
 /**
  * Build FXP run nodes for a text string that may contain field placeholders
@@ -107,9 +120,10 @@ const FIELD_PLACEHOLDER = "\uFFFC";
  *
  * Algorithm:
  * 1. Parse field placeholders to get text/field segments.
- * 2. Replace every field with a placeholder character and run the GFM parser
- *    on the whole string, so markers open and close across fields and the
- *    placeholder (a non-word character) keeps `_{{PAGE}}_` a valid italic.
+ * 2. Replace every field with a placeholder character (one the text does not
+ *    contain) and run the GFM parser on the whole string, so markers open and
+ *    close across fields and the placeholder (a non-word character) keeps
+ *    `_{{PAGE}}_` a valid italic.
  * 3. Walk the formatted segments: text becomes runs with that formatting,
  *    each placeholder becomes the field-code run sequence carrying the
  *    formatting active at that point.
@@ -131,8 +145,9 @@ export function buildFieldRuns(text: string, rPrNode?: FXPNode, markers: boolean
   const fieldCodes = segments
     .filter((s): s is { kind: "field"; fieldCode: string } => s.kind === "field")
     .map((s) => s.fieldCode);
+  const placeholder = pickFieldPlaceholder(text);
   const combined = segments
-    .map((s) => (s.kind === "text" ? s.text : FIELD_PLACEHOLDER))
+    .map((s) => (s.kind === "text" ? s.text : placeholder))
     .join("");
   const formatted = parseFormattedText(combined, markers);
 
@@ -147,7 +162,7 @@ export function buildFieldRuns(text: string, rPrNode?: FXPNode, markers: boolean
   };
 
   for (const seg of formatted) {
-    const parts = seg.text.split(FIELD_PLACEHOLDER);
+    const parts = seg.text.split(placeholder);
     for (let i = 0; i < parts.length; i++) {
       const part = parts[i]!;
       if (part.length > 0) pending.push({ ...seg, text: part });

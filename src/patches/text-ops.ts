@@ -815,11 +815,13 @@ function replaceRunWithFormattedRuns(
  *
  * If the text contains newlines (\n), they are converted to w:br
  * (soft line break) elements within the run. This allows replacement
- * text to contain line breaks.
+ * text to contain line breaks. A run that already holds a soft break
+ * (or several w:t elements) is rebuilt as well, so the old break never
+ * survives next to the new text.
  */
 function setRunText(runNode: FXPNode, text: string): void {
-  if (text.includes("\n")) {
-    // Multi-line: rebuild the run's content children with w:t/w:br pairs
+  if (text.includes("\n") || runHasMixedContent(runNode)) {
+    // Rebuild the run's content children with w:t/w:br pairs
     setRunTextWithBreaks(runNode, text);
     return;
   }
@@ -857,18 +859,44 @@ function setRunText(runNode: FXPNode, text: string): void {
 }
 
 /**
+ * True if the run's text cannot be updated by editing a single w:t: it holds
+ * a soft line break, or more than one w:t element.
+ */
+function runHasMixedContent(runNode: FXPNode): boolean {
+  let textNodes = 0;
+  for (const child of getChildren(runNode)) {
+    if ("w:br" in child) {
+      const brType = getAttr(child, "w:type");
+      if (!brType || brType === "textWrapping") return true;
+    } else if ("w:t" in child) {
+      textNodes++;
+    }
+  }
+  return textNodes > 1;
+}
+
+/**
  * Replace a run's text content with text containing line breaks.
  *
  * Splits text on \n and interleaves w:t and w:br elements.
- * Preserves the run's w:rPr formatting.
+ * Preserves the run's w:rPr (and any other non-text children such as
+ * page breaks or tabs, which keep their position relative to the start).
  */
 function setRunTextWithBreaks(runNode: FXPNode, text: string): void {
   const children = getChildren(runNode);
 
-  // Keep w:rPr (formatting), remove everything else (w:t, w:br, etc.)
-  const rPrNodes = children.filter((c) => "w:rPr" in c);
+  // Keep w:rPr (formatting) and non-text children such as page breaks;
+  // drop w:t and soft breaks, which the new text replaces
+  const kept = children.filter((c) => {
+    if ("w:t" in c) return false;
+    if ("w:br" in c) {
+      const brType = getAttr(c, "w:type");
+      return brType !== undefined && brType !== "textWrapping";
+    }
+    return true;
+  });
   children.length = 0;
-  children.push(...rPrNodes);
+  children.push(...kept);
 
   const segments = text.split("\n");
   for (let i = 0; i < segments.length; i++) {
