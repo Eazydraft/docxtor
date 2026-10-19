@@ -151,13 +151,26 @@ describe("w:br in paragraph text (issue #33)", () => {
     expect(doc.toString()).not.toContain("<w:br>");
   });
 
-  it("untracked: a page break in the matched run survives a single-line replacement", async () => {
+  it("untracked: a trailing page break in the matched run stays after the replacement", async () => {
     const doc = await Docxtor.load(
       await createBodyDocx(`<w:p><w:r><w:t>Hello</w:t><w:br/><w:t>World</w:t><w:br w:type="page"/></w:r></w:p>`),
     );
     doc.applyPatches([{ type: "replace_text", target: "p0", find: "Hello\nWorld", replace: "Hi" }]);
-    expect(doc.getParagraphs()[0]!.text).toBe("Hi");
-    expect(doc.toString()).toContain('<w:br w:type="page">');
+    const para = doc.getParagraphs()[0]!;
+    expect(para.text).toBe("Hi");
+    expect(para.pageBreakOffset).toBe(2);
+    expect(doc.toString().replace(/>\s+</g, "><")).toMatch(/<w:t>Hi<\/w:t><w:br w:type="page"><\/w:br><\/w:r>/);
+  });
+
+  it("untracked: a leading page break in the matched run stays before the replacement", async () => {
+    const doc = await Docxtor.load(
+      await createBodyDocx(`<w:p><w:r><w:rPr><w:b/></w:rPr><w:br w:type="page"/><w:t>Hello</w:t><w:br/><w:t>World</w:t></w:r></w:p>`),
+    );
+    doc.applyPatches([{ type: "replace_text", target: "p0", find: "Hello\nWorld", replace: "Hi" }]);
+    const para = doc.getParagraphs()[0]!;
+    expect(para.text).toBe("Hi");
+    expect(para.pageBreakOffset).toBe(0);
+    expect(doc.toString().replace(/>\s+</g, "><")).toMatch(/<w:r><w:rPr><w:b><\/w:b><\/w:rPr><w:br w:type="page"><\/w:br><w:t>Hi<\/w:t><\/w:r>/);
   });
 
   it("page and column breaks still contribute no text", async () => {

@@ -878,25 +878,36 @@ function runHasMixedContent(runNode: FXPNode): boolean {
 /**
  * Replace a run's text content with text containing line breaks.
  *
- * Splits text on \n and interleaves w:t and w:br elements.
- * Preserves the run's w:rPr (and any other non-text children such as
- * page breaks or tabs, which keep their position relative to the start).
+ * Splits text on \n and interleaves w:t and w:br elements. Preserves the
+ * run's w:rPr and any other non-text children (page/column breaks, tabs,
+ * rendering hints): those that came before the run's text stay before the
+ * new text, those that came after it stay after, so a trailing page break
+ * still follows the replacement.
  */
 function setRunTextWithBreaks(runNode: FXPNode, text: string): void {
   const children = getChildren(runNode);
 
-  // Keep w:rPr (formatting) and non-text children such as page breaks;
-  // drop w:t and soft breaks, which the new text replaces
-  const kept = children.filter((c) => {
-    if ("w:t" in c) return false;
+  const isTextContent = (c: FXPNode): boolean => {
+    if ("w:t" in c) return true;
     if ("w:br" in c) {
       const brType = getAttr(c, "w:type");
-      return brType !== undefined && brType !== "textWrapping";
+      return !brType || brType === "textWrapping";
     }
-    return true;
-  });
+    return false;
+  };
+
+  const rPr: FXPNode[] = [];
+  const leading: FXPNode[] = [];
+  const trailing: FXPNode[] = [];
+  let seenText = false;
+  for (const c of children) {
+    if ("w:rPr" in c) rPr.push(c);
+    else if (isTextContent(c)) seenText = true;
+    else (seenText ? trailing : leading).push(c);
+  }
+
   children.length = 0;
-  children.push(...kept);
+  children.push(...rPr, ...leading);
 
   const segments = text.split("\n");
   for (let i = 0; i < segments.length; i++) {
@@ -916,4 +927,6 @@ function setRunTextWithBreaks(runNode: FXPNode, text: string): void {
       children.push({ "w:br": [] as FXPNode[] });
     }
   }
+
+  children.push(...trailing);
 }
