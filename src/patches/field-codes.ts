@@ -95,6 +95,22 @@ export function hasFieldPlaceholders(text: string): boolean {
 }
 
 /**
+ * Pick a character that does not occur in `text` to stand in for a field
+ * while inline markers are parsed around it. U+FFFC (object replacement
+ * character) is the first choice; if the text happens to contain it, a
+ * private-use character that the text does not contain is used instead, so
+ * literal text is never mistaken for a field.
+ */
+function pickFieldPlaceholder(text: string): string {
+  if (!text.includes("\uFFFC")) return "\uFFFC";
+  for (let cp = 0xe000; cp <= 0xf8ff; cp++) {
+    const ch = String.fromCharCode(cp);
+    if (!text.includes(ch)) return ch;
+  }
+  throw new Error("Cannot find a placeholder character for field codes");
+}
+
+/**
  * Build FXP run nodes for a text string that may contain field placeholders
  * and/or inline markdown formatting.
  *
@@ -104,138 +120,82 @@ export function hasFieldPlaceholders(text: string): boolean {
  *
  * Algorithm:
  * 1. Parse field placeholders to get text/field segments.
- * 2. Concatenate just the text parts and run the GFM parser on that combined
- *    string to get a flat list of FormattedSegments with correct formatting.
- * 3. Walk the original segments; for text segments consume characters from the
- *    formatted list (which already has markers stripped and flags set). For
- *    field segments, snapshot the currently-active formatting and apply it to
- *    the field code runs.
+ * 2. Replace every field with a placeholder character (one the text does not
+ *    contain) and run the GFM parser on the whole string, so markers open and
+ *    close across fields and the placeholder (a non-word character) keeps
+ *    `_{{PAGE}}_` a valid italic.
+ * 3. Walk the formatted segments: text becomes runs with that formatting,
+ *    each placeholder becomes the field-code run sequence carrying the
+ *    formatting active at that point.
  *
  * @param text - Text possibly containing {{FIELD}} placeholders and/or formatting markers
  * @param rPrNode - Optional run properties to clone onto each run
+ * @param markers - Parse inline formatting markers and escapes (default true);
+ *   with `false` the text is written verbatim
  * @returns Array of w:r FXP nodes
  */
-export function buildFieldRuns(text: string, rPrNode?: FXPNode): FXPNode[] {
+export function buildFieldRuns(text: string, rPrNode?: FXPNode, markers: boolean = true): FXPNode[] {
   const segments = parseFieldPlaceholders(text);
 
   // Fast path: no field placeholders — just parse formatting directly
   if (segments.length === 1 && segments[0]!.kind === "text") {
-    const formatted = parseFormattedText(segments[0]!.text);
-    const hasFormatting = formatted.some(
-      (s) => s.bold || s.italic || s.strikethrough || s.underline,
-    );
-    if (hasFormatting) {
-      return createFormattedRuns(formatted, rPrNode);
-    }
-    // Still strip markers (though parseFormattedText already strips them
-    // for well-formed input, this handles edge cases)
-    const plainText = formatted.map((s) => s.text).join("");
-    return plainText.length > 0 ? [createRun(plainText, rPrNode)] : [];
+    return emitTextRuns(parseFormattedText(segments[0]!.text, markers), rPrNode);
   }
 
-  // Concatenate all text segments (preserving order) and parse formatting
-  // on the combined string so state carries across field boundaries.
-  const combinedText = segments
-    .filter((s): s is { kind: "text"; text: string } => s.kind === "text")
-    .map((s) => s.text)
+  const fieldCodes = segments
+    .filter((s): s is { kind: "field"; fieldCode: string } => s.kind === "field")
+    .map((s) => s.fieldCode);
+  const placeholder = pickFieldPlaceholder(text);
+  const combined = segments
+    .map((s) => (s.kind === "text" ? s.text : placeholder))
     .join("");
-
-  const formattedSegs = parseFormattedText(combinedText);
-
-  // Build a flat character-level formatting map from the parsed segments.
-  // We'll consume characters from this as we walk through the original segments.
-  interface CharFmt {
-    bold: boolean;
-    italic: boolean;
-    strikethrough: boolean;
-    underline: boolean;
-  }
-  const charFmts: CharFmt[] = [];
-  for (const seg of formattedSegs) {
-    const fmt: CharFmt = {
-      bold: !!seg.bold,
-      italic: !!seg.italic,
-      strikethrough: !!seg.strikethrough,
-      underline: !!seg.underline,
-    };
-    for (let i = 0; i < seg.text.length; i++) {
-      charFmts.push(fmt);
-    }
-  }
+  const formatted = parseFormattedText(combined, markers);
 
   const runs: FXPNode[] = [];
-  let charIdx = 0; // position in charFmts
-
-  // Track the "last seen" formatting for field segments
-  let activeFmt: CharFmt = {
-    bold: false,
-    italic: false,
-    strikethrough: false,
-    underline: false,
+  let pending: FormattedSegment[] = [];
+  let fieldIdx = 0;
+  const flushPending = (): void => {
+    if (pending.length > 0) {
+      runs.push(...emitTextRuns(pending, rPrNode));
+      pending = [];
+    }
   };
 
-  for (const segment of segments) {
-    if (segment.kind === "text") {
-      // Consume len(stripped text) characters from charFmts.
-      // The stripped text length == number of chars parseFormattedText produced
-      // for this segment's input. We need to figure out how many chars from
-      // charFmts belong to this text segment.
-      const segFormatted = parseFormattedText(segment.text);
-      const segPlainLen = segFormatted.reduce((n, s) => n + s.text.length, 0);
-
-      if (segPlainLen > 0) {
-        // Re-group the character formatting back into contiguous runs
-        const subFmts = charFmts.slice(charIdx, charIdx + segPlainLen);
-        const segPlainText = segFormatted.map((s) => s.text).join("");
-
-        // Build FormattedSegment[] from chars
-        const grouped: FormattedSegment[] = [];
-        let runStart = 0;
-        for (let i = 1; i <= subFmts.length; i++) {
-          if (
-            i === subFmts.length ||
-            subFmts[i]!.bold !== subFmts[runStart]!.bold ||
-            subFmts[i]!.italic !== subFmts[runStart]!.italic ||
-            subFmts[i]!.strikethrough !== subFmts[runStart]!.strikethrough ||
-            subFmts[i]!.underline !== subFmts[runStart]!.underline
-          ) {
-            const fmt = subFmts[runStart]!;
-            const seg: FormattedSegment = {
-              text: segPlainText.slice(runStart, i),
-            };
-            if (fmt.bold) seg.bold = true;
-            if (fmt.italic) seg.italic = true;
-            if (fmt.strikethrough) seg.strikethrough = true;
-            if (fmt.underline) seg.underline = true;
-            grouped.push(seg);
-            runStart = i;
-          }
-        }
-
-        const hasFormatting = grouped.some(
-          (s) => s.bold || s.italic || s.strikethrough || s.underline,
-        );
-        if (hasFormatting) {
-          runs.push(...createFormattedRuns(grouped, rPrNode));
-        } else {
-          runs.push(createRun(segPlainText, rPrNode));
-        }
-
-        // Update activeFmt to the formatting at the end of this text segment
-        if (subFmts.length > 0) {
-          activeFmt = subFmts[subFmts.length - 1]!;
-        }
+  for (const seg of formatted) {
+    const parts = seg.text.split(placeholder);
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i]!;
+      if (part.length > 0) pending.push({ ...seg, text: part });
+      if (i < parts.length - 1) {
+        flushPending();
+        const fieldRPr = buildFormattedRPr(rPrNode, {
+          bold: !!seg.bold,
+          italic: !!seg.italic,
+          strikethrough: !!seg.strikethrough,
+          underline: !!seg.underline,
+        });
+        runs.push(...buildFieldCodeRuns(fieldCodes[fieldIdx++]!, fieldRPr));
       }
-
-      charIdx += segPlainLen;
-    } else {
-      // Field code: apply active formatting to the field runs
-      const fieldRPr = buildFormattedRPr(rPrNode, activeFmt);
-      runs.push(...buildFieldCodeRuns(segment.fieldCode, fieldRPr));
     }
   }
+  flushPending();
 
   return runs;
+}
+
+/**
+ * Turn formatted segments into runs: one formatted run per segment when any
+ * segment carries formatting, otherwise a single plain run.
+ */
+function emitTextRuns(segments: FormattedSegment[], rPrNode?: FXPNode): FXPNode[] {
+  const hasFormatting = segments.some(
+    (s) => s.bold || s.italic || s.strikethrough || s.underline,
+  );
+  if (hasFormatting) {
+    return createFormattedRuns(segments, rPrNode);
+  }
+  const plainText = segments.map((s) => s.text).join("");
+  return plainText.length > 0 ? [createRun(plainText, rPrNode)] : [];
 }
 
 /**

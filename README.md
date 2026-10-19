@@ -246,8 +246,11 @@ const results = doc.applyPatches(patches, {
   revisionAuthor: "AI Editor",           // author name shown in Word's review pane (default: "docxtor")
   revisionDate: "2026-10-13T00:00:00Z",  // ISO 8601 date on every revision mark (default: now)
   atomic: true,                          // all-or-nothing batch (default: false)
+  inlineMarkers: false,                  // write patch text verbatim, no GFM markers (default: true)
 });
 ```
+
+**Verbatim text.** By default the text fields of patches (`find`, `replace`, `anchor`, `text`, list items, header/footer paragraphs, comment text) are parsed for inline formatting markers (see [`replace_text`](#replace_text)). `inlineMarkers: false` turns that off for the whole batch, and a patch's own `markers: true | false` overrides the batch setting, so lawyer-approved language can be written exactly as given.
 
 `revisionDate` is stamped on every `w:ins` / `w:del` / `w:*Change` element the batch creates. Pin it when you need byte-stable output (e.g., fixed-point tests that compare `document.xml`).
 
@@ -367,7 +370,21 @@ Replace a substring in a paragraph. Formatting of the original text is preserved
 }
 ```
 
-This also works for `insert_text` (`anchor` and `text` fields) and `append_text` (`text` field).
+This also works for `insert_text` (`anchor` and `text`), `delete_text` (`find`), `insert_paragraph`, `append_text`, `replace_cell_text`, `add_list` / `add_list_item`, `add_header` / `add_footer` and `add_comment`.
+
+Rules that keep ordinary legal text intact:
+
+- A `_` is an italic marker only when it stands alone at a word boundary. Runs of underscores (`Name: ______`, `a(n) __________`) and intra-word underscores (`snake_case`) are literal.
+- A single `*` is literal (`5 * 3`); only `**` toggles bold.
+- Backslash escapes write the character itself: `\_`, `\*`, `\~`, `\<` and `\\` give `_`, `*`, `~`, `<` and `\`. Any other backslash is kept.
+- To skip marker parsing altogether, set `markers: false` on the patch or `inlineMarkers: false` in the options; the text (and `find`) is then used verbatim:
+
+```ts
+{ type: "replace_text", target: "p1", find: "[AMOUNT]", replace: "**TBD** _____", markers: false }
+// paragraph text now contains the literal "**TBD** _____"
+```
+
+**Line breaks.** A soft line break (`w:br`) is one `\n` in paragraph text, both in projections and in the text that `find` / `occurrence` are resolved against, so offsets computed from a projection always line up. `find` may span a break (`"By:\nName:"`), and `\n` in `replace` / `text` becomes a `w:br` (`insert_paragraph` and `append_text` are the exception: there `\n` starts a new paragraph).
 
 ### `insert_text`
 
@@ -500,7 +517,7 @@ Insert one or more new paragraphs immediately before or after an existing paragr
 }
 ```
 
-- `text` supports inline formatting markers and `{{FIELD}}` placeholders; `\n` creates multiple paragraphs. Markdown tables and lists are **not** supported here (the validator rejects them) — use `add_table` / `add_list` with `afterId`.
+- `text` supports inline formatting markers (`markers: false` writes it verbatim) and `{{FIELD}}` placeholders; `\n` creates multiple paragraphs, inserted contiguously in the given order. Markdown tables and lists are **not** supported here (the validator rejects them) — use `add_table` / `add_list` with `afterId`.
 - `inheritStyle` copies the target's `w:pPr` (paragraph style, numbering `numId`/`ilvl`, indentation, spacing — not section breaks or revision state) and gives the new text the formatting of the target's last run, which is what Word does when you press Enter at the end of a paragraph.
 - New paragraphs get the next free positional id in the target's container (e.g. `p13`, `tbl0.r1.c0.p1`), a fresh `paraId` when the part declares `w14`, and are addressable by later patches in the same batch.
 - With `trackRevisions`, the runs are wrapped in `w:ins` **and** the paragraph mark carries `w:pPr/w:rPr/w:ins`, so accepting the change leaves exactly one new paragraph and no stray blank one.
@@ -972,6 +989,7 @@ Colour comparison is case-insensitive on the raw `w:color w:val`, which Word als
 - `acceptAllRevisions` after a tracked batch yields the same text (and, for `replace_text`, `insert_paragraph`, `delete_paragraph` and `replace_cell_text`, the same `document.xml`) as applying the batch untracked — the engine is a fixed point under accept.
 - Sequential patches within the same `applyPatches()` call share a single revision context: IDs auto-increment, and re-normalization between patches correctly handles the `w:ins`/`w:del` wrappers.
 - The normalizer's `collectRuns()` recurses into `w:ins` (treats the content as current text) and skips `w:del` (excludes deleted text from `.text`). This means subsequent patches in the same batch correctly see the post-edit text.
+- Replacing or deleting text that is itself an unaccepted insertion produces no `w:del` — the inserted text is simply removed. If the insertion belongs to another author, their `w:ins` is split around the edit and the replacement sits between the halves in its own `w:ins`, so order and attribution are both kept. If it is the batch author's own insertion, the replacement joins it in place.
 
 ## LLM integration pattern
 
@@ -1097,7 +1115,8 @@ import type { PatchOptions, RevisionMark, RevisionFilterOptions, CoreProperties,
 - Page breaks — surfaced via `includePageBreaks` option with positional `pageBreakOffset` (see [projection options](#docprojectformat-options) for details)
 - XML entity escaping (`&amp;`, `&lt;`, `&gt;`)
 - Newlines in `append_text` (`\n` creates separate `w:p` paragraphs; markdown tables create `w:tbl`)
-- Newlines in run text (`\n` maps to `w:br` elements)
+- Soft line breaks (`w:br` ↔ `\n`, one character each, in projections and patch offsets alike)
+- Verbatim text (`inlineMarkers: false` / per-patch `markers: false`, plus backslash escapes)
 - List/numbering info in projections
 - List operations (`add_list`, `add_list_item`, `remove_list_item`, `convert_to_list`, `remove_list`, `set_list_properties`)
 - Markdown list conversion in `append_text` (bullet `- ` and ordered `1. ` syntax with nesting → real OOXML lists)

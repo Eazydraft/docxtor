@@ -52,6 +52,7 @@ function buildListParagraphNode(
   numId: string,
   level: number,
   revCtx?: RevisionContext,
+  markers: boolean = true,
 ): FXPNode {
   const numPr = createElement("w:numPr", [
     createElement("w:ilvl", [], { "w:val": String(level) }),
@@ -59,7 +60,7 @@ function buildListParagraphNode(
   ]);
   const pPr = createElement("w:pPr", [numPr]);
 
-  const runs = buildFieldRuns(text);
+  const runs = buildFieldRuns(text, undefined, markers);
   let children: FXPNode[];
   if (revCtx) {
     const insElement = createInsElement(revCtx, runs);
@@ -79,6 +80,7 @@ export function executeAddList(
   doc: NormalizedDocument,
   patch: AddListPatch,
   revCtx?: RevisionContext,
+  markers: boolean = true,
 ): void {
   const numId = patch.numId ?? createNumberingDefinition(doc, patch.listType);
   const defaultLevel = patch.level ?? 0;
@@ -87,7 +89,7 @@ export function executeAddList(
   for (const item of patch.items) {
     const text = typeof item === "string" ? item : item.text;
     const level = typeof item === "string" ? defaultLevel : (item.level ?? defaultLevel);
-    nodes.push(buildListParagraphNode(text, numId, level, revCtx));
+    nodes.push(buildListParagraphNode(text, numId, level, revCtx, markers));
   }
 
   if (patch.container) {
@@ -154,12 +156,13 @@ export function executeAddListItem(
   doc: NormalizedDocument,
   patch: AddListItemPatch,
   revCtx?: RevisionContext,
+  markers: boolean = true,
 ): void {
   const targetPara = findParagraphById(patch.target, doc)!;
   const numId = targetPara.listInfo!.numId;
   const level = patch.level ?? targetPara.listInfo!.level;
 
-  const newNode = buildListParagraphNode(patch.text, numId, level, revCtx);
+  const newNode = buildListParagraphNode(patch.text, numId, level, revCtx, markers);
   stampNewParagraphs(doc, [newNode], findPartRootForId(doc, targetPara.id));
 
   // Find the parent FXP container

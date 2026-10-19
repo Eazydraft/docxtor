@@ -176,6 +176,7 @@ export function executeReplaceCellText(
   paragraph: NormalizedParagraph,
   patch: ReplaceCellTextPatch,
   revCtx?: RevisionContext,
+  markers: boolean = true,
 ): void {
   executeReplaceText(paragraph, {
     type: "replace_text",
@@ -183,7 +184,7 @@ export function executeReplaceCellText(
     find: patch.find,
     replace: patch.replace,
     occurrence: patch.occurrence,
-  }, revCtx);
+  }, revCtx, markers);
 }
 
 // =============================================================================

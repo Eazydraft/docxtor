@@ -165,7 +165,8 @@ function findParagraphMarkMarker(pNode: FXPNode, kind: "ins" | "del"): FXPNode |
 function buildParagraphNodes(
   target: NormalizedParagraph,
   patch: InsertParagraphPatch,
-  revCtx?: RevisionContext,
+  revCtx: RevisionContext | undefined,
+  markers: boolean,
 ): FXPNode[] {
   const inherit = patch.inheritStyle ?? true;
   const pPrTemplate = inherit ? buildInheritedPPr(target.xmlRef) : undefined;
@@ -178,7 +179,7 @@ function buildParagraphNodes(
     const children: FXPNode[] = [];
     if (pPrTemplate) children.push(cloneNode(pPrTemplate));
 
-    const runs = buildFieldRuns(line, runRPr);
+    const runs = buildFieldRuns(line, runRPr, markers);
     if (revCtx) {
       if (runs.length > 0) children.push(createInsElement(revCtx, runs));
     } else {
@@ -208,6 +209,7 @@ export function executeInsertParagraph(
   target: NormalizedParagraph,
   patch: InsertParagraphPatch,
   revCtx?: RevisionContext,
+  markers: boolean = true,
 ): NormalizedParagraph[] {
   const parentChildren = findParentChildren(doc, target.xmlRef);
   if (!parentChildren) {
@@ -218,7 +220,7 @@ export function executeInsertParagraph(
     throw new Error(`Paragraph "${target.id}" not found in its parent`);
   }
 
-  const nodes = buildParagraphNodes(target, patch, revCtx);
+  const nodes = buildParagraphNodes(target, patch, revCtx, markers);
   stampNewParagraphs(doc, nodes, findPartRootForId(doc, target.id));
 
   // XML insertion

@@ -20,12 +20,9 @@ import type { FXPNode } from "../types.js";
 import type { ResolvedRunRange } from "../mapping/text-to-runs.js";
 import {
   findChild,
-  cloneNode,
+  createRun,
   getChildren,
   getTagName,
-  setAttr,
-  needsSpacePreserve,
-  escapeXmlText,
 } from "../xml/helpers.js";
 
 /**
@@ -217,28 +214,11 @@ export function splitRunsForMatch(
 
 /**
  * Create a new w:r run node with the given text and optional formatting.
+ * `\n` in the text becomes a `w:br`, mirroring how run text is read.
  */
 function createRunWithText(
   text: string,
   rPrNode: FXPNode | undefined,
 ): FXPNode {
-  const children: FXPNode[] = [];
-
-  // Clone formatting if present
-  if (rPrNode) {
-    children.push(cloneNode(rPrNode));
-  }
-
-  // Create w:t element with text
-  const textNode = { "#text": escapeXmlText(text) } as unknown as FXPNode;
-  const wtNode: FXPNode = { "w:t": [textNode] };
-
-  // Add xml:space="preserve" if text has leading/trailing whitespace
-  if (needsSpacePreserve(text)) {
-    setAttr(wtNode, "xml:space", "preserve");
-  }
-
-  children.push(wtNode);
-
-  return { "w:r": children };
+  return createRun(text, rPrNode);
 }

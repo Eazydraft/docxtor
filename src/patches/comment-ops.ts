@@ -41,6 +41,8 @@ export interface CommentOptions {
   defaultAuthor: string;
   /** ISO 8601 date for the comment. */
   date: string;
+  /** Parse inline formatting markers in `find` and `text`. Default: true. */
+  markers?: boolean;
 }
 
 /**
@@ -96,6 +98,7 @@ function buildCommentElement(
   date: string,
   text: string,
   doc: NormalizedDocument,
+  markers: boolean,
 ): FXPNode {
   const hasCommentTextStyle = doc.styles.some((s) => s.id === "CommentText");
   const hasCommentRefStyle = doc.styles.some((s) => s.id === "CommentReference");
@@ -113,7 +116,7 @@ function buildCommentElement(
       refRun.push(createElement("w:annotationRef", []));
       children.push({ "w:r": refRun });
     }
-    children.push(...buildFieldRuns(line));
+    children.push(...buildFieldRuns(line, undefined, markers));
     return { "w:p": children } as FXPNode;
   });
 
@@ -152,7 +155,7 @@ export function executeAddComment(
   let matchedRuns: FXPNode[] | undefined;
   if (patch.find !== undefined && patch.find.length > 0) {
     const occurrence = patch.occurrence ?? 1;
-    const plainFind = stripFormattingMarkers(patch.find);
+    const plainFind = stripFormattingMarkers(patch.find, options.markers ?? true);
     const matchStart = findOccurrence(paragraph.text, plainFind, occurrence);
     if (matchStart === -1) {
       throw new Error(
@@ -196,6 +199,6 @@ export function executeAddComment(
   }
 
   getChildren(commentsRoot).push(
-    buildCommentElement(id, author, initials, options.date, patch.text, doc),
+    buildCommentElement(id, author, initials, options.date, patch.text, doc, options.markers ?? true),
   );
 }

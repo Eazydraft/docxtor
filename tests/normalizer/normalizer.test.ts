@@ -130,10 +130,27 @@ describe("normalizeParagraph", () => {
     expect(result.listInfo!.level).toBe(1);
   });
 
-  it("should skip runs with no text (e.g., break-only runs)", () => {
+  it("maps a break-only run to one \\n (so projection text and patch offsets agree)", () => {
     const xml = `<w:p>
       <w:r><w:t>Before</w:t></w:r>
       <w:r><w:br/></w:r>
+      <w:r><w:t>After</w:t></w:r>
+    </w:p>`;
+    const parsed = parseXml(xml);
+    const result = normalizeParagraph(parsed[0]!, "p0");
+
+    expect(result.text).toBe("Before\nAfter");
+    expect(result.runs.length).toBe(3);
+    expect(result.runs[1]!.text).toBe("\n");
+    expect(result.runs[1]!.textXmlRef).toBeUndefined();
+    expect(result.runs[2]!.startOffset).toBe(7);
+  });
+
+  it("skips runs with no text at all (empty w:t, page-break-only)", () => {
+    const xml = `<w:p>
+      <w:r><w:t>Before</w:t></w:r>
+      <w:r><w:t></w:t></w:r>
+      <w:r><w:br w:type="page"/></w:r>
       <w:r><w:t>After</w:t></w:r>
     </w:p>`;
     const parsed = parseXml(xml);
