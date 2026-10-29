@@ -1,5 +1,5 @@
 /**
- * §3.7 add_comment.
+ * add_comment.
  */
 
 import { describe, it, expect } from "vitest";

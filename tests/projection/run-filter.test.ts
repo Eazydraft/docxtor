@@ -1,5 +1,5 @@
 /**
- * §3.7 Colour filter on projection (reading red-text answers).
+ * Colour filter on projection (reading red-text answers).
  */
 
 import { describe, it, expect } from "vitest";

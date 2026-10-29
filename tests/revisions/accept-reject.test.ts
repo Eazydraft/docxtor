@@ -1,5 +1,5 @@
 /**
- * §3.3 Accept and reject all revisions.
+ * Accept and reject all revisions.
  */
 
 import { describe, it, expect } from "vitest";

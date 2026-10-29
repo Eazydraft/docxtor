@@ -1,5 +1,5 @@
 /**
- * §3.2 insert_paragraph and §3.4 delete_paragraph.
+ * insert_paragraph and delete_paragraph.
  */
 
 import { describe, it, expect } from "vitest";
