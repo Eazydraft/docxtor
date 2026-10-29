@@ -295,8 +295,8 @@ import {
   getCoreProperties,
   setCoreProperties,
   scrubMetadata,
-} from "@eazydraft/docxtor";
+} from "@lucio-ai/docxtor";
 
 // Types
-import type { PatchOptions, RevisionMark, RevisionFilterOptions, CoreProperties, RunFilter, NormalizedPageBreak, JsonProjectionPageBreak, JsonProjectionRunFormatting, HeaderFooterVariant, HeaderFooterRef, InsertParagraphPatch, DeleteParagraphPatch, AddCommentPatch, AddListPatch, AddListItemPatch, RemoveListItemPatch, ConvertToListPatch, RemoveListPatch, SetListPropertiesPatch } from "@eazydraft/docxtor";
+import type { PatchOptions, RevisionMark, RevisionFilterOptions, CoreProperties, RunFilter, NormalizedPageBreak, JsonProjectionPageBreak, JsonProjectionRunFormatting, HeaderFooterVariant, HeaderFooterRef, InsertParagraphPatch, DeleteParagraphPatch, AddCommentPatch, AddListPatch, AddListItemPatch, RemoveListItemPatch, ConvertToListPatch, RemoveListPatch, SetListPropertiesPatch } from "@lucio-ai/docxtor";
 ```

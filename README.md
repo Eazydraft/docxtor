@@ -1,6 +1,6 @@
 <img src="logo.png" alt="Docxtor logo" />
 
-[![npm](https://img.shields.io/npm/v/@eazydraft/docxtor)](https://www.npmjs.com/package/@eazydraft/docxtor)
+[![npm](https://img.shields.io/npm/v/@lucio-ai/docxtor)](https://www.npmjs.com/package/@lucio-ai/docxtor)
 [![CI](https://github.com/Eazydraft/docxtor/actions/workflows/ci.yml/badge.svg)](https://github.com/Eazydraft/docxtor/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -21,9 +21,9 @@ Built for workflows where a model proposes edits and a human reviews them in Wor
 ## Install
 
 ```bash
-npm install @eazydraft/docxtor
+npm install @lucio-ai/docxtor
 # or
-pnpm add @eazydraft/docxtor
+pnpm add @lucio-ai/docxtor
 ```
 
 Requires Node.js 20.19 or newer.
@@ -31,7 +31,7 @@ Requires Node.js 20.19 or newer.
 ## Quick start
 
 ```ts
-import { Docxtor } from "@eazydraft/docxtor";
+import { Docxtor } from "@lucio-ai/docxtor";
 
 const doc = await Docxtor.load("contract.docx");
 

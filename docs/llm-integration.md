@@ -3,7 +3,7 @@
 docxtor is LLM-agnostic. The typical integration:
 
 ```ts
-import { Docxtor } from "@eazydraft/docxtor";
+import { Docxtor } from "@lucio-ai/docxtor";
 
 const doc = await Docxtor.load("contract.docx");
 const projection = doc.project("markdown", { includeFormatting: true });

@@ -1,5 +1,5 @@
 {
-  "name": "@eazydraft/docxtor",
+  "name": "@lucio-ai/docxtor",
   "description": "Surgical, LLM-friendly DOCX editing through normalized AST with direct XML mutation",
   "version": "0.3.2",
   "author": {
