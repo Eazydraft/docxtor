@@ -9,12 +9,15 @@
   "type": "module",
   "private": false,
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com",
-    "access": "restricted"
+    "access": "public"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Eazydraft/docxtor.git"
+  },
+  "homepage": "https://github.com/Eazydraft/docxtor#readme",
+  "bugs": {
+    "url": "https://github.com/Eazydraft/docxtor/issues"
   },
   "keywords": [
     "docx",
@@ -25,7 +28,7 @@
     "patch",
     "ooxml"
   ],
-  "license": "UNLICENSED",
+  "license": "MIT",
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
@@ -45,13 +48,16 @@
     "dist",
     "logo.png"
   ],
+  "sideEffects": false,
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "pnpm build"
+    "prepublishOnly": "pnpm build",
+    "lint": "publint && attw --pack .",
+    "check": "pnpm typecheck && pnpm test && pnpm build && pnpm lint"
   },
   "engines": {
     "node": ">=20.19.0"
@@ -61,9 +67,8 @@
     "jszip": "3.10.1"
   },
   "devDependencies": {
-    "@arethetypeswrong/core": "^0.18.2",
+    "@arethetypeswrong/cli": "^0.18.5",
     "@types/node": "^25.5.2",
-    "@typescript/native-preview": "7.0.0-dev.20260328.1",
     "openai": "^6.33.0",
     "publint": "^0.3.18",
     "tsdown": "^0.21.7",

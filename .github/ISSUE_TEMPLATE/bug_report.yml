@@ -1,0 +1,43 @@
+name: Bug report
+description: Something produces the wrong output, throws, or corrupts a document.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The fastest path to a fix is a reproduction built in code, like the fixtures in `tests/fixtures/create-docx.ts`. Please do not attach real documents with confidential content.
+  - type: input
+    id: version
+    attributes:
+      label: docxtor version
+      placeholder: "0.3.2"
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version
+      placeholder: "22.11.0"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: The patches or API calls you ran, and the smallest document (or fixture code) that shows the problem.
+      render: ts
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: Include the error message, the relevant `document.xml` fragment, or what Word shows.
+    validations:
+      required: true
