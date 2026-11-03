@@ -10,9 +10,9 @@ Built for workflows where a model proposes edits and a human reviews them in Wor
 
 ## Features
 
-- **Stable ids for every element.** Paragraphs, table cells, headers and footers get positional ids (`p12`, `tbl0.r1.c0.p0`) plus Word's native `w14:paraId`, so patches target exactly one place.
+- **Stable ids for every element.** Paragraphs, table cells, headers and footers get positional ids (`p12`, `tbl0.r1.c0.p0`), and Word's native `w14:paraId` is exposed wherever the file carries one (or stamped on load with `assignParaIds`), so patches target exactly one place.
 - **Patches, not rewrites.** Replace, insert and delete text, insert and delete paragraphs, add comments, tables, rows, lists, headers and footers, apply formatting and styles. Twenty-three patch types in all.
-- **Tracked changes.** Turn on `trackRevisions` and every patch emits `w:ins`, `w:del`, `w:rPrChange` or `w:pPrChange` markup. Accept or reject all revisions, optionally per author.
+- **Tracked changes.** Turn on `trackRevisions` and every content edit emits `w:ins`, `w:del`, `w:rPrChange` or `w:pPrChange` markup; comments and header or footer removal are the exceptions, since Word does not track them. Accept or reject all revisions, optionally per author.
 - **Projections for models.** Markdown or JSON views with ids, inline formatting markers, revision marks, page breaks and a filter for runs by colour.
 - **Inline formatting in patch text.** `**bold**`, `_italic_`, `~~strike~~`, `<u>underline</u>`, `{{PAGE}}` style fields, markdown tables and lists, or verbatim text when you need it.
 - **Atomic batches and validation.** Validate a batch before applying it, or run it all-or-nothing.

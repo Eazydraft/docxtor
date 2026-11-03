@@ -3,7 +3,7 @@
  *
  * @example
  * ```ts
- * import { Docxtor } from "docxtor";
+ * import { Docxtor } from "@lucio-ai/docxtor";
  * import { readFile, writeFile } from "fs/promises";
  *
  * // Load a document

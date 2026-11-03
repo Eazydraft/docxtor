@@ -48,13 +48,19 @@ ${projection}`,
 
 const patches = JSON.parse(response);
 
-// Validate before applying
+// Validate before applying. Stop here if anything is invalid: applyPatches
+// validates each patch just before applying it, so an invalid patch in the
+// middle of a batch would leave the earlier ones applied.
 const validations = doc.validatePatches(patches);
 const invalid = validations.filter((v) => !v.valid);
 if (invalid.length > 0) {
-  console.error("Invalid patches:", invalid);
+  throw new Error(`Invalid patches: ${JSON.stringify(invalid)}`);
 }
 
-const results = doc.applyPatches(patches);
+// Or let the engine enforce all-or-nothing with { atomic: true }.
+const results = doc.applyPatches(patches, { atomic: true });
+if (!results.every((r) => r.success)) {
+  throw new Error("Batch failed; the document is unchanged");
+}
 await doc.toFile("contract-edited.docx");
 ```

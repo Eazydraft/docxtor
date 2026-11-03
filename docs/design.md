@@ -62,9 +62,9 @@ Editing inside an unaccepted insertion follows Word's behaviour: the batch autho
 
 With `atomic: true` the batch runs on a deep clone. Only if every patch succeeds does the clone replace the document. Otherwise `toBuffer()` produces the same file as before.
 
-### Validation runs before mutation
+### Validation runs before mutation, one patch at a time
 
-`validatePatches` and the first phase of `applyPatches` check targets, occurrences, style ids, `numId` references and option combinations without touching the document. A patch that fails validation reports an error and leaves the document as it was.
+`validatePatches` checks targets, occurrences, style ids, `numId` references and option combinations for a whole batch without touching the document. `applyPatches` runs the same check on each patch immediately before applying it, so a patch that fails validation never mutates anything and reports an error in its result. The check is per patch, not per batch: in the default non-atomic mode, patches before a failing one have already been applied and stay applied. When the whole batch must stand or fall together, pass `atomic: true` (above), or call `validatePatches` first and apply nothing if any patch is invalid.
 
 ## Acceptance criteria
 

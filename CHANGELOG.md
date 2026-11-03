@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- A `replace_text` or `delete_text` match that spans another author's unaccepted insertion and plain text no longer duplicates the plain part: each matched run is detached in its own parent, so the plain runs are marked deleted and the inserted runs removed.
+- Page and column breaks, `w:lastRenderedPageBreak`, tabs and other zero-width run children survive every text edit: partial-run splits, plain and formatted replacements, insertions on either side of them, and tracked insertions that split a run. Previously a replacement next to a page break dropped the break, and a tab between two text nodes was lost.
+- Documentation: `applyPatches` validates each patch just before applying it rather than in a batch-wide first phase; the LLM integration example now stops on invalid patches; the README's feature list no longer claims a `w14:paraId` on every paragraph or revision markup for comments and header/footer removal.
+
 ## [0.4.0] - 2026-11-03
 
 First public release, published to npm as `@lucio-ai/docxtor`.
