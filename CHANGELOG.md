@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-03
+
 ### Fixed
 
 - A `replace_text` or `delete_text` match that spans another author's unaccepted insertion and plain text no longer duplicates the plain part: each matched run is detached in its own parent, so the plain runs are marked deleted and the inserted runs removed.
@@ -104,7 +106,8 @@ First public release, published to npm as `@lucio-ai/docxtor`.
 
 - Initial release: ZIP and XML round trip, normalized AST with `xmlRef` pointers, markdown and JSON projections, text patches (`replace_text`, `insert_text`, `delete_text`), table row patches, `apply_formatting`, `apply_style`, hyperlinks, nested tables, and tracked changes (`w:ins`, `w:del`, `w:rPrChange`, `w:pPrChange`).
 
-[Unreleased]: https://github.com/Eazydraft/docxtor/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Eazydraft/docxtor/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/Eazydraft/docxtor/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Eazydraft/docxtor/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/Eazydraft/docxtor/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Eazydraft/docxtor/compare/v0.3.0...v0.3.1
