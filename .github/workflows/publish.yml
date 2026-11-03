@@ -9,9 +9,14 @@ jobs:
     name: Publish package
     runs-on: ubuntu-latest
 
+    # Trusted publishing: npmjs.com is configured to accept publishes from this
+    # repository's publish.yml via GitHub's OIDC token, so no npm token is stored
+    # as a secret. Provenance is attested automatically. One-time setup on npm:
+    # package settings -> Publishing access -> Trusted publisher -> GitHub Actions,
+    # with this repository and the workflow filename "publish.yml".
     permissions:
       contents: read
-      id-token: write # npm provenance attestation
+      id-token: write # OIDC token for trusted publishing and provenance
 
     steps:
       - uses: actions/checkout@v4
@@ -39,7 +44,8 @@ jobs:
 
       - run: pnpm check
 
+      # Trusted publishing needs npm 11.5 or newer; Node 22 bundles npm 10.
+      - run: npm install -g npm@latest
+
       - name: Publish
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
