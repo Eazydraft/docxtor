@@ -1,5 +1,5 @@
 /**
- * §3.6 Atomic batch.
+ * Atomic batch.
  */
 
 import { describe, it, expect } from "vitest";

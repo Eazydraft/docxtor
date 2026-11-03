@@ -2,7 +2,7 @@
  * Interactive DOCX editing CLI powered by an LLM.
  *
  * Usage:
- *   npx tsx scripts/chat.ts <input.docx>
+ *   npx tsx examples/chat.ts <input.docx>
  *
  * Requires OPENROUTER_API_KEY environment variable.
  * Optionally set OPENROUTER_MODEL (default: openai/gpt-4o).
@@ -398,7 +398,7 @@ function handleHistory(): void {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.length < 1) {
-    console.error("Usage: npx tsx scripts/chat.ts <input.docx>");
+    console.error("Usage: npx tsx examples/chat.ts <input.docx>");
     process.exit(1);
   }
 

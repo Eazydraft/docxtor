@@ -22,7 +22,13 @@ import type {
   FXPNode,
 } from "../types.js";
 import { findOccurrence, resolveRunRanges } from "../mapping/text-to-runs.js";
-import { splitRun, splitRunsForMatch, findRunParentChildren } from "./run-splitter.js";
+import {
+  splitRun,
+  splitRunsForMatch,
+  splitRunAtOffset,
+  findRunParentChildren,
+} from "./run-splitter.js";
+import { readRunContent, writeRunContent } from "./run-content.js";
 import {
   getChildren,
   setTextContent,
@@ -192,9 +198,15 @@ function executeReplaceTextDirect(
       replaceRunWithFormattedRuns(paragraph.xmlRef, matchedRuns[0]!, segments);
     }
 
-    // Remove extra matched runs
+    // Remove the text of the other matched runs. A run that also holds a
+    // zero-width child (a page break inside the match) keeps that child.
     for (let i = 1; i < matchedRuns.length; i++) {
-      removeRunFromParagraph(paragraph.xmlRef, matchedRuns[i]!);
+      const content = readRunContent(matchedRuns[i]!);
+      if (content.anchored.length > 0) {
+        writeRunContent(matchedRuns[i]!, { ...content, text: "" });
+      } else {
+        removeRunFromParagraph(paragraph.xmlRef, matchedRuns[i]!);
+      }
     }
   }
 }
@@ -232,18 +244,6 @@ function executeReplaceTextRevision(
   // Get formatting from the first matched run for the replacement
   const rPrNode = findChild(matchedRuns[0]!, "w:rPr");
 
-  // Find the parent children array for the first matched run
-  const parentChildren = findRunParentChildren(paragraph.xmlRef, matchedRuns[0]!);
-  if (!parentChildren) {
-    throw new Error("Matched run not found in paragraph");
-  }
-
-  // Check if the matched runs live inside a w:ins (unaccepted insertion).
-  // If so, we must NOT wrap in w:del — just remove the runs from the w:ins
-  // (deleting unaccepted content = removing the insertion, not creating a deletion).
-  const container = findRunContainer(paragraph.xmlRef, matchedRuns[0]!);
-  const insideIns = container != null && getTagName(container) === "w:ins";
-
   // Create the replacement run(s); wrapped in w:ins below
   const segments = parseFormattedText(patch.replace, markers);
   const hasFormatting = segments.some((s) => s.bold || s.italic || s.strikethrough || s.underline);
@@ -255,41 +255,108 @@ function executeReplaceTextRevision(
       ? createFormattedRuns(segments, rPrNode)
       : [createRevisionRun(plainText, rPrNode)];
   }
-  const insElement = newRuns.length > 0 ? createInsElement(revCtx, newRuns) : undefined;
+  // Mark the matched runs deleted (or drop them, where they were an
+  // unaccepted insertion) and put the replacement where the match began.
+  const place = detachMatchedRuns(paragraph.xmlRef, matchedRuns, revCtx);
+  if (newRuns.length === 0) return;
 
-  // Find the position of the first matched run in the parent
-  const firstRunIndex = parentChildren.indexOf(matchedRuns[0]!);
+  if (place.container) {
+    // The match began inside an unaccepted insertion: the replacement must
+    // land exactly where it was, not after the surrounding w:ins.
+    insertIntoInsertion(paragraph.xmlRef, place.container, place.index, newRuns, revCtx);
+  } else {
+    place.parentChildren.splice(place.index, 0, createInsElement(revCtx, newRuns));
+  }
+}
 
-  // Remove all matched runs from the parent
+/**
+ * Where the content that replaces a match should go, after the match has
+ * been detached: a position in a parent's children, or, when the match
+ * began inside an unaccepted insertion that still holds other runs, a
+ * position inside that `w:ins` container.
+ */
+interface DetachPlacement {
+  parentChildren: FXPNode[];
+  index: number;
+  container?: FXPNode;
+}
+
+/**
+ * Detach matched runs for a tracked edit, run by run, in whichever parent
+ * each one lives.
+ *
+ * - A run inside an unaccepted `w:ins` is removed outright: it was never
+ *   part of the accepted document, so there is nothing to mark deleted. A
+ *   container left empty is removed too.
+ * - Any other run is replaced by a `w:del` holding a copy of it; consecutive
+ *   runs in the same parent share one `w:del`.
+ *
+ * A match may span both kinds — text that starts inside another author's
+ * insertion and continues in plain text — which is why the parent of the
+ * first run cannot stand in for the others.
+ */
+function detachMatchedRuns(
+  paragraphNode: FXPNode,
+  matchedRuns: FXPNode[],
+  revCtx: RevisionContext,
+): DetachPlacement {
+  let placement: DetachPlacement | undefined;
+  const groups: { parent: FXPNode[]; index: number; runs: FXPNode[] }[] = [];
+
   for (const run of matchedRuns) {
-    const idx = parentChildren.indexOf(run);
-    if (idx !== -1) {
-      parentChildren.splice(idx, 1);
+    const parent = findRunParentChildren(paragraphNode, run);
+    if (!parent) throw new Error("Matched run not found in paragraph");
+    const container = findRunContainer(paragraphNode, run);
+    const insideIns = container != null && getTagName(container) === "w:ins";
+    const index = parent.indexOf(run);
+    parent.splice(index, 1);
+
+    if (insideIns) {
+      let containerKept = true;
+      let containerParent: FXPNode[] | undefined;
+      let containerIndex = -1;
+      if (parent.length === 0) {
+        containerParent = findRunParentChildren(paragraphNode, container);
+        if (containerParent) {
+          containerIndex = containerParent.indexOf(container);
+          containerParent.splice(containerIndex, 1);
+          containerKept = false;
+        }
+      }
+      if (!placement) {
+        placement = containerKept
+          ? { parentChildren: parent, index, container }
+          : { parentChildren: containerParent!, index: containerIndex };
+      }
+      continue;
+    }
+
+    const last = groups[groups.length - 1];
+    if (last && last.parent === parent && last.index === index) {
+      last.runs.push(run);
+    } else {
+      groups.push({ parent, index, runs: [run] });
     }
   }
 
-  if (insideIns) {
-    // The matched runs were an unaccepted insertion, so there is nothing to
-    // mark deleted — they are simply gone. The replacement must still land
-    // exactly where they were, not after the surrounding w:ins.
-    insertIntoInsertion(paragraph.xmlRef, container!, firstRunIndex, newRuns, revCtx);
-  } else {
-    // Normal case: insert w:del and w:ins at the position of the first matched run
-    // Clone matched runs and convert to deleted runs
-    const deletedRuns: FXPNode[] = [];
-    for (const run of matchedRuns) {
+  // Insert the w:del elements last group first, so earlier indices in the
+  // same parent stay valid.
+  for (let g = groups.length - 1; g >= 0; g--) {
+    const group = groups[g]!;
+    const deletedRuns = group.runs.map((run) => {
       const cloned = cloneNode(run);
       convertRunToDeleted(cloned);
-      deletedRuns.push(cloned);
-    }
-    const delElement = createDelElement(revCtx, deletedRuns);
-
-    if (insElement) {
-      parentChildren.splice(firstRunIndex, 0, delElement, insElement);
-    } else {
-      parentChildren.splice(firstRunIndex, 0, delElement);
-    }
+      return cloned;
+    });
+    group.parent.splice(group.index, 0, createDelElement(revCtx, deletedRuns));
   }
+
+  if (!placement) {
+    // The match began in plain text: the replacement follows its w:del.
+    const first = groups[0]!;
+    placement = { parentChildren: first.parent, index: first.index + 1 };
+  }
+  return placement;
 }
 
 /**
@@ -424,40 +491,28 @@ function executeInsertTextDirect(
       currentText.slice(0, localInsertOffset) +
       plainText +
       currentText.slice(localInsertOffset);
-    setRunText(targetRun.xmlRef, newText);
+    // A zero-width child at the insert point (a page break right after the
+    // anchor) stays next to the anchor: before the new text when inserting
+    // before the anchor, after it when inserting after the anchor.
+    const side = sideOfChildrenAtInsert(patch);
+    setRunText(targetRun.xmlRef, newText, (offset) =>
+      offset < localInsertOffset || (offset === localInsertOffset && side === "before")
+        ? offset
+        : offset + plainText.length,
+    );
   } else {
     // Formatted insertion: split the target run at the insert point and
     // insert formatted runs between the halves
     const localInsertOffset = insertOffset - targetRun.startOffset;
     const rPrNode = findChild(targetRun.xmlRef, "w:rPr");
-    const parentChildren = findRunParentChildren(paragraph.xmlRef, targetRun.xmlRef);
-    if (!parentChildren) {
-      throw new Error("Target run not found in paragraph");
-    }
-
-    const runIndex = parentChildren.indexOf(targetRun.xmlRef);
-    const fullText = targetRun.text;
-    const beforeText = fullText.slice(0, localInsertOffset);
-    const afterText = fullText.slice(localInsertOffset);
-
-    const newNodes: FXPNode[] = [];
-
-    // Before part (if any)
-    if (beforeText.length > 0) {
-      newNodes.push(createRunWithTextAndFormatting(beforeText, rPrNode));
-    }
-
-    // Formatted inserted runs
     const formattedRuns = createFormattedRuns(segments, rPrNode);
-    newNodes.push(...formattedRuns);
-
-    // After part (if any)
-    if (afterText.length > 0) {
-      newNodes.push(createRunWithTextAndFormatting(afterText, rPrNode));
-    }
-
-    // Replace the original run
-    parentChildren.splice(runIndex, 1, ...newNodes);
+    const split = splitRunAtOffset(
+      paragraph.xmlRef,
+      targetRun.xmlRef,
+      localInsertOffset,
+      sideOfChildrenAtInsert(patch),
+    );
+    split.parentChildren.splice(split.index, 0, ...formattedRuns);
   }
 }
 
@@ -531,18 +586,25 @@ function executeInsertTextRevision(
     // Insert after the target run (no splitting needed)
     parentChildren.splice(runIndex + 1, 0, insElement);
   } else {
-    // Split the run at the insertion point
-    const fullText = targetRun.text;
-    const beforeText = fullText.slice(0, localInsertOffset);
-    const afterText = fullText.slice(localInsertOffset);
-
-    // Create two halves preserving formatting
-    const beforeRun = createRunWithTextAndFormatting(beforeText, rPrNode);
-    const afterRun = createRunWithTextAndFormatting(afterText, rPrNode);
-
-    // Replace the original run with: beforeRun, insElement, afterRun
-    parentChildren.splice(runIndex, 1, beforeRun, insElement, afterRun);
+    // Split the run at the insertion point; zero-width children keep their side
+    const split = splitRunAtOffset(
+      paragraph.xmlRef,
+      targetRun.xmlRef,
+      localInsertOffset,
+      sideOfChildrenAtInsert(patch),
+    );
+    split.parentChildren.splice(split.index, 0, insElement);
   }
+}
+
+/**
+ * Which side of inserted text a zero-width child at the insert point stays
+ * on. Inserting after an anchor keeps a break that follows the anchor after
+ * the new text; inserting before an anchor keeps a break that precedes the
+ * anchor before it.
+ */
+function sideOfChildrenAtInsert(patch: InsertTextPatch): "before" | "after" {
+  return patch.position === "after" ? "after" : "before";
 }
 
 /**
@@ -673,48 +735,9 @@ function executeDeleteTextRevision(
     );
   }
 
-  // Find the parent children array for the first matched run
-  const parentChildren = findRunParentChildren(paragraph.xmlRef, matchedRuns[0]!);
-  if (!parentChildren) {
-    throw new Error("Matched run not found in paragraph");
-  }
-
-  // Check if the matched runs live inside a w:ins (unaccepted insertion).
-  const container = findRunContainer(paragraph.xmlRef, matchedRuns[0]!);
-  const insideIns = container != null && getTagName(container) === "w:ins";
-
-  // Find the position of the first matched run in the parent
-  const firstRunIndex = parentChildren.indexOf(matchedRuns[0]!);
-
-  // Remove all matched runs from the parent
-  for (const run of matchedRuns) {
-    const idx = parentChildren.indexOf(run);
-    if (idx !== -1) {
-      parentChildren.splice(idx, 1);
-    }
-  }
-
-  if (insideIns) {
-    // Runs were inside w:ins — just remove them (and the w:ins if now empty).
-    // No w:del needed: the content was never part of the accepted document.
-    if (parentChildren.length === 0 && container) {
-      const paraChildren = getChildren(paragraph.xmlRef);
-      const containerIdx = paraChildren.indexOf(container);
-      if (containerIdx !== -1) {
-        paraChildren.splice(containerIdx, 1);
-      }
-    }
-  } else {
-    // Normal case: clone matched runs, wrap in w:del
-    const deletedRuns: FXPNode[] = [];
-    for (const run of matchedRuns) {
-      const cloned = cloneNode(run);
-      convertRunToDeleted(cloned);
-      deletedRuns.push(cloned);
-    }
-    const delElement = createDelElement(revCtx, deletedRuns);
-    parentChildren.splice(firstRunIndex, 0, delElement);
-  }
+  // Mark each matched run deleted in its own parent; runs that were an
+  // unaccepted insertion are simply removed.
+  detachMatchedRuns(paragraph.xmlRef, matchedRuns, revCtx);
 }
 
 // =============================================================================
@@ -780,13 +803,26 @@ function replaceRunWithFormattedRuns(
   runNode: FXPNode,
   segments: FormattedSegment[],
 ): void {
-  const rPrNode = findChild(runNode, "w:rPr");
-  const newRuns = createFormattedRuns(segments, rPrNode);
+  const content = readRunContent(runNode);
+  const newRuns = createFormattedRuns(segments, content.rPr);
 
   if (newRuns.length === 0) {
     // All segments were empty — just clear the run text
     setRunText(runNode, "");
     return;
+  }
+
+  // Zero-width children before the old text go in front of the first new
+  // run's text; the rest follow the last run, so a page break survives.
+  const leading = content.anchored.filter((a) => a.offset <= 0).map((a) => a.node);
+  const trailing = content.anchored.filter((a) => a.offset > 0).map((a) => a.node);
+  if (leading.length > 0) {
+    const first = getChildren(newRuns[0]!);
+    const at = first.length > 0 && "w:rPr" in first[0]! ? 1 : 0;
+    first.splice(at, 0, ...leading);
+  }
+  if (trailing.length > 0) {
+    getChildren(newRuns[newRuns.length - 1]!).push(...trailing);
   }
 
   // Find the run in parent's children and replace
@@ -810,27 +846,32 @@ function replaceRunWithFormattedRuns(
 
 /**
  * Set the text content of a w:r run node.
- * Finds or creates the w:t element and sets its text.
- * Escapes XML special characters and manages xml:space="preserve".
  *
- * If the text contains newlines (\n), they are converted to w:br
- * (soft line break) elements within the run. This allows replacement
- * text to contain line breaks. A run that already holds a soft break
- * (or several w:t elements) is rebuilt as well, so the old break never
- * survives next to the new text.
+ * A run that holds exactly one w:t and nothing else of note has that text
+ * node updated in place. Otherwise the run is rebuilt from its content:
+ * `\n` becomes a soft `w:br`, an old soft break never survives next to the
+ * new text, and zero-width children (page and column breaks, tabs,
+ * rendering hints) are kept. `remap` says where each such child goes in the
+ * new text, given its old offset; without it, a child that preceded the old
+ * text stays in front and every other one follows the new text.
  */
-function setRunText(runNode: FXPNode, text: string): void {
-  if (text.includes("\n") || runHasMixedContent(runNode)) {
-    // Rebuild the run's content children with w:t/w:br pairs
-    setRunTextWithBreaks(runNode, text);
-    return;
-  }
-
+function setRunText(
+  runNode: FXPNode,
+  text: string,
+  remap?: (offset: number) => number,
+): void {
+  const content = readRunContent(runNode);
   const wtNode = findTextNode(runNode);
-  if (wtNode) {
+  const simple =
+    wtNode !== undefined &&
+    content.anchored.length === 0 &&
+    !text.includes("\n") &&
+    !content.text.includes("\n") &&
+    getChildren(runNode).filter((c) => "w:t" in c).length === 1;
+
+  if (simple) {
     const tChildren = (wtNode as Record<string, unknown>)["w:t"];
     if (Array.isArray(tChildren)) {
-      // Find or create the text node
       const textNode = tChildren.find(
         (c: Record<string, unknown>) => "#text" in c,
       );
@@ -840,93 +881,16 @@ function setRunText(runNode: FXPNode, text: string): void {
         tChildren.push({ "#text": escapeXmlText(text) });
       }
     }
-
-    // Update xml:space="preserve" if needed
     if (needsSpacePreserve(text)) {
       setAttr(wtNode, "xml:space", "preserve");
     }
-  } else {
-    // No w:t exists — create one
-    const children = getChildren(runNode);
-    const newWt: FXPNode = {
-      "w:t": [{ "#text": escapeXmlText(text) } as unknown as FXPNode],
-    };
-    if (needsSpacePreserve(text)) {
-      setAttr(newWt, "xml:space", "preserve");
-    }
-    children.push(newWt);
-  }
-}
-
-/**
- * True if the run's text cannot be updated by editing a single w:t: it holds
- * a soft line break, or more than one w:t element.
- */
-function runHasMixedContent(runNode: FXPNode): boolean {
-  let textNodes = 0;
-  for (const child of getChildren(runNode)) {
-    if ("w:br" in child) {
-      const brType = getAttr(child, "w:type");
-      if (!brType || brType === "textWrapping") return true;
-    } else if ("w:t" in child) {
-      textNodes++;
-    }
-  }
-  return textNodes > 1;
-}
-
-/**
- * Replace a run's text content with text containing line breaks.
- *
- * Splits text on \n and interleaves w:t and w:br elements. Preserves the
- * run's w:rPr and any other non-text children (page/column breaks, tabs,
- * rendering hints): those that came before the run's text stay before the
- * new text, those that came after it stay after, so a trailing page break
- * still follows the replacement.
- */
-function setRunTextWithBreaks(runNode: FXPNode, text: string): void {
-  const children = getChildren(runNode);
-
-  const isTextContent = (c: FXPNode): boolean => {
-    if ("w:t" in c) return true;
-    if ("w:br" in c) {
-      const brType = getAttr(c, "w:type");
-      return !brType || brType === "textWrapping";
-    }
-    return false;
-  };
-
-  const rPr: FXPNode[] = [];
-  const leading: FXPNode[] = [];
-  const trailing: FXPNode[] = [];
-  let seenText = false;
-  for (const c of children) {
-    if ("w:rPr" in c) rPr.push(c);
-    else if (isTextContent(c)) seenText = true;
-    else (seenText ? trailing : leading).push(c);
+    return;
   }
 
-  children.length = 0;
-  children.push(...rPr, ...leading);
-
-  const segments = text.split("\n");
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i]!;
-    if (seg.length > 0 || i === 0) {
-      // Add w:t element for this segment
-      const wt: FXPNode = {
-        "w:t": [{ "#text": escapeXmlText(seg) } as unknown as FXPNode],
-      };
-      if (needsSpacePreserve(seg)) {
-        setAttr(wt, "xml:space", "preserve");
-      }
-      children.push(wt);
-    }
-    // Add w:br between segments (not after the last one)
-    if (i < segments.length - 1) {
-      children.push({ "w:br": [] as FXPNode[] });
-    }
-  }
-
-  children.push(...trailing);
+  const place = remap ?? ((offset: number) => (offset <= 0 ? 0 : text.length));
+  writeRunContent(runNode, {
+    rPr: content.rPr,
+    text,
+    anchored: content.anchored.map((a) => ({ node: a.node, offset: place(a.offset) })),
+  });
 }

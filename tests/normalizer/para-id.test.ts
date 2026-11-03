@@ -1,5 +1,5 @@
 /**
- * §3.1 Native paragraph identity (w14:paraId).
+ * Native paragraph identity (w14:paraId).
  */
 
 import { describe, it, expect } from "vitest";
@@ -215,7 +215,7 @@ describe("paraId: new paragraphs created by patches", () => {
   });
 });
 
-describe("paraId: identity stability (§3.1 acceptance)", () => {
+describe("paraId: identity stability (acceptance)", () => {
   it("ten tracked patches incl. two paragraph inserts: paraIds stable, positional ids shift", async () => {
     const original = await Docxtor.load(await createLeaseDocx());
     const before = new Map(original.getParagraphs().map((p) => [p.paraId!, { id: p.id, text: p.text }]));

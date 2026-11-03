@@ -1,5 +1,5 @@
 /**
- * §3.5 Metadata scrub and core properties.
+ * Metadata scrub and core properties.
  */
 
 import { describe, it, expect } from "vitest";

@@ -1,4 +1,4 @@
-name: Publish to GitHub Packages
+name: Publish to npm
 
 on:
   release:
@@ -9,31 +9,43 @@ jobs:
     name: Publish package
     runs-on: ubuntu-latest
 
+    # Trusted publishing: npmjs.com is configured to accept publishes from this
+    # repository's publish.yml via GitHub's OIDC token, so no npm token is stored
+    # as a secret. Provenance is attested automatically. One-time setup on npm:
+    # package settings -> Publishing access -> Trusted publisher -> GitHub Actions,
+    # with this repository and the workflow filename "publish.yml".
     permissions:
-      contents: write # needed to push the version bump commit/tag
-      packages: write # needed to publish to GitHub Packages
+      contents: read
+      id-token: write # OIDC token for trusted publishing and provenance
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
         with:
-          # Fetch full history so `npm version` can push the tag
-          fetch-depth: 0
+          version: 10
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: 20
-          registry-url: https://npm.pkg.github.com
-          scope: "@eazydraft"
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
 
-      - name: Install PNPM
-        run: npm install -g pnpm
+      - run: pnpm install --frozen-lockfile
 
-      - name: Install dependencies
-        run: pnpm i --frozen-lockfile
+      - name: Check that the release tag matches package.json
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "Release tag v$TAG does not match package.json version $PKG"
+            exit 1
+          fi
 
-      - name: Publish package
-        run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: pnpm check
+
+      # Trusted publishing needs npm 11.5 or newer; Node 22 bundles npm 10.
+      - run: npm install -g npm@latest
+
+      - name: Publish
+        run: npm publish --access public

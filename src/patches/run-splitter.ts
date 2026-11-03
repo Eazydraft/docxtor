@@ -18,12 +18,13 @@
 
 import type { FXPNode } from "../types.js";
 import type { ResolvedRunRange } from "../mapping/text-to-runs.js";
+import { getChildren, getTagName } from "../xml/helpers.js";
 import {
-  findChild,
-  createRun,
-  getChildren,
-  getTagName,
-} from "../xml/helpers.js";
+  readRunContent,
+  partitionContent,
+  createRunFromContent,
+  hasContent,
+} from "./run-content.js";
 
 /**
  * Result of splitting a run.
@@ -86,6 +87,10 @@ function findRunInContainers(
  * This mutates the parent paragraph's children array:
  * - The original run is replaced with up to 3 runs (before, matched, after)
  * - All new runs clone the original's w:rPr formatting
+ * - Zero-width children (page and column breaks, tabs, rendering hints,
+ *   drawings) stay at the character position they had: a break just before
+ *   the match lands in the before run, one just after it in the after run,
+ *   so a partial replacement never drops them
  *
  * @param paragraphNode - The w:p FXP node containing the run
  * @param range - The resolved range within the run to isolate
@@ -101,7 +106,6 @@ export function splitRun(
   }
 
   const runNode = range.run.xmlRef;
-  const fullText = range.run.text;
   const parentChildren = findRunParentChildren(paragraphNode, runNode);
 
   if (!parentChildren) {
@@ -109,14 +113,7 @@ export function splitRun(
   }
 
   const runIndex = parentChildren.indexOf(runNode);
-
-  // Extract the w:rPr node (formatting) from the original run
-  const rPrNode = findChild(runNode, "w:rPr");
-
-  // Calculate the three text segments
-  const beforeText = fullText.slice(0, range.localStart);
-  const matchedText = fullText.slice(range.localStart, range.localEnd);
-  const afterText = fullText.slice(range.localEnd);
+  const parts = partitionContent(readRunContent(runNode), range.localStart, range.localEnd);
 
   const result: SplitResult = {
     matched: undefined!,
@@ -125,18 +122,18 @@ export function splitRun(
   // Build the replacement runs
   const newRuns: FXPNode[] = [];
 
-  if (beforeText.length > 0) {
-    const beforeRun = createRunWithText(beforeText, rPrNode);
+  if (hasContent(parts.before)) {
+    const beforeRun = createRunFromContent(parts.before);
     result.before = beforeRun;
     newRuns.push(beforeRun);
   }
 
-  const matchedRun = createRunWithText(matchedText, rPrNode);
+  const matchedRun = createRunFromContent(parts.matched);
   result.matched = matchedRun;
   newRuns.push(matchedRun);
 
-  if (afterText.length > 0) {
-    const afterRun = createRunWithText(afterText, rPrNode);
+  if (hasContent(parts.after)) {
+    const afterRun = createRunFromContent(parts.after);
     result.after = afterRun;
     newRuns.push(afterRun);
   }
@@ -144,6 +141,47 @@ export function splitRun(
   // Replace the original run with the new runs in the parent
   parentChildren.splice(runIndex, 1, ...newRuns);
 
+  return result;
+}
+
+/**
+ * Split a run in two at a character offset, for an insertion between the
+ * halves. A zero-width child sitting exactly at the offset goes with the
+ * half named by `childrenAtOffset`: text inserted before an anchor that
+ * follows a page break lands after the break ("before"), text inserted
+ * after an anchor that precedes a break lands before it ("after").
+ *
+ * The original run is replaced in its parent by the halves that have any
+ * content; the returned index is where the inserted node(s) should go.
+ */
+export function splitRunAtOffset(
+  paragraphNode: FXPNode,
+  runNode: FXPNode,
+  offset: number,
+  childrenAtOffset: "before" | "after" = "before",
+): { parentChildren: FXPNode[]; index: number; before?: FXPNode; after?: FXPNode } {
+  const parentChildren = findRunParentChildren(paragraphNode, runNode);
+  if (!parentChildren) {
+    throw new Error("Run not found in paragraph children or hyperlink children");
+  }
+  const runIndex = parentChildren.indexOf(runNode);
+  const parts = partitionContent(readRunContent(runNode), offset, offset, childrenAtOffset);
+
+  const newRuns: FXPNode[] = [];
+  const result: { parentChildren: FXPNode[]; index: number; before?: FXPNode; after?: FXPNode } = {
+    parentChildren,
+    index: runIndex,
+  };
+  if (hasContent(parts.before)) {
+    result.before = createRunFromContent(parts.before);
+    newRuns.push(result.before);
+    result.index = runIndex + 1;
+  }
+  if (hasContent(parts.after)) {
+    result.after = createRunFromContent(parts.after);
+    newRuns.push(result.after);
+  }
+  parentChildren.splice(runIndex, 1, ...newRuns);
   return result;
 }
 
@@ -210,15 +248,4 @@ export function splitRunsForMatch(
   }
 
   return matchedRuns;
-}
-
-/**
- * Create a new w:r run node with the given text and optional formatting.
- * `\n` in the text becomes a `w:br`, mirroring how run text is read.
- */
-function createRunWithText(
-  text: string,
-  rPrNode: FXPNode | undefined,
-): FXPNode {
-  return createRun(text, rPrNode);
 }

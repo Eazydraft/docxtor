@@ -1,9 +1,10 @@
 /**
- * §5 Acceptance tests for the lease review additions, run against the
+ * Acceptance tests for the tracked-review workflow (paragraph identity, tracked
+ * paragraph ops, accept/reject, metadata scrub, atomic batches), run against the
  * synthetic lease fixture. No language model involved.
  *
- * Each `it` corresponds to one checkbox in DOCXTOR_ADDITIONS.md §5; the
- * detailed per-feature behaviour is covered by the unit test files.
+ * Each `it` corresponds to one of the acceptance criteria in docs/design.md;
+ * the detailed per-feature behaviour is covered by the unit test files.
  */
 
 import { describe, it, expect } from "vitest";
@@ -30,7 +31,7 @@ function allParagraphs(doc: Docxtor) {
   ];
 }
 
-describe("lease acceptance (§5)", () => {
+describe("lease acceptance", () => {
   it("Round trip: load, save with no patches — paragraph count, text and paraIds unchanged", async () => {
     const buffer = await createLeaseDocx();
     const doc = await Docxtor.load(buffer);

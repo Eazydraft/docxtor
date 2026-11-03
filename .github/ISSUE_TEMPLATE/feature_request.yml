@@ -1,0 +1,21 @@
+name: Feature request
+description: Propose a new patch type, projection option, or API.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the editing task, not the solution. What does the document look like before and after?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API
+      description: A sketch of the patch or method, if you have one.
+      render: ts
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Workarounds you have tried
