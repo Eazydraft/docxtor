@@ -4,11 +4,20 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-03
+
+First public release, published to npm as `@lucio-ai/docxtor`.
+
 ### Changed
 
-- Relicensed under MIT and prepared for public release: contribution guide, DCO, code of conduct, security policy, CI workflow and npm publishing with provenance.
-- Documentation split out of the README into `docs/`.
+- Relicensed under MIT and prepared for public release: contribution guide, DCO, code of conduct, security policy, CI workflow and npm publishing through trusted publishing with provenance.
+- Package renamed from `@eazydraft/docxtor` to `@lucio-ai/docxtor`.
+- Documentation split out of the README into `docs/`, with a benchmark section in the README.
 - The sample chat CLI moved from `scripts/` to `examples/`.
+
+### Fixed
+
+- Page and column breaks stay on their original side of the text when a run is rebuilt by a patch.
 
 ## [0.3.2] - 2026-10-19
 
@@ -89,7 +98,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - Initial release: ZIP and XML round trip, normalized AST with `xmlRef` pointers, markdown and JSON projections, text patches (`replace_text`, `insert_text`, `delete_text`), table row patches, `apply_formatting`, `apply_style`, hyperlinks, nested tables, and tracked changes (`w:ins`, `w:del`, `w:rPrChange`, `w:pPrChange`).
 
-[Unreleased]: https://github.com/Eazydraft/docxtor/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/Eazydraft/docxtor/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Eazydraft/docxtor/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/Eazydraft/docxtor/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Eazydraft/docxtor/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Eazydraft/docxtor/compare/v0.2.0...v0.3.0
