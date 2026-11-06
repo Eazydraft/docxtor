@@ -63,7 +63,7 @@
     "node": ">=20.19.0"
   },
   "dependencies": {
-    "fast-xml-parser": "5.7.0",
+    "fast-xml-parser": "5.11.2",
     "jszip": "3.10.2"
   },
   "devDependencies": {
