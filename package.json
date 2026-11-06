@@ -26,12 +26,15 @@
     "editing",
     "llm",
     "patch",
-    "ooxml"
+    "agent-skill"
   ],
   "license": "MIT",
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
+  "bin": {
+    "docxtor": "./dist/cli.mjs"
+  },
   "exports": {
     ".": {
       "import": {
@@ -45,16 +48,17 @@
     }
   },
   "files": [
-    "dist",
-    "logo.png"
+    "dist"
   ],
   "sideEffects": false,
   "scripts": {
-    "build": "tsdown",
+    "build": "tsdown && tsdown -c tsdown.cli.config.ts",
+    "build:skill": "tsdown -c tsdown.skill.config.ts",
+    "pack:skill": "pnpm build:skill && rm -f docxtor-skill.zip && cd plugin/skills && zip -qr ../../docxtor-skill.zip docxtor",
     "dev": "tsdown --watch",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.cli.json",
     "prepublishOnly": "pnpm build",
     "lint": "publint && attw --pack .",
     "check": "pnpm typecheck && pnpm test && pnpm build && pnpm lint"

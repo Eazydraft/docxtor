@@ -15,7 +15,7 @@ jobs:
     # package settings -> Publishing access -> Trusted publisher -> GitHub Actions,
     # with this repository and the workflow filename "publish.yml".
     permissions:
-      contents: read
+      contents: write # attach the skill zip to the release
       id-token: write # OIDC token for trusted publishing and provenance
 
     steps:
@@ -44,8 +44,19 @@ jobs:
 
       - run: pnpm check
 
+      # The skill's bundled CLI is committed; fail if it is out of date with the source.
+      - name: Check that the skill bundle is current
+        run: |
+          pnpm pack:skill
+          git diff --exit-code -- plugin/skills
+
       # Trusted publishing needs npm 11.5 or newer; Node 22 bundles npm 10.
       - run: npm install -g npm@latest
 
       - name: Publish
         run: npm publish --access public
+
+      - name: Attach the skill to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" docxtor-skill.zip --clobber

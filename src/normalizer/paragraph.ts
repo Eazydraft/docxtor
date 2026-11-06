@@ -298,6 +298,7 @@ function collectRevisionMarks(
         endOffset: mapping.endOffset,
         author: insInfo?.author ?? "",
         date: insInfo?.date ?? "",
+        ...(insInfo?.id !== undefined ? { id: insInfo.id } : {}),
       });
     }
   }
@@ -343,14 +344,14 @@ function markAllRunsInContainer(node: FXPNode, refs: Set<FXPNode>): void {
 function findParentInsInfo(
   paragraphNode: FXPNode,
   runNode: FXPNode,
-): { author: string; date: string } | undefined {
+): { author: string; date: string; id?: string } | undefined {
   return findInsInfoInChildren(getChildren(paragraphNode), runNode);
 }
 
 function findInsInfoInChildren(
   children: FXPNode[],
   runNode: FXPNode,
-): { author: string; date: string } | undefined {
+): { author: string; date: string; id?: string } | undefined {
   for (const child of children) {
     const tag = getTagName(child);
     if (tag === "w:ins") {
@@ -359,6 +360,7 @@ function findInsInfoInChildren(
         return {
           author: getAttr(child, "w:author") ?? "",
           date: getAttr(child, "w:date") ?? "",
+          id: getAttr(child, "w:id"),
         };
       }
     } else if (tag === "w:hyperlink") {
@@ -438,6 +440,7 @@ function walkForDeletions(
           endOffset: offset,
           author: getAttr(child, "w:author") ?? "",
           date: getAttr(child, "w:date") ?? "",
+          ...(getAttr(child, "w:id") !== undefined ? { id: getAttr(child, "w:id")! } : {}),
         });
       }
     } else if (tag === "w:hyperlink" || tag === "w:ins") {

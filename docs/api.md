@@ -176,7 +176,7 @@ const results = doc.applyPatches(patches, {
 });
 ```
 
-**Verbatim text.** By default the text fields of patches (`find`, `replace`, `anchor`, `text`, list items, header/footer paragraphs, comment text) are parsed for inline formatting markers (see [`replace_text`](patches.md#replace_text)). `inlineMarkers: false` turns that off for the whole batch, and a patch's own `markers: true | false` overrides the batch setting, so lawyer-approved language can be written exactly as given.
+**Verbatim text.** By default the text fields of patches (`find`, `replace`, `anchor`, `text`, list items, header/footer paragraphs, comment text) are parsed for inline formatting markers (see [`replace_text`](patches.md#replace_text)). `inlineMarkers: false` turns that off for the whole batch, and a patch's own `markers: true | false` overrides the batch setting, so approved language can be written exactly as given.
 
 `revisionDate` is stamped on every `w:ins` / `w:del` / `w:*Change` element the batch creates. Pin it when you need byte-stable output (e.g., fixed-point tests that compare `document.xml`).
 
@@ -192,6 +192,7 @@ Resolve every tracked change in the document — body, headers, footers, footnot
 const { accepted } = doc.acceptAllRevisions();                        // everything
 const { accepted } = doc.acceptAllRevisions({ authors: ["AI Editor"] }); // only this author's marks
 const { rejected } = doc.rejectAllRevisions({ authors: ["AI Editor"] });
+const { rejected } = doc.rejectAllRevisions({ ids: ["14", "15"] });     // only these w:ids
 ```
 
 | Element | Accept | Reject |
@@ -203,7 +204,7 @@ const { rejected } = doc.rejectAllRevisions({ authors: ["AI Editor"] });
 | Paragraph mark `w:pPr/w:rPr/w:ins` | marker dropped | paragraph merged into the next |
 | Paragraph mark `w:pPr/w:rPr/w:del` | paragraph merged into the next | marker dropped |
 
-With `authors`, only revisions by those authors are touched; an attorney's hand edits survive while the tool's own marks are accepted. The document is re-normalized afterwards: positional ids are reassigned, `paraId`s are not. Use these to produce the clean final document from a redline (accept the tool's author, then strip any remaining bracket tokens with `delete_text`).
+With `authors`, only revisions by those authors are touched; a reviewer's hand edits survive while the tool's own marks are accepted. With `ids`, only the revisions whose `w:id` is listed are touched (both filters apply when both are given). Each insertion and deletion in a projection with `includeRevisions` carries its `id`; a replacement is a `w:del` and a `w:ins`, so pass both ids to resolve it. Move ranges are matched by their own ids. The document is re-normalized afterwards: positional ids are reassigned, `paraId`s are not. Use these to produce the clean final document from a redline (accept the tool's author, then strip any remaining bracket tokens with `delete_text`).
 
 ## Metadata: `doc.getCoreProperties()` / `doc.setCoreProperties(props)` / `doc.scrubMetadata()`
 

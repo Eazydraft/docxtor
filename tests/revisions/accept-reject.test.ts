@@ -330,6 +330,46 @@ describe("author filter", () => {
   });
 });
 
+describe("id filter", () => {
+  async function twoReplacements(): Promise<Docxtor> {
+    const doc = await Docxtor.load(await createMultiParagraphDocx(["Pay within 30 days.", "Governed by Texas law."]));
+    doc.applyPatches([
+      { type: "replace_text", target: "p0", find: "30", replace: "45" },
+      { type: "replace_text", target: "p1", find: "Texas", replace: "New York" },
+    ], TRACKED);
+    return doc;
+  }
+
+  it("exposes each mark's w:id in the projection", async () => {
+    const doc = await twoReplacements();
+    const marks = doc.getParagraphs().flatMap((p) => p.revisions ?? []);
+    expect(marks.map((m) => [m.type, m.text])).toEqual([
+      ["insert", "45"], ["delete", "30"], ["insert", "New York"], ["delete", "Texas"],
+    ]);
+    for (const m of marks) expect(m.id).toMatch(/^\d+$/);
+    expect(new Set(marks.map((m) => m.id)).size).toBe(4);
+  });
+
+  it("rejects only the listed revisions and leaves the rest tracked", async () => {
+    const doc = await twoReplacements();
+    const ids = doc.getParagraphs()[0]!.revisions!.map((m) => m.id!);
+    expect(doc.rejectAllRevisions({ ids })).toEqual({ rejected: 2 });
+    expect(doc.getParagraphs().map((p) => p.text)).toEqual(["Pay within 30 days.", "Governed by New York law."]);
+    expect(doc.getParagraphs()[0]!.revisions).toBeUndefined();
+    expect(doc.getParagraphs()[1]!.revisions!.length).toBe(2);
+
+    expect(doc.acceptAllRevisions()).toEqual({ accepted: 2 });
+    expect(doc.getParagraphs().map((p) => p.text)).toEqual(["Pay within 30 days.", "Governed by New York law."]);
+  });
+
+  it("combines with an author filter", async () => {
+    const doc = await twoReplacements();
+    const ids = doc.getParagraphs().flatMap((p) => p.revisions ?? []).map((m) => m.id!);
+    expect(doc.acceptAllRevisions({ ids, authors: ["Someone Else"] })).toEqual({ accepted: 0 });
+    expect(doc.acceptAllRevisions({ ids: [ids[0]!], authors: [AUTHOR] })).toEqual({ accepted: 1 });
+  });
+});
+
 // =============================================================================
 // Moves and tracked cell merges (review follow-ups)
 // =============================================================================
@@ -360,6 +400,23 @@ describe("moves with an author filter", () => {
     expect(xml).not.toContain("RangeStart");
     expect(xml).not.toContain("RangeEnd");
     expect(doc.getParagraphs().map((p) => p.text)).toEqual(["Moved text.", "Stays.", ""]);
+  });
+
+  it("an ids filter naming any part of a move resolves the whole move", async () => {
+    const { createBodyDocx } = await import("../fixtures/create-docx.js");
+    // 11 is the moveFrom content, 12 the moveTo range marker, 13 the moveTo content.
+    for (const ids of [["11"], ["12"], ["13"]]) {
+      const accepted = await Docxtor.load(await createBodyDocx(MOVE_BODY));
+      accepted.acceptAllRevisions({ ids });
+      const a = accepted.toString();
+      expect(a).not.toMatch(/w:move(From|To)/);
+      expect(accepted.getParagraphs().map((p) => p.text)).toEqual(["", "Stays.", "Moved text."]);
+
+      const rejected = await Docxtor.load(await createBodyDocx(MOVE_BODY));
+      rejected.rejectAllRevisions({ ids });
+      expect(rejected.toString()).not.toMatch(/w:move(From|To)/);
+      expect(rejected.getParagraphs().map((p) => p.text)).toEqual(["Moved text.", "Stays.", ""]);
+    }
   });
 
   it("another author's filter leaves the move and its markers untouched", async () => {

@@ -27,7 +27,7 @@ Replace a substring in a paragraph. Formatting of the original text is preserved
 
 This also works for `insert_text` (`anchor` and `text`), `delete_text` (`find`), `insert_paragraph`, `append_text`, `replace_cell_text`, `add_list` / `add_list_item`, `add_header` / `add_footer` and `add_comment`.
 
-Rules that keep ordinary legal text intact:
+Rules that keep ordinary document text intact:
 
 - A `_` is an italic marker only when it stands alone at a word boundary. Runs of underscores (`Name: ______`, `a(n) __________`) and intra-word underscores (`snake_case`) are literal.
 - A single `*` is literal (`5 * 3`); only `**` toggles bold.
