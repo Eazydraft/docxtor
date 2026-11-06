@@ -189,9 +189,11 @@ function markTrackedRows(doc: Docxtor, md: string): string {
     }
   };
   walk(doc.getTables());
+  for (const part of [...doc.getHeaders().values(), ...doc.getFooters().values()]) walk(part.tables);
   if (labels.size === 0) return md;
   return md.split("\n").map((line) => {
-    const m = /^\| \[(tbl[\d.rc]+?\.r\d+\.)c\d+\.p\d+/.exec(line);
+    // The first cell's paragraph id; the greedy prefix picks the innermost row of a nested table.
+    const m = /^\| \[(\S*\.r\d+\.)c\d+\.p\d+\]/.exec(line);
     const label = m ? labels.get(m[1]!) : undefined;
     return label ? `${line} ${label}` : line;
   }).join("\n");

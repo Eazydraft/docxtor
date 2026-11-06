@@ -196,6 +196,20 @@ describe("docxtor CLI", () => {
     expect((await cli("view", out, "--no-revisions")).out).not.toContain("row inserted");
   }, 30_000);
 
+  it("view labels tracked rows in header tables", async () => {
+    const JSZip = (await import("jszip")).default;
+    const { createHeaderFooterDocx } = await import("../fixtures/create-docx.js");
+    const ins = `<w:trPr><w:ins w:id="90" w:author="Jane" w:date="2026-01-01T00:00:00Z"/></w:trPr>`;
+    let xml: string;
+    const hdr = await JSZip.loadAsync(await createHeaderFooterDocx());
+    xml = await hdr.file("word/header1.xml")!.async("string");
+    hdr.file("word/header1.xml", xml.replace("</w:hdr>", `<w:tbl><w:tr>${ins}<w:tc><w:p><w:r><w:t>Header cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:hdr>`));
+    const hdrFile = join(dir, "hdr-row.docx");
+    await writeFile(hdrFile, await hdr.generateAsync({ type: "nodebuffer" }));
+    const hv = (await cli("view", hdrFile)).out.split("\n");
+    expect(hv.find((l) => l.includes("Header cell"))).toContain("{+row inserted by Jane+}");
+  }, 30_000);
+
   it("comments reports the paragraph of a point comment that has only a reference", async () => {
     const JSZip = (await import("jszip")).default;
     const ranged = join(dir, "ranged.docx");

@@ -41,12 +41,12 @@ Lists the comments in the document: the paragraph where each comment's passage s
 
 ## Writing
 
-Every write command:
+Every write command (`replace`, `comment`, `edit`, `accept`, `reject`, `metadata --set/--scrub`):
 
 - takes `-o OUT`, the file to write. It may be the input file, to update it in place;
-- writes tracked changes, unless you pass `--untracked`;
-- takes `--author NAME` for the revision or comment author (default `docxtor`);
 - writes nothing if any part fails, and says why.
+
+`replace` and `edit` write tracked changes unless you pass `--untracked`, and take `--author NAME` for the revision author (default `docxtor`). `comment` takes `--author` for the comment author and changes no text. `accept`, `reject` and `metadata` take neither option: they resolve existing tracked changes or change document properties, and create no tracked changes.
 
 Text is written verbatim: `*`, `_` and `~` are not read as formatting.
 

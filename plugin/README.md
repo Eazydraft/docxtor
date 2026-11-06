@@ -22,7 +22,7 @@ In Cowork or Claude.ai, upload `docxtor-skill.zip` from the [latest release](htt
 
 ## Commands
 
-`view`, `revisions`, `comments`, `replace`, `comment`, `edit`, `accept`, `reject` and `metadata`. Every write is a tracked change by default and writes nothing if any part fails. The full reference is at https://github.com/Eazydraft/docxtor/blob/main/docs/cli.md.
+`view`, `revisions`, `comments`, `replace`, `comment`, `edit`, `accept`, `reject` and `metadata`. `replace` and `edit` write tracked changes by default; `comment` adds a comment; `accept`, `reject` and `metadata` resolve tracked changes or change properties without creating new ones. No command writes anything if any part fails. The full reference is at https://github.com/Eazydraft/docxtor/blob/main/docs/cli.md.
 
 ## License
 

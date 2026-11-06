@@ -1,7 +1,7 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="assets/logo-light.svg">
-  <img src="assets/logo-light.svg" alt="docxtor" width="360">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Eazydraft/docxtor/main/assets/logo-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/Eazydraft/docxtor/main/assets/logo-light.svg">
+  <img src="https://raw.githubusercontent.com/Eazydraft/docxtor/main/assets/logo-light.svg" alt="docxtor" width="360">
 </picture>
 
 [![npm](https://img.shields.io/npm/v/@lucio-ai/docxtor)](https://www.npmjs.com/package/@lucio-ai/docxtor)
@@ -117,8 +117,9 @@ docxtor reject counterparty.docx -o resolved.docx \
 | `metadata` | Read or modify document properties and scrub author/company information. |
 
 **Safety guarantees:**
-- Every write operation produces tracked changes by default. Use `--untracked` to opt out.
-- Every revision can be attributed using `--author`.
+- `replace` and `edit` write tracked changes by default, attributed with `--author`. Use `--untracked` to edit directly.
+- `comment` adds a comment, attributed with `--author`; it changes no text.
+- `accept` and `reject` resolve existing tracked changes, and `metadata` changes document properties; neither creates tracked changes.
 - Failed operations do not produce partially written output.
 - Ambiguous text matches are rejected unless the intended match is specified.
 

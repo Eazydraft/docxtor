@@ -1,6 +1,6 @@
 ---
 name: docxtor
-description: Reads, edits and redlines Word .docx files with the docxtor command-line tool. Handles tracked changes with an author, comments anchored to text, accepting or rejecting tracked changes one by one, find-and-replace across the whole document, inserting and deleting paragraphs, tables, lists, formatting, headers and footers, and document properties. Leaves everything it does not touch byte for byte. It does not compare two versions of a document. Use when a task involves a .docx or Word document, including answering questions about what it says and citing sections, editing it as tracked changes or clean edits, reviewing or resolving someone else's tracked changes, adding comments, and removing author metadata before sending.
+description: Reads, edits and redlines Word .docx files with the docxtor command-line tool. Handles tracked changes with an author, comments anchored to text, accepting or rejecting tracked changes one by one, find-and-replace across the whole document, inserting and deleting paragraphs, tables, lists, formatting, headers and footers, and document properties. Leaves the text, formatting, styles and numbering it does not edit unchanged. It does not compare two versions of a document. Use when a task involves a .docx or Word document, including answering questions about what it says and citing sections, editing it as tracked changes or clean edits, reviewing or resolving someone else's tracked changes, adding comments, and removing author metadata before sending.
 license: MIT
 ---
 
