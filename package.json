@@ -64,7 +64,7 @@
   },
   "dependencies": {
     "fast-xml-parser": "5.7.0",
-    "jszip": "3.10.1"
+    "jszip": "3.10.2"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.5",
