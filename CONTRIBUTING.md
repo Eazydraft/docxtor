@@ -32,7 +32,7 @@ Read [docs/design.md](docs/design.md) before changing the normalizer or the patc
 2. Branch from `main`.
 3. Keep the change focused. One concern per pull request.
 4. Add or update tests. Test fixtures are built in code in `tests/fixtures/create-docx.ts`; do not commit `.docx` files.
-5. Update the relevant page under `docs/` and add a line to `CHANGELOG.md` under *Unreleased*.
+5. Update the relevant page under `docs/`.
 6. Run `pnpm check` locally.
 
 ### Invariants to keep
@@ -82,6 +82,6 @@ For security issues, follow [SECURITY.md](SECURITY.md) instead of opening a publ
 
 ## Releases (maintainers)
 
-1. Bump `version` in `package.json` and move the *Unreleased* section of `CHANGELOG.md` under the new version with today's date.
+1. Bump `version` in `package.json`.
 2. Merge, then create a GitHub release with tag `vX.Y.Z` matching the package version.
 3. The publish workflow verifies the tag, runs the checks and publishes to npm with provenance.

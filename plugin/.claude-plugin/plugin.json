@@ -1,0 +1,17 @@
+{
+  "name": "docxtor",
+  "version": "0.4.1",
+  "description": "Redline Word documents: tracked changes, comments, and accepting or rejecting a counterparty's changes, leaving the rest of the .docx untouched.",
+  "author": {
+    "name": "Lucio AI"
+  },
+  "homepage": "https://github.com/Eazydraft/docxtor",
+  "repository": "https://github.com/Eazydraft/docxtor",
+  "license": "MIT",
+  "keywords": [
+    "docx",
+    "word",
+    "redline",
+    "tracked-changes"
+  ]
+}

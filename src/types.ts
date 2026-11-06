@@ -190,6 +190,12 @@ export interface RevisionMark {
   author: string;
   /** The revision date (ISO 8601). */
   date: string;
+  /**
+   * The `w:id` of the `w:ins` / `w:del` element, when it has one. Pass it to
+   * `acceptAllRevisions({ ids })` / `rejectAllRevisions({ ids })` to resolve
+   * this change alone.
+   */
+  id?: string;
 }
 
 export interface RunMapping {
@@ -761,6 +767,13 @@ export interface PatchOptions {
 export interface RevisionFilterOptions {
   /** Only process revisions by these authors. Omit to process every revision. */
   authors?: string[];
+  /**
+   * Only process revisions whose `w:id` is in this list (combined with
+   * `authors` when both are given). Ids come from `RevisionMark.id` in a
+   * projection with `includeRevisions`. A replacement is usually two
+   * revisions, a `w:del` and a `w:ins`, each with its own id.
+   */
+  ids?: string[];
 }
 
 // =============================================================================

@@ -15,7 +15,8 @@
  * | paragraph mark `w:ins`               | drop marker                    | merge paragraph into the next     |
  * | paragraph mark `w:del`               | merge paragraph into the next  | drop marker                       |
  *
- * With an `authors` filter only revisions by those authors are touched.
+ * With an `authors` filter only revisions by those authors are touched; with
+ * an `ids` filter only revisions with those `w:id`s.
  * The caller must re-normalize the document afterwards (positional ids may
  * change; `paraId`s do not).
  */
@@ -37,6 +38,7 @@ type Mode = "accept" | "reject";
 interface WalkContext {
   mode: Mode;
   authors?: Set<string>;
+  ids?: Set<string>;
   count: number;
   /**
    * Ids of `w:moveFromRangeStart` / `w:moveToRangeStart` markers that match
@@ -105,6 +107,7 @@ function makeContext(mode: Mode, options?: RevisionFilterOptions): WalkContext {
   return {
     mode,
     authors: options?.authors ? new Set(options.authors) : undefined,
+    ids: options?.ids ? new Set(options.ids.map(String)) : undefined,
     count: 0,
     moveRangeIds: new Set(),
   };
@@ -127,6 +130,10 @@ function walkAllParts(doc: NormalizedDocument, ctx: WalkContext): void {
 }
 
 function matches(node: FXPNode, ctx: WalkContext): boolean {
+  if (ctx.ids) {
+    const id = getAttr(node, "w:id");
+    if (id === undefined || !ctx.ids.has(id)) return false;
+  }
   if (!ctx.authors) return true;
   const author = getAttr(node, "w:author");
   return author !== undefined && ctx.authors.has(author);
