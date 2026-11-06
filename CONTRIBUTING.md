@@ -24,8 +24,6 @@ Useful scripts:
 | `pnpm lint` | Check the published package shape with publint and arethetypeswrong |
 | `pnpm check` | Everything CI runs: typecheck, test, build, lint |
 
-Read [docs/design.md](docs/design.md) before changing the normalizer or the patch engine. It explains the read-only AST, the `xmlRef` pointer model and the invariants the test suite enforces.
-
 ## Making a change
 
 1. Open an issue first for anything larger than a bug fix, so the approach can be agreed before you write code.

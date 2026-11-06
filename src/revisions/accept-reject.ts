@@ -124,6 +124,7 @@ function walkAllParts(doc: NormalizedDocument, ctx: WalkContext): void {
     if (part) parts.push(part);
   }
   for (const part of parts) {
+    if (ctx.ids) expandMoveIds(part, ctx.ids);
     ctx.moveRangeIds = collectMatchingMoveRangeIds(part, ctx);
     processChildren(part, undefined, ctx);
   }
@@ -137,6 +138,48 @@ function matches(node: FXPNode, ctx: WalkContext): boolean {
   if (!ctx.authors) return true;
   const author = getAttr(node, "w:author");
   return author !== undefined && ctx.authors.has(author);
+}
+
+/**
+ * A move is several elements with different ids: `w:moveFromRangeStart` / `w:moveToRangeStart`
+ * markers (with matching `…RangeEnd` markers) around `w:moveFrom` / `w:moveTo` content. When an
+ * `ids` filter names any part of a move, add the rest, including the other side of the move (the
+ * "from" and "to" ranges share a `w:name`), so the move is resolved as a unit rather than leaving range
+ * markers without content, content without its range, or one side of a move without the other.
+ */
+function expandMoveIds(nodes: FXPNode[], ids: Set<string>): void {
+  const open: { from: string[]; to: string[] } = { from: [], to: [] };
+  const groups: string[][] = []; // each: [range id, ...content ids inside it]
+  const groupOf = new Map<string, string[]>();
+  const byName = new Map<string, string[]>();
+  const visit = (list: FXPNode[]): void => {
+    for (const node of list) {
+      const tag = getTagName(node);
+      if (!tag) continue;
+      const id = getAttr(node, "w:id");
+      if (id !== undefined) {
+        if (tag === "w:moveFromRangeStart" || tag === "w:moveToRangeStart") {
+          const name = getAttr(node, "w:name");
+          const g = (name !== undefined && byName.get(name)) || [];
+          if (!g.length) groups.push(g);
+          if (name !== undefined) byName.set(name, g);
+          g.push(id);
+          groupOf.set(id, g);
+          (tag === "w:moveFromRangeStart" ? open.from : open.to).push(id);
+        } else if (tag === "w:moveFromRangeEnd" || tag === "w:moveToRangeEnd") {
+          const stack = tag === "w:moveFromRangeEnd" ? open.from : open.to;
+          const at = stack.lastIndexOf(id);
+          if (at !== -1) stack.splice(at, 1);
+        } else if (tag === "w:moveFrom" || tag === "w:moveTo") {
+          for (const rangeId of tag === "w:moveFrom" ? open.from : open.to) groupOf.get(rangeId)!.push(id);
+        }
+      }
+      const children = getChildren(node);
+      if (children.length > 0) visit(children);
+    }
+  };
+  visit(nodes);
+  for (const g of groups) if (g.some((id) => ids.has(id))) for (const id of g) ids.add(id);
 }
 
 /**

@@ -402,6 +402,23 @@ describe("moves with an author filter", () => {
     expect(doc.getParagraphs().map((p) => p.text)).toEqual(["Moved text.", "Stays.", ""]);
   });
 
+  it("an ids filter naming any part of a move resolves the whole move", async () => {
+    const { createBodyDocx } = await import("../fixtures/create-docx.js");
+    // 11 is the moveFrom content, 12 the moveTo range marker, 13 the moveTo content.
+    for (const ids of [["11"], ["12"], ["13"]]) {
+      const accepted = await Docxtor.load(await createBodyDocx(MOVE_BODY));
+      accepted.acceptAllRevisions({ ids });
+      const a = accepted.toString();
+      expect(a).not.toMatch(/w:move(From|To)/);
+      expect(accepted.getParagraphs().map((p) => p.text)).toEqual(["", "Stays.", "Moved text."]);
+
+      const rejected = await Docxtor.load(await createBodyDocx(MOVE_BODY));
+      rejected.rejectAllRevisions({ ids });
+      expect(rejected.toString()).not.toMatch(/w:move(From|To)/);
+      expect(rejected.getParagraphs().map((p) => p.text)).toEqual(["Moved text.", "Stays.", ""]);
+    }
+  });
+
   it("another author's filter leaves the move and its markers untouched", async () => {
     const { createBodyDocx } = await import("../fixtures/create-docx.js");
     const doc = await Docxtor.load(await createBodyDocx(MOVE_BODY));

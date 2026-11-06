@@ -12,8 +12,8 @@ import { Docxtor } from "../../src/index.js";
 import { createLeaseDocx, createMultiParagraphDocx } from "../fixtures/create-docx.js";
 
 const run = promisify(execFile);
-const CLI = join(__dirname, "../../cli/docxtor.ts");
-const TSX = join(__dirname, "../../node_modules/.bin/tsx");
+const CLI = join(import.meta.dirname, "../../cli/docxtor.ts");
+const TSX = join(import.meta.dirname, "../../node_modules/.bin/tsx");
 
 async function cli(...args: string[]): Promise<{ code: number; out: string; err: string }> {
   try {
@@ -194,6 +194,32 @@ describe("docxtor CLI", () => {
     const v = await cli("view", out, "--grep", "\\[tbl0\\.r1\\.");
     expect(v.out).toContain("{+row inserted by Jane+}");
     expect((await cli("view", out, "--no-revisions")).out).not.toContain("row inserted");
+  }, 30_000);
+
+  it("comments reports the paragraph of a point comment that has only a reference", async () => {
+    const JSZip = (await import("jszip")).default;
+    const ranged = join(dir, "ranged.docx");
+    await cli("comment", v1, "-o", ranged, "--in", "p3", "--text", "Check the address.");
+    const zip = await JSZip.loadAsync(await import("node:fs/promises").then((fs) => fs.readFile(ranged)));
+    const xml = await zip.file("word/document.xml")!.async("string");
+    const stripped = xml.replace(/<w:commentRange(Start|End)\b[^>]*?(\/>|><\/w:commentRange(Start|End)>)/g, "");
+    expect(stripped).toContain("w:commentReference");
+    expect(stripped).not.toContain("w:commentRangeStart");
+    zip.file("word/document.xml", stripped);
+    const point = join(dir, "point.docx");
+    await writeFile(point, await zip.generateAsync({ type: "nodebuffer" }));
+    const list = JSON.parse((await cli("comments", point, "--json")).out) as { paragraph: string; anchor: string }[];
+    expect(list).toMatchObject([{ paragraph: "p3", anchor: "" }]);
+  }, 30_000);
+
+  it("revisions lists tracked changes outside paragraphs too, and their ids resolve", async () => {
+    const changes = JSON.parse((await cli("revisions", lease, "--json")).out) as { kind: string; ids: string[]; context: string }[];
+    const note = changes.find((c) => c.context.startsWith("footnotes:"));
+    expect(note).toBeDefined();
+    const out = join(dir, "lease-fn.docx");
+    const r = await cli("accept", lease, "-o", out, "--ids", note!.ids.join(","));
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/^accepted 1 revision/);
   }, 30_000);
 
   it("comment --in accepts a para: id", async () => {

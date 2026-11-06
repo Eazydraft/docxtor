@@ -63,6 +63,12 @@ export function listComments(doc: Docxtor): CommentInfo[] {
       } else if (tag === "w:commentRangeEnd") {
         open.delete(getAttr(n, "w:id") ?? "");
       } else if (tag === "w:r") {
+        // A point comment can be marked by a commentReference inside a run, with no range around it.
+        for (const ref of getChildren(n)) {
+          if (getTagName(ref) !== "w:commentReference") continue;
+          const c = byId.get(getAttr(ref, "w:id") ?? "");
+          if (c && !c.paragraph) c.paragraph = paraId;
+        }
         const t = textOf(getChildren(n));
         for (const id of open) byId.get(id)!.anchor += t;
       } else if (tag === "w:del" || tag === "w:moveFrom") {

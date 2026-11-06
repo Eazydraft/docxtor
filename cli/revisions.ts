@@ -170,8 +170,14 @@ export function listChanges(doc: Docxtor): Change[] {
     }
   }
 
-  // Anything else that carries a w:id and w:author (row/cell markers, section changes, notes).
-  const parts: FXPNode[][] = [doc.getAST().xmlParts.document];
+  // Anything else that carries a w:id and w:author (row/cell markers, section changes), in every part
+  // the library resolves: body, headers, footers, footnotes, endnotes and comments.
+  const xp = doc.getAST().xmlParts;
+  const parts: [string, FXPNode[]][] = [["", xp.document]];
+  for (const [path, nodes] of xp.headers) parts.push([`header ${path.replace(/^word\//, "")}`, nodes]);
+  for (const [path, nodes] of xp.footers) parts.push([`footer ${path.replace(/^word\//, "")}`, nodes]);
+  for (const key of ["footnotes", "endnotes", "comments"] as const) { const nodes = xp[key]; if (nodes) parts.push([key, nodes]); }
+  let where = "";
   const walk = (nodes: FXPNode[]): void => {
     for (const n of nodes) {
       const tag = getTagName(n);
@@ -182,14 +188,14 @@ export function listChanges(doc: Docxtor): Change[] {
         const md = meta(n);
         changes.push({
           n: 0, paragraph: "-", kind: "other", ids: [md.id!], authors: [md.author], date: md.date,
-          deleted: "", inserted: "", context: `${tag}${textOf(n) ? `: ${clip(textOf(n), false)}` : ""}`,
+          deleted: "", inserted: "", context: `${where ? `${where}: ` : ""}${tag}${textOf(n) ? `: ${clip(textOf(n), false)}` : ""}`,
         });
         continue;
       }
       walk(getChildren(n));
     }
   };
-  for (const p of parts) walk(p);
+  for (const [name, nodes] of parts) { where = name; walk(nodes); }
 
   changes.forEach((c, i) => (c.n = i + 1));
   return changes;

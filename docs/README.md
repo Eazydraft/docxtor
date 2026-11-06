@@ -9,4 +9,3 @@
 | [Revision tracking](revisions.md) | What each patch emits, revision ids, reading marks and coloured runs |
 | [LLM integration pattern](llm-integration.md) | Prompt shape and the validate-then-apply loop |
 | [Feature coverage](coverage.md) | Supported and unsupported OOXML features |
-| [Design](design.md) | Architecture, invariants, module map, testing approach |

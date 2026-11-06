@@ -32,12 +32,12 @@ Use it for every read and write of a .docx. Do not unzip the file, edit its XML,
 | Accept or reject tracked changes | `docxtor accept` / `reject FILE -o OUT [--ids ...] [--by AUTHOR] [--others ...]` |
 | Read, set or scrub author, company and other properties | `docxtor metadata FILE [-o OUT --set key=value \| --scrub]` |
 
-Every write command:
+Every write command writes to `-o OUT` (a new file, unless the user asks to change the file in place; then `-o` is the input path) and writes **nothing** if any part fails, saying why, including the paragraph's actual text when a find doesn't match. Fix the input and run the same command again.
 
-- writes **tracked changes** by default (`--untracked` edits directly);
-- takes `--author NAME` (default `docxtor`). Use the user's name or organisation when known;
-- writes to `-o OUT`. Use a new file unless the user asks to change the file in place; then `-o` is the input path;
-- writes **nothing** if any part fails, and says why, including the paragraph's actual text when a find doesn't match. Fix the input and run the same command again.
+- `replace` and `edit` write **tracked changes** by default (`--untracked` edits directly) and take `--author NAME` (default `docxtor`; use the user's name or organisation when known).
+- `comment` adds a comment, which is never a tracked change; `--author` sets the comment's author.
+- `accept` and `reject` resolve existing tracked changes and create none.
+- `metadata` changes document properties only, not the text.
 
 Full options: [reference/commands.md](reference/commands.md). Every patch type for `edit`: [reference/patches.md](reference/patches.md). Worked sessions with real output: [reference/examples.md](reference/examples.md).
 

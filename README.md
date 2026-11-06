@@ -281,8 +281,6 @@ The AST is never serialized back into the document.
 
 This separation allows docxtor to provide a structured, model-friendly editing interface while preserving document content and structure outside the scope of an edit.
 
-See [Design and invariants](docs/design.md) for the implementation details.
-
 ## Documentation
 
 | Resource | Description |
@@ -294,7 +292,6 @@ See [Design and invariants](docs/design.md) for the implementation details.
 | [Revision tracking](docs/revisions.md) | Tracked-change generation and revision inspection |
 | [LLM integration](docs/llm-integration.md) | System prompts and validate-then-apply workflows |
 | [Feature coverage](docs/coverage.md) | Supported functionality and known limitations |
-| [Design](docs/design.md) | Architecture and implementation invariants |
 | [Examples](examples/) | Interactive chat CLI demonstrating model-driven editing |
 
 ## Current limitations
