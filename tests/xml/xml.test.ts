@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseXml } from "../../src/xml/parser.js";
+import { parseXml, cloneXmlPart } from "../../src/xml/parser.js";
 import { serializeXml } from "../../src/xml/serializer.js";
 import {
   getTagName,
@@ -96,9 +96,47 @@ describe("xml parser + serializer round-trip", () => {
     const parsed = parseXml(xml);
     const serialized = serializeXml(parsed);
 
-    // FXP might serialize as <w:b></w:b> or <w:b/> — both are valid
-    expect(serialized).toContain("w:b");
-    expect(serialized).toContain("w:i");
+    expect(serialized).toBe(xml);
+  });
+
+  it("round-trips a Word-style fragment byte for byte", () => {
+    const xml =
+      `<w:p w:rsidR="00A1"><w:pPr><w:keepNext/><w:jc w:val="center"/></w:pPr>` +
+      `<w:r><w:rPr><w:b/><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">Hello </w:t><w:tab/><w:br w:type="page"/></w:r>` +
+      `<w:r><w:t xml:space="preserve"> </w:t></w:r><w:bookmarkStart w:id="0" w:name="_GoBack"/><w:bookmarkEnd w:id="0"/></w:p>`;
+    expect(serializeXml(parseXml(xml))).toBe(xml);
+  });
+
+  it("writes an empty element self-closed, and keeps whitespace-only text", () => {
+    expect(serializeXml(parseXml(`<w:r><w:t></w:t></w:r>`))).toBe(`<w:r><w:t/></w:r>`);
+    const space = `<w:r><w:t xml:space="preserve"> </w:t></w:r>`;
+    expect(serializeXml(parseXml(space))).toBe(space);
+  });
+
+  it.each([
+    ["\r\n", "CRLF"],
+    ["\n", "LF"],
+    ["", "nothing"],
+  ])("keeps %j (%s) between the XML declaration and the root", (ws) => {
+    const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>${ws}<w:document xmlns:w="urn:w"><w:body><w:p/></w:body></w:document>`;
+    expect(serializeXml(parseXml(xml))).toBe(xml);
+  });
+
+  it("keeps the declaration whitespace on a cloned part", () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<a><b/></a>`;
+    const parsed = parseXml(xml);
+    expect(serializeXml(cloneXmlPart(parsed))).toBe(xml);
+    // A plain deep copy is a new part: it gets Word's CRLF
+    const plain = JSON.parse(JSON.stringify(parsed)) as typeof parsed;
+    expect(serializeXml(plain)).toBe(xml.replace("?>\n", "?>\r\n"));
+  });
+
+  it("writes CRLF after the declaration of a part that was not parsed", () => {
+    const part = [
+      { "?xml": [{ "#text": "" }], ":@": { "@_version": "1.0", "@_encoding": "UTF-8" } },
+      { "w:comments": [] },
+    ] as unknown as Parameters<typeof serializeXml>[0];
+    expect(serializeXml(part)).toBe(`<?xml version="1.0" encoding="UTF-8"?>\r\n<w:comments/>`);
   });
 
   it("should preserve element ordering", () => {

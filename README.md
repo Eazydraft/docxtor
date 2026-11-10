@@ -135,7 +135,7 @@ The benchmark compares an AI agent equipped with the docxtor skill against the s
 
 - 7 short tasks, 2 runs each.
 - Two models: Claude Haiku 5.5 and Claude Opus 5.5.
-- Evaluation date: November 6, 2026.
+- Evaluation date: November 10, 2026.
 - Benchmark commit: `e214567`.
 
 Tasks covered tracked-change redlines, bulk renaming, comments, chained edits, revision resolution, multi-turn editing, and document reading.
@@ -146,10 +146,10 @@ The benchmark's document-comparison task was excluded because docxtor does not c
 
 | Model | Configuration | Grader-correct | Median time | Median tool calls | Median tool errors |
 |---|---|---:|---:|---:|---:|
-| Claude Haiku 5.5 | With docxtor | 14/14 | 17 s | 5 | 0 |
-| Claude Haiku 5.5 | Without plugin | 14/14 | 30.5 s | 8.5 | 1 |
-| Claude Opus 5.5 | With docxtor | 14/14 | 22 s | 5 | 0 |
-| Claude Opus 5.5 | Without plugin | 13/13 | 36 s | 5 | 0 |
+| Claude Haiku 5.5 | With docxtor | 14/14 | 17.5 s | 4 | 0 |
+| Claude Haiku 5.5 | Without plugin | 14/14 | 36 s | 7.5 | 1 |
+| Claude Opus 5.5 | With docxtor | 14/14 | 24.5 s | 5 | 0 |
+| Claude Opus 5.5 | Without plugin | 12/12 | 37 s | 6 | 0 |
 
 With docxtor, agents completed tasks approximately **40% faster**, with zero tool errors across the evaluated runs.
 

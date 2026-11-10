@@ -38,5 +38,40 @@ const parser = new XMLParser(PARSER_OPTIONS);
  * modifying these objects and serializing them back produces the output XML.
  */
 export function parseXml(xml: string): FXPNode[] {
-  return parser.parse(xml) as FXPNode[];
+  const nodes = parser.parse(xml) as FXPNode[];
+  // The parser drops the whitespace between the XML declaration and the root
+  // element. Remember it so serializeXml can write the part back unchanged.
+  const m = DECLARATION_RE.exec(xml);
+  if (m) declarationWhitespace.set(nodes, m[1]!);
+  return nodes;
+}
+
+/** The XML declaration at the start of a part, capturing the whitespace after it. */
+const DECLARATION_RE = /^\uFEFF?<\?xml[^>]*\?>([ \t\r\n]*)/;
+
+/**
+ * Whitespace that followed the XML declaration in each parsed part, keyed by
+ * the array parseXml returned. A part docxtor created has no entry.
+ */
+const declarationWhitespace = new WeakMap<FXPNode[], string>();
+
+/** Whitespace Word writes after the XML declaration. */
+export const DEFAULT_DECLARATION_WHITESPACE = "\r\n";
+
+/**
+ * The whitespace to write after a part's XML declaration: what the parsed
+ * source had, or Word's `\r\n` for a part that was not parsed.
+ */
+export function getDeclarationWhitespace(nodes: FXPNode[]): string {
+  return declarationWhitespace.get(nodes) ?? DEFAULT_DECLARATION_WHITESPACE;
+}
+
+/**
+ * Deep-clone a parsed part, keeping the declaration whitespace recorded for it.
+ */
+export function cloneXmlPart(nodes: FXPNode[]): FXPNode[] {
+  const copy = JSON.parse(JSON.stringify(nodes)) as FXPNode[];
+  const ws = declarationWhitespace.get(nodes);
+  if (ws !== undefined) declarationWhitespace.set(copy, ws);
+  return copy;
 }

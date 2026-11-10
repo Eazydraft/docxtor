@@ -17,7 +17,9 @@ import {
   createTableDocx,
   createSplitRunDocx,
   createStyledDocx,
+  createBodyDocx,
 } from "../fixtures/create-docx.js";
+import { scanMaxRevisionId, revisionTimestamp } from "../../src/patches/revision.js";
 import type {
   Patch,
   PatchOptions,
@@ -1261,5 +1263,111 @@ describe("append_text markdown table with revisions", () => {
     // Should have the table
     const tables = doc.body.filter((e) => e.kind === "table");
     expect(tables).toHaveLength(1);
+  });
+});
+
+// =============================================================================
+// Revision ids and dates
+// =============================================================================
+
+describe("revision id allocation", () => {
+  const ids = (xml: string, tag: string): number[] =>
+    [...xml.matchAll(new RegExp(`<${tag} w:id="(\\d+)"`, "g"))].map((m) => Number(m[1]));
+
+  it("starts above every bookmark id when the document has no revisions", async () => {
+    const bookmarks = [0, 1, 2, 3, 4, 5]
+      .map((i) => `<w:bookmarkStart w:id="${i}" w:name="b${i}"/><w:bookmarkEnd w:id="${i}"/>`)
+      .join("");
+    const doc = normalizeDocument(await readDocx(await createBodyDocx(
+      `<w:p>${bookmarks}<w:r><w:t>This agreement is valid</w:t></w:r></w:p>`,
+    )));
+    expect(scanMaxRevisionId(doc)).toBe(5);
+
+    const results = applyPatches(doc, [
+      { type: "replace_text", target: "p0", find: "valid", replace: "enforceable" },
+    ], REV_OPTIONS);
+    expect(results[0]!.success).toBe(true);
+
+    const xml = getDocXml(doc);
+    // The deletion is written first, so it takes 6 and the insertion 7
+    expect(ids(xml, "w:del")).toEqual([6]);
+    expect(ids(xml, "w:ins")).toEqual([7]);
+  });
+
+  it("gives a lone tracked insertion the first id after the bookmarks", async () => {
+    const doc = normalizeDocument(await readDocx(await createBodyDocx(
+      `<w:p><w:bookmarkStart w:id="0" w:name="a"/><w:r><w:t>Hello</w:t></w:r><w:bookmarkEnd w:id="0"/>` +
+      `<w:bookmarkStart w:id="5" w:name="b"/><w:bookmarkEnd w:id="5"/></w:p>`,
+    )));
+    const results = applyPatches(doc, [{ type: "append_text", text: "New paragraph" }], REV_OPTIONS);
+    expect(results[0]!.success).toBe(true);
+    const all = ids(getDocXml(doc), "w:ins");
+    expect(all.length).toBeGreaterThan(0);
+    expect(Math.min(...all)).toBe(6);
+  });
+
+  it("counts a bookmark end that has no start in the scanned parts", async () => {
+    const doc = normalizeDocument(await readDocx(await createBodyDocx(
+      `<w:p><w:r><w:t>Hello</w:t></w:r><w:bookmarkEnd w:id="40"/></w:p>`,
+    )));
+    expect(scanMaxRevisionId(doc)).toBe(40);
+  });
+
+  it("starts above a move range id", async () => {
+    const doc = normalizeDocument(await readDocx(await createBodyDocx(
+      `<w:p><w:moveFromRangeStart w:id="10" w:author="A" w:date="2025-01-01T00:00:00Z" w:name="move1"/>` +
+      `<w:moveFrom w:id="3" w:author="A" w:date="2025-01-01T00:00:00Z"><w:r><w:t>Moved text</w:t></w:r></w:moveFrom>` +
+      `<w:moveFromRangeEnd w:id="10"/><w:r><w:t>This agreement is valid</w:t></w:r></w:p>`,
+    )));
+    expect(scanMaxRevisionId(doc)).toBe(10);
+
+    applyPatches(doc, [
+      { type: "replace_text", target: "p0", find: "valid", replace: "enforceable" },
+    ], REV_OPTIONS);
+    expect(ids(getDocXml(doc), "w:del")).toEqual([11]);
+  });
+
+  it("counts w:moveFrom and w:moveTo ids", async () => {
+    const doc = normalizeDocument(await readDocx(await createBodyDocx(
+      `<w:p><w:moveTo w:id="21" w:author="A" w:date="2025-01-01T00:00:00Z"><w:r><w:t>Moved</w:t></w:r></w:moveTo></w:p>`,
+    )));
+    expect(scanMaxRevisionId(doc)).toBe(21);
+  });
+});
+
+describe("default revision date", () => {
+  const WORD_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+
+  it("revisionTimestamp drops the fractional seconds", () => {
+    expect(revisionTimestamp(new Date("2026-11-10T16:25:03.493Z"))).toBe("2026-11-10T16:25:03Z");
+    expect(revisionTimestamp(new Date("2026-11-10T16:25:03.000Z"))).toBe("2026-11-10T16:25:03Z");
+    expect(revisionTimestamp()).toMatch(WORD_DATE);
+  });
+
+  it("a tracked edit with no revisionDate writes a date without milliseconds", async () => {
+    const doc = normalizeDocument(await readDocx(await createSimpleDocx("This agreement is valid")));
+    applyPatches(doc, [
+      { type: "replace_text", target: "p0", find: "valid", replace: "enforceable" },
+    ], { trackRevisions: true, revisionAuthor: "Test Author" });
+
+    const dates = [...getDocXml(doc).matchAll(/w:date="([^"]+)"/g)].map((m) => m[1]!);
+    expect(dates).toHaveLength(2);
+    for (const d of dates) expect(d).toMatch(WORD_DATE);
+  });
+
+  it("a comment with no revisionDate writes a date without milliseconds", async () => {
+    const doc = normalizeDocument(await readDocx(await createSimpleDocx("This agreement is valid")));
+    const results = applyPatches(doc, [{ type: "add_comment", target: "p0", text: "Check this." }]);
+    expect(results[0]!.success).toBe(true);
+    const date = /w:date="([^"]+)"/.exec(serializeXml(doc.xmlParts.comments!))![1]!;
+    expect(date).toMatch(WORD_DATE);
+  });
+
+  it("passes a caller-supplied revisionDate through unchanged", async () => {
+    const doc = normalizeDocument(await readDocx(await createSimpleDocx("This agreement is valid")));
+    applyPatches(doc, [
+      { type: "replace_text", target: "p0", find: "valid", replace: "enforceable" },
+    ], { trackRevisions: true, revisionDate: "2026-11-10T16:25:03.493Z" });
+    expect(getDocXml(doc)).toContain('w:date="2026-11-10T16:25:03.493Z"');
   });
 });

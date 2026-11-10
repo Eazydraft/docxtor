@@ -26,7 +26,7 @@ describe("zero-width children survive text edits", () => {
     expect(r[0]!.success).toBe(true);
     expect(first(doc)).toMatchObject({ text: "Hi World", hasPageBreak: true, pageBreakOffset: 0 });
     expect(body(doc.toString())).toBe(
-      `<w:p><w:r><w:br w:type="page"></w:br></w:r><w:r><w:t>Hi</w:t></w:r><w:r><w:t xml:space="preserve"> World</w:t></w:r></w:p>`,
+      `<w:p><w:r><w:br w:type="page"/></w:r><w:r><w:t>Hi</w:t></w:r><w:r><w:t xml:space="preserve"> World</w:t></w:r></w:p>`,
     );
   });
 
@@ -43,14 +43,14 @@ describe("zero-width children survive text edits", () => {
     doc.applyPatches([{ type: "replace_text", target: "p0", find: "World", replace: "There" }]);
     expect(first(doc)).toMatchObject({ text: "Hello There", hasPageBreak: true, pageBreakOffset: 11 });
     expect(body(doc.toString())).toBe(
-      `<w:p><w:r><w:t xml:space="preserve">Hello </w:t></w:r><w:r><w:t>There</w:t></w:r><w:r><w:lastRenderedPageBreak></w:lastRenderedPageBreak></w:r></w:p>`,
+      `<w:p><w:r><w:t xml:space="preserve">Hello </w:t></w:r><w:r><w:t>There</w:t></w:r><w:r><w:lastRenderedPageBreak/></w:r></w:p>`,
     );
   });
 
   it("keeps a tab between two text nodes", async () => {
     const doc = await load(`<w:p><w:r><w:t>Name:</w:t><w:tab/><w:t>Alice</w:t></w:r></w:p>`);
     doc.applyPatches([{ type: "replace_text", target: "p0", find: "Alice", replace: "Bob" }]);
-    expect(body(doc.toString())).toBe(`<w:p><w:r><w:t>Name:</w:t><w:tab></w:tab></w:r><w:r><w:t>Bob</w:t></w:r></w:p>`);
+    expect(body(doc.toString())).toBe(`<w:p><w:r><w:t>Name:</w:t><w:tab/></w:r><w:r><w:t>Bob</w:t></w:r></w:p>`);
   });
 
   it("keeps a page break inside a match that is replaced whole", async () => {
@@ -70,7 +70,7 @@ describe("zero-width children survive text edits", () => {
     doc.applyPatches([{ type: "replace_text", target: "p0", find: "Hello World", replace: "**Hi**" }]);
     expect(first(doc)).toMatchObject({ text: "Hi", hasPageBreak: true, pageBreakOffset: 2 });
     expect(body(doc.toString())).toBe(
-      `<w:p><w:r><w:rPr><w:b></w:b></w:rPr><w:t>Hi</w:t><w:br w:type="page"></w:br></w:r></w:p>`,
+      `<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Hi</w:t><w:br w:type="page"/></w:r></w:p>`,
     );
   });
 
