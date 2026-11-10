@@ -1,7 +1,7 @@
 {
   "name": "@lucio-ai/docxtor",
   "description": "Surgical, LLM-friendly DOCX editing through normalized AST with direct XML mutation",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "author": {
     "name": "Randeep Singh",
     "email": "randeep@lucioai.com"
