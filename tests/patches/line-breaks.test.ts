@@ -77,7 +77,7 @@ describe("w:br in paragraph text (issue #33)", () => {
     expect(doc.getParagraphs()[0]!.text).toBe("Signed by:\nPrinted name:");
 
     const xml = doc.toString();
-    expect(xml).toMatch(/<w:t>Signed by:<\/w:t><w:br><\/w:br><w:t>Printed name:<\/w:t>/);
+    expect(xml).toMatch(/<w:t>Signed by:<\/w:t><w:br\/><w:t>Printed name:<\/w:t>/);
     expect(xml).not.toMatch(/<w:t[^>]*>[^<]*\n[^<]*<\/w:t>/); // never a raw newline inside w:t
   });
 
@@ -88,7 +88,7 @@ describe("w:br in paragraph text (issue #33)", () => {
     const [r] = doc.applyPatches([{ type: "delete_text", target: "p0", find: "\nName:" }], { trackRevisions: true });
     expect(r!.success).toBe(true);
     expect(doc.getParagraphs()[0]!.text).toBe("By:");
-    expect(doc.toString()).toMatch(/<w:del[^>]*><w:r><w:br><\/w:br><\/w:r><w:r><w:delText>Name:<\/w:delText><\/w:r><\/w:del>/);
+    expect(doc.toString()).toMatch(/<w:del[^>]*><w:r><w:br\/><\/w:r><w:r><w:delText>Name:<\/w:delText><\/w:r><\/w:del>/);
     expect(doc.getParagraphs()[0]!.revisions).toEqual([
       expect.objectContaining({ type: "delete", text: "\nName:", startOffset: 3, endOffset: 3 }),
     ]);
@@ -116,7 +116,7 @@ describe("w:br in paragraph text (issue #33)", () => {
     expect(doc.getParagraphs()[0]!.text).toBe("Hi\nWorld");
     const xml = doc.toString();
     expect(xml).not.toMatch(/<w:t[^>]*>[^<]*\n[^<]*<\/w:t>/);
-    expect((xml.match(/<w:br>/g) ?? []).length).toBe(1);
+    expect((xml.match(/<w:br\/>/g) ?? []).length).toBe(1);
   });
 
   it("untracked: deleting a break from a run that holds text on both sides removes the w:br", async () => {
@@ -127,8 +127,8 @@ describe("w:br in paragraph text (issue #33)", () => {
     expect(r!.success).toBe(true);
     expect(doc.getParagraphs()[0]!.text).toBe("HelloWorld");
     const xml = doc.toString();
-    expect(xml).not.toContain("<w:br>");
-    expect(xml).toContain("<w:b>"); // formatting kept on the rebuilt runs
+    expect(xml).not.toMatch(/<w:br[ \/>]/);
+    expect(xml).toContain("<w:b/>"); // formatting kept on the rebuilt runs
     expect(await Docxtor.load(await doc.toBuffer()).then((d) => d.getParagraphs()[0]!.text)).toBe("HelloWorld");
   });
 
@@ -139,7 +139,7 @@ describe("w:br in paragraph text (issue #33)", () => {
     const [r] = doc.applyPatches([{ type: "replace_text", target: "p0", find: "\n", replace: "-" }]);
     expect(r!.success).toBe(true);
     expect(doc.getParagraphs()[0]!.text).toBe("A-B");
-    expect(doc.toString()).not.toContain("<w:br>");
+    expect(doc.toString()).not.toMatch(/<w:br[ \/>]/);
   });
 
   it("untracked: replacing text that spans a break within one run, with a single-line replacement", async () => {
@@ -148,7 +148,7 @@ describe("w:br in paragraph text (issue #33)", () => {
     );
     doc.applyPatches([{ type: "replace_text", target: "p0", find: ":\nName", replace: " / Name" }]);
     expect(doc.getParagraphs()[0]!.text).toBe("By / Name:");
-    expect(doc.toString()).not.toContain("<w:br>");
+    expect(doc.toString()).not.toMatch(/<w:br[ \/>]/);
   });
 
   it("untracked: a trailing page break in the matched run stays after the replacement", async () => {
@@ -159,7 +159,7 @@ describe("w:br in paragraph text (issue #33)", () => {
     const para = doc.getParagraphs()[0]!;
     expect(para.text).toBe("Hi");
     expect(para.pageBreakOffset).toBe(2);
-    expect(doc.toString().replace(/>\s+</g, "><")).toMatch(/<w:t>Hi<\/w:t><w:br w:type="page"><\/w:br><\/w:r>/);
+    expect(doc.toString().replace(/>\s+</g, "><")).toMatch(/<w:t>Hi<\/w:t><w:br w:type="page"\/><\/w:r>/);
   });
 
   it("untracked: a leading page break in the matched run stays before the replacement", async () => {
@@ -170,7 +170,7 @@ describe("w:br in paragraph text (issue #33)", () => {
     const para = doc.getParagraphs()[0]!;
     expect(para.text).toBe("Hi");
     expect(para.pageBreakOffset).toBe(0);
-    expect(doc.toString().replace(/>\s+</g, "><")).toMatch(/<w:r><w:rPr><w:b><\/w:b><\/w:rPr><w:br w:type="page"><\/w:br><w:t>Hi<\/w:t><\/w:r>/);
+    expect(doc.toString().replace(/>\s+</g, "><")).toMatch(/<w:r><w:rPr><w:b\/><\/w:rPr><w:br w:type="page"\/><w:t>Hi<\/w:t><\/w:r>/);
   });
 
   it("page and column breaks still contribute no text", async () => {

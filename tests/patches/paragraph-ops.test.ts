@@ -45,9 +45,9 @@ describe("insert_paragraph", () => {
 
     const xml = paragraphXml(doc, inserted.id);
     // Runs wrapped in w:ins, and the paragraph mark carries w:ins inside w:pPr/w:rPr
-    expect(xml).toMatch(/<w:pPr>.*<w:rPr><w:ins w:id="\d+" w:author="USI Legal AI" w:date="2026-10-13T00:00:00Z"><\/w:ins><\/w:rPr><\/w:pPr>/);
+    expect(xml).toMatch(/<w:pPr>.*<w:rPr><w:ins w:id="\d+" w:author="USI Legal AI" w:date="2026-10-13T00:00:00Z"\/><\/w:rPr><\/w:pPr>/);
     expect(xml).toMatch(/<w:ins w:id="\d+" w:author="USI Legal AI"[^>]*><w:r>/);
-    expect(xml).toContain('<w:numPr><w:ilvl w:val="1"></w:ilvl><w:numId w:val="1"></w:numId></w:numPr>');
+    expect(xml).toContain('<w:numPr><w:ilvl w:val="1"/><w:numId w:val="1"/></w:numPr>');
 
     // Accept all: exactly one new paragraph, no blank paragraph
     doc.acceptAllRevisions();
@@ -317,7 +317,7 @@ describe("delete_paragraph", () => {
     const cell = doc.getTables()[0]!.rows[1]!.cells[0]!;
     expect(cell.paragraphs.length).toBe(1);
     expect(cell.paragraphs[0]!.text).toBe("");
-    expect(serializeXml([cell.xmlRef]).replace(/>\s+</g, "><")).toMatch(/<w:tc><w:tcPr>.*?<\/w:tcPr><w:p><\/w:p><\/w:tc>/);
+    expect(serializeXml([cell.xmlRef]).replace(/>\s+</g, "><")).toMatch(/<w:tc><w:tcPr>.*?<\/w:tcPr><w:p\/><\/w:tc>/);
   });
 
   it("accepts para: targets", async () => {
@@ -352,7 +352,7 @@ describe("delete_paragraph keeps every story valid (untracked)", () => {
     const hdr = [...doc.getHeaders().values()][0]!;
     expect(hdr.paragraphs.length).toBe(1);
     expect(hdr.paragraphs[0]!.text).toBe("");
-    expect(serializeXml(hdr.xmlRef)).toMatch(/<w:hdr[^>]*>\s*<w:p[^>]*><\/w:p>\s*<\/w:hdr>/);
+    expect(serializeXml(hdr.xmlRef)).toMatch(/<w:hdr[^>]*>\s*<w:p[^>]*\/>\s*<\/w:hdr>/);
   });
 
   it("keeps an empty paragraph when deleting the only body paragraph", async () => {
@@ -360,7 +360,7 @@ describe("delete_paragraph keeps every story valid (untracked)", () => {
     doc.applyPatches([{ type: "delete_paragraph", target: "p0" }]);
     expect(doc.getParagraphs().length).toBe(1);
     expect(doc.getParagraphs()[0]!.text).toBe("");
-    expect(doc.toString()).toContain("<w:p>");
+    expect(doc.toString()).toContain("<w:p/>");
   });
 
   it("removes a body paragraph outright when a table remains", async () => {

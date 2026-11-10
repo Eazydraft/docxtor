@@ -76,7 +76,7 @@ describe("verbatim patch text (issue #35)", () => {
     const raw = "Price: 5 * 3 * 2 and **bold** _c_ ~~x~~ \\_";
     doc.applyPatches([{ type: "insert_paragraph", target, position: "after", text: raw, markers: false }]);
     expect(doc.getParagraphs().at(-1)!.text).toBe(raw);
-    expect(doc.toString()).not.toContain("<w:b>");
+    expect(doc.toString()).not.toMatch(/<w:b[ \/>]/);
   });
 
   it("PatchOptions.inlineMarkers: false applies to every patch in the batch; a patch can opt back in", async () => {
@@ -105,7 +105,7 @@ describe("verbatim patch text (issue #35)", () => {
     const doc2 = await Docxtor.load(await createSimpleDocx("Sign: here then ____________ end"));
     doc2.applyPatches([{ type: "replace_text", target: "p0", find: "here", replace: "_there_ ____________" }]);
     expect(doc2.getParagraphs()[0]!.text).toBe("Sign: there ____________ then ____________ end");
-    expect(doc2.toString()).toContain("<w:i>");
+    expect(doc2.toString()).toContain("<w:i/>");
   });
 
   it("replace_text tracked: verbatim replacement", async () => {
@@ -153,10 +153,10 @@ describe("verbatim patch text (issue #35)", () => {
     expect(header!.paragraphs[0]!.text).toBe("**CONF** ");
     const headerXml = serializeXml(header!.xmlRef);
     expect(headerXml).toContain("PAGE"); // the field still works
-    expect(headerXml).not.toContain("<w:b>");
+    expect(headerXml).not.toMatch(/<w:b[ \/>]/);
     const comments = serializeXml(doc.getAST().xmlParts.comments!);
     expect(comments).toContain("**note**");
-    expect(comments).not.toContain("<w:b>");
+    expect(comments).not.toMatch(/<w:b[ \/>]/);
 
     const listDoc = await Docxtor.load(await createListDocx());
     const item = listDoc.getParagraphs().find((p) => p.listInfo)!;

@@ -49,8 +49,16 @@ export function createRevisionContext(
   return {
     nextId: maxId + 1,
     author: options.revisionAuthor ?? "docxtor",
-    date: options.revisionDate ?? new Date().toISOString(),
+    date: options.revisionDate ?? revisionTimestamp(),
   };
+}
+
+/**
+ * The default timestamp for a revision or comment: ISO 8601 in UTC without
+ * fractional seconds (`2026-11-10T16:25:03Z`), the form Word writes.
+ */
+export function revisionTimestamp(d: Date = new Date()): string {
+  return d.toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
 /**
@@ -66,7 +74,11 @@ export function nextRevisionId(ctx: RevisionContext): string {
 // Scan for existing revision IDs
 // =============================================================================
 
-/** Tag names that carry w:id for revision tracking. */
+/**
+ * Tag names whose w:id shares the annotation id space with revisions.
+ * Bookmarks and move ranges are included so a new revision id never repeats
+ * one of theirs.
+ */
 const REVISION_TAGS = new Set([
   "w:ins",
   "w:del",
@@ -78,13 +90,21 @@ const REVISION_TAGS = new Set([
   "w:cellIns",
   "w:cellDel",
   "w:cellMerge",
+  "w:moveFrom",
+  "w:moveTo",
+  "w:moveFromRangeStart",
+  "w:moveFromRangeEnd",
+  "w:moveToRangeStart",
+  "w:moveToRangeEnd",
+  "w:bookmarkStart",
+  "w:bookmarkEnd",
 ]);
 
 /**
  * Scan all XML parts in the document for the highest w:id value
- * on revision-related elements.
+ * on revision, move-range and bookmark elements.
  *
- * Returns 0 if no existing revisions are found.
+ * Returns 0 if none are found.
  */
 export function scanMaxRevisionId(doc: NormalizedDocument): number {
   let maxId = 0;

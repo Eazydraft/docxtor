@@ -25,12 +25,12 @@ describe("add_comment", () => {
     expect(doc.findParagraphById("p6")!.text).toBe("Landlord may recapture the Premises upon any request to assign or sublet.");
 
     const xml = doc.toString();
-    expect(xml).toMatch(/<w:commentRangeStart w:id="0"><\/w:commentRangeStart><w:r><w:t[^>]*>recapture the Premises<\/w:t><\/w:r><w:commentRangeEnd w:id="0"><\/w:commentRangeEnd><w:r><w:commentReference w:id="0">/);
+    expect(xml).toMatch(/<w:commentRangeStart w:id="0"\/><w:r><w:t[^>]*>recapture the Premises<\/w:t><\/w:r><w:commentRangeEnd w:id="0"\/><w:r><w:commentReference w:id="0"\/>/);
 
     const out = await doc.toBuffer();
     const comments = (await entry(out, "word/comments.xml"))!;
     expect(comments).toContain('<w:comment w:id="0" w:author="USI Legal AI" w:date="2026-10-13T00:00:00Z" w:initials="ULA">');
-    expect(comments).toContain("<w:annotationRef>");
+    expect(comments).toContain("<w:annotationRef/>");
     expect(comments).toContain("Delete per firm rule R-12.");
     expect((await entry(out, "word/_rels/document.xml.rels"))!).toContain('Target="comments.xml"');
     expect((await entry(out, "[Content_Types].xml"))!).toContain('PartName="/word/comments.xml"');
@@ -50,8 +50,8 @@ describe("add_comment", () => {
     expect(results.every((r) => r.success)).toBe(true);
 
     const xml = doc.toString().replace(/>\s+</g, "><");
-    expect(xml).toMatch(/<w:p><w:commentRangeStart w:id="0">.*<w:commentRangeEnd w:id="0"><\/w:commentRangeEnd><w:r><w:commentReference w:id="0">/);
-    expect(xml).toContain('<w:commentRangeStart w:id="1">');
+    expect(xml).toMatch(/<w:p><w:commentRangeStart w:id="0"\/>.*<w:commentRangeEnd w:id="0"\/><w:r><w:commentReference w:id="0"\/>/);
+    expect(xml).toContain('<w:commentRangeStart w:id="1"/>');
 
     const comments = (await entry(await doc.toBuffer(), "word/comments.xml"))!;
     expect(comments).toContain('w:id="0" w:author="USI Legal AI"');

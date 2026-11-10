@@ -45,7 +45,8 @@ import { executeApplyStyle } from "./style-ops.js";
 import { normalizeParagraph } from "../normalizer/paragraph.js";
 import { normalizeTable } from "../normalizer/table.js";
 import { enrichListType, reNormalizeDocument } from "../normalizer/document.js";
-import { createRevisionContext, type RevisionContext } from "./revision.js";
+import { createRevisionContext, revisionTimestamp, type RevisionContext } from "./revision.js";
+import { cloneXmlPart } from "../xml/parser.js";
 import {
   findChildren,
   getChildren,
@@ -152,10 +153,10 @@ export function cloneDocument(doc: NormalizedDocument): NormalizedDocument {
     if (value === undefined) continue;
     if (value instanceof Map) {
       const copy = new Map<string, FXPNode[]>();
-      for (const [k, v] of value) copy.set(k, JSON.parse(JSON.stringify(v)) as FXPNode[]);
+      for (const [k, v] of value) copy.set(k, cloneXmlPart(v));
       xmlParts[key] = copy;
     } else {
-      xmlParts[key] = JSON.parse(JSON.stringify(value)) as FXPNode[];
+      xmlParts[key] = cloneXmlPart(value);
     }
   }
 
@@ -231,7 +232,7 @@ function applySinglePatch(
         const para = findParagraphById(patch.target, doc)!;
         executeAddComment(doc, para, patch, {
           defaultAuthor: options?.revisionAuthor ?? "docxtor",
-          date: options?.revisionDate ?? new Date().toISOString(),
+          date: options?.revisionDate ?? revisionTimestamp(),
           markers,
         });
         reNormalizeParagraph(doc, para);
