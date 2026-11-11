@@ -50,7 +50,6 @@ import { cloneXmlPart } from "../xml/parser.js";
 import {
   findChildren,
   getChildren,
-  getTagName,
   createElement,
 } from "../xml/helpers.js";
 import { createInsElement, createTrPrIns } from "./revision.js";
@@ -75,6 +74,7 @@ import {
   getBodyChildren,
   insertIntoBody,
   reNormalizeParagraph,
+  resolveHeaderFooterContainer,
 } from "./container-utils.js";
 import { executeInsertParagraph, executeDeleteParagraph } from "./paragraph-ops.js";
 import { executeAddComment } from "./comment-ops.js";
@@ -578,22 +578,16 @@ function executeAddTablePatch(
 // =============================================================================
 
 /**
- * Find a header/footer's root FXP node by type and variant.
+ * Find a header/footer and its root FXP node from a patch's `container`.
+ * Throws when the container names no part, or more than one.
  */
 function findContainerRoot(
   doc: NormalizedDocument,
-  containerType: "header" | "footer",
-  variant: string,
-): { rootNode: FXPNode; hf: import("../types.js").HeaderFooter } | undefined {
-  const map = containerType === "header" ? doc.headers : doc.footers;
-  for (const hf of map.values()) {
-    if (hf.variant === variant) {
-      const rootTag = containerType === "header" ? "w:hdr" : "w:ftr";
-      const rootNode = hf.xmlRef.find((n) => getTagName(n) === rootTag);
-      if (rootNode) return { rootNode, hf };
-    }
-  }
-  return undefined;
+  container: import("../types.js").HeaderFooterContainer,
+): { rootNode: FXPNode; hf: import("../types.js").HeaderFooter } {
+  const resolved = resolveHeaderFooterContainer(doc, container);
+  if ("error" in resolved) throw new Error(resolved.error);
+  return resolved;
 }
 
 /**
@@ -606,16 +600,9 @@ function executeAppendTextToContainer(
   markers: boolean,
 ): void {
   const container = patch.container!;
-  const result = findContainerRoot(doc, container.type, container.variant);
-  if (!result) {
-    throw new Error(
-      `${container.type} with variant "${container.variant}" not found`,
-    );
-  }
-
-  const { rootNode, hf } = result;
+  const { rootNode, hf } = findContainerRoot(doc, container);
   const rootChildren = getChildren(rootNode);
-  const prefix = container.type === "header" ? "hdr" : "ftr";
+  const prefix = hf.idPrefix;
 
   const segments = parseTextSegments(patch.text);
   let nextPIdx = hf.paragraphs.length;
@@ -710,14 +697,7 @@ function executeAddTableToContainer(
   revCtx?: RevisionContext,
 ): void {
   const container = patch.container!;
-  const result = findContainerRoot(doc, container.type, container.variant);
-  if (!result) {
-    throw new Error(
-      `${container.type} with variant "${container.variant}" not found`,
-    );
-  }
-
-  const { rootNode, hf } = result;
+  const { rootNode, hf } = findContainerRoot(doc, container);
   const rootChildren = getChildren(rootNode);
   const tableNode = buildTableNode(patch.headers, patch.rows);
 
@@ -729,7 +709,7 @@ function executeAddTableToContainer(
   rootChildren.push(tableNode);
 
   // Normalize and track
-  const prefix = container.type === "header" ? "hdr" : "ftr";
+  const prefix = hf.idPrefix;
   const nextTblIdx = hf.tables.length;
   const id = `${prefix}.${container.variant}.tbl${nextTblIdx}`;
   const normalized = normalizeTable(tableNode, id);

@@ -1,6 +1,6 @@
 # Patch reference for `docxtor edit`
 
-`edit` applies a JSON array of patches. Each patch has a `type` and, usually, a `target`: a paragraph id from `view` (`p12`, `tbl0.r1.c0.p0`, `hdr.default.p0`) or a native id (`para:4F2A1C7B`).
+`edit` applies a JSON array of patches. Each patch has a `type` and, usually, a `target`: a paragraph id from `view` (`p12`, `tbl0.r1.c0.p0`, `hdr.default.p0`) or a native id (`para:4F2A1C7B`). In a document with more than one section the header and footer ids carry the section, `hdr.s2.first.p0`.
 
 ## Contents
 
@@ -82,7 +82,7 @@ Tracked: the whole paragraph, including its mark, is a deletion. Untracked: the 
 { "type": "append_text", "text": "Schedule 9\n| Product | Price |\n| --- | --- |\n| VLSFO | USD 900 |\n- first point\n- second point" }
 ```
 
-Adds content at the end of the body: each line becomes a paragraph, a markdown table (with a `| --- |` line) becomes a Word table, and `- ` or `1. ` lines become a real list (indent two spaces per level). Add `"container": { "type": "footer", "variant": "default" }` to append to a header or footer instead.
+Adds content at the end of the body: each line becomes a paragraph, a markdown table (with a `| --- |` line) becomes a Word table, and `- ` or `1. ` lines become a real list (indent two spaces per level). Add `"container": { "type": "footer", "variant": "default" }` to append to a header or footer instead. If several sections have that header or footer, add `"section": 2` (the number shown in the `view` divider, `--- Footer (default, section 2) ---`); without it the patch fails and lists the sections.
 
 ## Comments
 

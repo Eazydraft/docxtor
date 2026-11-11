@@ -8,7 +8,7 @@
 
 import { XMLBuilder } from "fast-xml-parser";
 import type { FXPNode } from "../types.js";
-import { getDeclarationWhitespace } from "./parser.js";
+import { getDeclarationWhitespace, usesExpandedEmptyElements } from "./parser.js";
 
 /** Builder options must match parser options for correct roundtripping. */
 const BUILDER_OPTIONS = {
@@ -20,18 +20,33 @@ const BUILDER_OPTIONS = {
   processEntities: false,
   // Produce well-formed XML
   format: false,
-  // Write empty elements self-closed (<w:b/>), as Word does
-  suppressEmptyNode: true,
   suppressBooleanAttributes: false,
+  // The builder escapes ' to &apos; in every attribute value, whatever
+  // processEntities says, while the parser keeps a literal ' as it is. This
+  // runs before that escape, so hide the apostrophe from it; serializeXml
+  // puts it back. An &apos; in the source was never decoded, so it stays.
+  attributeValueProcessor: (_name: string, value: unknown): string =>
+    String(value).replaceAll("'", APOSTROPHE_SENTINEL),
 };
 
-const builder = new XMLBuilder(BUILDER_OPTIONS);
+/**
+ * Stands in for ' inside attribute values while the builder runs. U+FFFF is
+ * not a legal XML character, so no well-formed part can already contain it.
+ */
+const APOSTROPHE_SENTINEL = "\uFFFF";
+
+/** Writes empty elements self-closed (<w:b/>), as Word does in word/*.xml. */
+const builder = new XMLBuilder({ ...BUILDER_OPTIONS, suppressEmptyNode: true });
+
+/** Writes empty elements as a pair (<dc:title></dc:title>), as Word does in docProps/*.xml. */
+const expandedBuilder = new XMLBuilder({ ...BUILDER_OPTIONS, suppressEmptyNode: false });
 
 /**
  * Serialize a FXP ordered array back to an XML string.
  */
 export function serializeXml(nodes: FXPNode[]): string {
-  const xml = builder.build(nodes) as string;
+  const built = (usesExpandedEmptyElements(nodes) ? expandedBuilder : builder).build(nodes) as string;
+  const xml = built.includes(APOSTROPHE_SENTINEL) ? built.replaceAll(APOSTROPHE_SENTINEL, "'") : built;
   if (!xml.startsWith("<?xml")) return xml;
   // The builder writes the root directly after the declaration. Put back the
   // whitespace the source had there (or Word's \r\n for a new part).

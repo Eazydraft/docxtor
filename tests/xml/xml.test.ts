@@ -107,10 +107,46 @@ describe("xml parser + serializer round-trip", () => {
     expect(serializeXml(parseXml(xml))).toBe(xml);
   });
 
-  it("writes an empty element self-closed, and keeps whitespace-only text", () => {
-    expect(serializeXml(parseXml(`<w:r><w:t></w:t></w:r>`))).toBe(`<w:r><w:t/></w:r>`);
+  it("writes an empty element self-closed in a part that self-closes, and keeps whitespace-only text", () => {
+    expect(serializeXml(parseXml(`<w:r><w:rPr><w:b/></w:rPr><w:t></w:t></w:r>`))).toBe(`<w:r><w:rPr><w:b/></w:rPr><w:t/></w:r>`);
     const space = `<w:r><w:t xml:space="preserve"> </w:t></w:r>`;
     expect(serializeXml(parseXml(space))).toBe(space);
+  });
+
+  it("keeps open-close pairs in a part that has no self-closing tag (docProps)", () => {
+    const app = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<Properties><Company></Company><Pages>3</Pages></Properties>`;
+    expect(serializeXml(parseXml(app))).toBe(app);
+    const core = `<cp:coreProperties xmlns:dc="urn:dc"><dc:title></dc:title><dc:creator>Jane</dc:creator></cp:coreProperties>`;
+    expect(serializeXml(parseXml(core))).toBe(core);
+  });
+
+  it("still self-closes w:rPr children", () => {
+    const xml = `<w:rPr><w:b/></w:rPr>`;
+    expect(serializeXml(parseXml(xml))).toBe(xml);
+  });
+
+  it("a part with no empty element at all writes a new empty element self-closed", () => {
+    const parsed = parseXml(`<w:p><w:r><w:t>Hello</w:t></w:r></w:p>`);
+    getChildren(parsed[0]!).push(createElement("w:bookmarkEnd", [], { "w:id": "0" }));
+    expect(serializeXml(parsed)).toBe(`<w:p><w:r><w:t>Hello</w:t></w:r><w:bookmarkEnd w:id="0"/></w:p>`);
+  });
+
+  it("a clone of a part with open-close pairs keeps them", () => {
+    const xml = `<Properties><Company></Company></Properties>`;
+    expect(serializeXml(cloneXmlPart(parseXml(xml)))).toBe(xml);
+  });
+
+  it("keeps a literal apostrophe in an attribute value", () => {
+    const input = `<a x="Buyer's details" y='say "hi"' z="A &amp; B &apos;kept&apos;"/>`;
+    // x is unchanged; y is rewritten in double quotes with &quot;; an &apos; from the source stays
+    expect(serializeXml(parseXml(input))).toBe(`<a x="Buyer's details" y="say &quot;hi&quot;" z="A &amp; B &apos;kept&apos;"/>`);
+    const word = `<w:tblPr><w:tblDescription w:val="Buyer's and supplier's details"/></w:tblPr>`;
+    expect(serializeXml(parseXml(word))).toBe(word);
+  });
+
+  it("leaves an apostrophe in text content alone", () => {
+    const xml = `<w:r><w:t>the Seller's address &apos;here&apos;</w:t></w:r>`;
+    expect(serializeXml(parseXml(xml))).toBe(xml);
   });
 
   it.each([

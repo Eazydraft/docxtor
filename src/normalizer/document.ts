@@ -116,27 +116,7 @@ export function reNormalizeDocument(doc: NormalizedDocument): void {
   doc.footers = new Map<string, HeaderFooter>();
 
   if (includeHeadersFooters) {
-    const relMap = parseRelationshipsFxp(doc.xmlParts.documentRels);
-    const sectPrRefs = findHeaderFooterRefs(doc.xmlParts.document);
-
-    for (const ref of sectPrRefs) {
-      const target = relMap.get(ref.rId);
-      if (!target) continue;
-
-      const fullPath = `word/${target}`;
-
-      if (ref.type === "header") {
-        const fxp = doc.xmlParts.headers.get(fullPath);
-        if (fxp) {
-          doc.headers.set(ref.rId, normalizeHeaderFooter(fxp, "header", ref.variant, ref.rId));
-        }
-      } else {
-        const fxp = doc.xmlParts.footers.get(fullPath);
-        if (fxp) {
-          doc.footers.set(ref.rId, normalizeHeaderFooter(fxp, "footer", ref.variant, ref.rId));
-        }
-      }
-    }
+    normalizeHeadersFooters(doc);
   }
 
   // Post-pass: enrich listType on all paragraphs with listInfo
@@ -223,14 +203,52 @@ function parseRelationshipsFxp(
   return map;
 }
 
+/**
+ * Rebuild `doc.headers` and `doc.footers` from the section properties and
+ * the header/footer parts, in document order (section 1 first).
+ *
+ * In a document where one section has headers or footers the ids are
+ * `hdr.default.p0`. When more than one section has them, every id carries
+ * its section: `hdr.s1.first.p0`, `hdr.s2.first.p0`.
+ */
+export function normalizeHeadersFooters(doc: NormalizedDocument): void {
+  doc.headers = new Map<string, HeaderFooter>();
+  doc.footers = new Map<string, HeaderFooter>();
+
+  const relMap = parseRelationshipsFxp(doc.xmlParts.documentRels);
+  const resolved: { ref: HeaderFooterRef; fxp: FXPNode[] }[] = [];
+  const seen = new Set<string>();
+  for (const ref of findHeaderFooterRefs(doc.xmlParts.document)) {
+    const target = relMap.get(ref.rId);
+    if (!target) continue;
+    const parts = ref.type === "header" ? doc.xmlParts.headers : doc.xmlParts.footers;
+    const fxp = parts.get(`word/${target}`);
+    // A part referenced again by a later section keeps its first section
+    const key = `${ref.type}:${ref.rId}`;
+    if (!fxp || seen.has(key)) continue;
+    seen.add(key);
+    resolved.push({ ref, fxp });
+  }
+
+  const withSection = new Set(resolved.map((r) => r.ref.sectionIndex)).size > 1;
+  for (const { ref, fxp } of resolved) {
+    const hf = normalizeHeaderFooter(fxp, ref.type, ref.variant, ref.rId, ref.sectionIndex, withSection);
+    (ref.type === "header" ? doc.headers : doc.footers).set(ref.rId, hf);
+  }
+}
+
 export interface HeaderFooterRef {
   type: "header" | "footer";
   variant: string; // "default", "first", "even"
   rId: string;
+  /** 1-based index of the section, in document order. */
+  sectionIndex: number;
 }
 
 /**
- * Find header/footer references in w:sectPr elements.
+ * Find header/footer references in w:sectPr elements, in document order:
+ * the sections that end at a section-break paragraph first, in body order,
+ * then the last section (the w:sectPr that is a child of w:body).
  */
 export function findHeaderFooterRefs(documentFxp: FXPNode[]): HeaderFooterRef[] {
   const refs: HeaderFooterRef[] = [];
@@ -241,12 +259,10 @@ export function findHeaderFooterRefs(documentFxp: FXPNode[]): HeaderFooterRef[] 
   const bodyNode = findChild(docNode, "w:body");
   if (!bodyNode) return refs;
 
-  // sectPr can be a child of w:body (last section) or w:pPr (section break)
-  const sectPrs = findChildren(bodyNode, "w:sectPr");
-
-  // Also check the last paragraph for embedded sectPr
-  const bodyChildren = getChildren(bodyNode);
-  for (const child of bodyChildren) {
+  // A section's properties sit in the w:pPr of its last paragraph (a section
+  // break); the last section's are a child of w:body.
+  const sectPrs: FXPNode[] = [];
+  for (const child of getChildren(bodyNode)) {
     if (getTagName(child) === "w:p") {
       const pPr = findChild(child, "w:pPr");
       if (pPr) {
@@ -255,19 +271,21 @@ export function findHeaderFooterRefs(documentFxp: FXPNode[]): HeaderFooterRef[] 
       }
     }
   }
+  sectPrs.push(...findChildren(bodyNode, "w:sectPr"));
 
-  for (const sectPr of sectPrs) {
+  for (const [i, sectPr] of sectPrs.entries()) {
+    const sectionIndex = i + 1;
     const children = getChildren(sectPr);
     for (const child of children) {
       const tag = getTagName(child);
       if (tag === "w:headerReference") {
         const rId = getAttr(child, "r:id");
         const variant = getAttr(child, "w:type") ?? "default";
-        if (rId) refs.push({ type: "header", variant, rId });
+        if (rId) refs.push({ type: "header", variant, rId, sectionIndex });
       } else if (tag === "w:footerReference") {
         const rId = getAttr(child, "r:id");
         const variant = getAttr(child, "w:type") ?? "default";
-        if (rId) refs.push({ type: "footer", variant, rId });
+        if (rId) refs.push({ type: "footer", variant, rId, sectionIndex });
       }
     }
   }

@@ -148,3 +148,16 @@ export function planEdit(find: string, replace: string): PlannedEdit {
   }
   return m.replace === "" ? { kind: "delete", offset: m.offset, find: f } : { kind: "replace", ...m };
 }
+
+/**
+ * How a patch should name each paragraph: by its native id (`para:4F2A1C7B`) when the paragraph has one
+ * that no other paragraph shares, otherwise by its positional id. A native id names one paragraph whatever
+ * part it is in, so the patch cannot resolve to a paragraph in another header or footer.
+ */
+export function patchTargets(paras: Located[]): (para: NormalizedParagraph) => string {
+  const count = new Map<string, number>();
+  for (const { para } of paras) {
+    if (para.paraId) count.set(para.paraId.toUpperCase(), (count.get(para.paraId.toUpperCase()) ?? 0) + 1);
+  }
+  return (para) => (para.paraId && count.get(para.paraId.toUpperCase()) === 1 ? `para:${para.paraId}` : para.id);
+}

@@ -75,7 +75,7 @@ const md = doc.project("markdown");
 
 List paragraphs show a `{list:N LX}` hint where `N` is the numbering definition ID (`numId`) and `X` is the nesting level. Bullet items render with `- ` prefix, ordered items with `1. `, `2. `, etc., and multilevel items with compound prefixes like `1.2.1. `. To continue an existing list sequence when adding items, reuse the same `numId` from the hint.
 
-Every element has a stable ID (`p0`, `tbl0.r1.c0.p0`, `hdr.default.p0`, etc.) that patches use as targets.
+Every element has a stable ID (`p0`, `tbl0.r1.c0.p0`, `hdr.default.p0`, etc.) that patches use as targets. In a document with more than one section the header and footer ids carry the section, `hdr.s2.first.p0`, and the divider names it: `--- Header (first, section 2) ---`. See [ids.md](ids.md).
 
 **Inline formatting markers:** When `includeFormatting: true` is set, the markdown projection annotates text with inline markers showing existing formatting:
 

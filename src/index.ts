@@ -483,6 +483,7 @@ export type {
   RemoveListPatch,
   SetListPropertiesPatch,
   HeaderFooterVariant,
+  HeaderFooterContainer,
   FormattingUpdate,
   StyleInfo,
   PatchResult,

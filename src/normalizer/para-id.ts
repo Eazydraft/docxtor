@@ -233,12 +233,13 @@ export function stampNewParagraphs(
  * its positional id prefix (`hdr.` / `ftr.` → that header/footer, else body).
  */
 export function findPartRootForId(doc: NormalizedDocument, id: string): FXPNode | undefined {
-  const m = id.match(/^(hdr|ftr)\.([^.]+)\./);
+  const m = id.match(/^(hdr|ftr)\./);
   if (m) {
     const map = m[1] === "hdr" ? doc.headers : doc.footers;
     const rootTag = m[1] === "hdr" ? "w:hdr" : "w:ftr";
     for (const hf of map.values()) {
-      if (hf.variant === m[2]) {
+      // `hdr.default.` in a single-section document, `hdr.s2.default.` otherwise
+      if (id.startsWith(`${hf.idPrefix}.${hf.variant}.`)) {
         return hf.xmlRef.find((n) => getTagName(n) === rootTag);
       }
     }

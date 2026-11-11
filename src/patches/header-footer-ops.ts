@@ -23,7 +23,7 @@ import {
   getTagName,
   getAttr,
 } from "../xml/helpers.js";
-import { normalizeHeaderFooter } from "../normalizer/header-footer.js";
+import { normalizeHeadersFooters } from "../normalizer/document.js";
 import { buildFieldRuns } from "./field-codes.js";
 import type { RevisionContext } from "./revision.js";
 import { createInsElement } from "./revision.js";
@@ -166,13 +166,10 @@ function executeAddHeaderFooter(
   // 7. Store the new FXP part
   existingParts.set(fullPath, fxpPart);
 
-  // 8. Normalize and add to doc.headers/doc.footers
-  const hf = normalizeHeaderFooter(fxpPart, type, variant, rId);
-  if (type === "header") {
-    doc.headers.set(rId, hf);
-  } else {
-    doc.footers.set(rId, hf);
-  }
+  // 8. Rebuild doc.headers/doc.footers. A new part can turn a document with
+  // headers in one section into one with headers in two, which changes the
+  // ids of the parts that were already there.
+  normalizeHeadersFooters(doc);
 }
 
 /**
@@ -225,12 +222,8 @@ function executeRemoveHeaderFooter(
     parts.delete(fullPath);
   }
 
-  // 7. Remove from normalized maps
-  if (type === "header") {
-    doc.headers.delete(rId);
-  } else {
-    doc.footers.delete(rId);
-  }
+  // 7. Rebuild the normalized maps (see executeAddHeaderFooter)
+  normalizeHeadersFooters(doc);
 }
 
 // =============================================================================

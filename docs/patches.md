@@ -90,6 +90,8 @@ To append to a header or footer instead of the body, use `container`:
 }
 ```
 
+When more than one section has a header or footer of that variant, say which with `section` (1-based, in document order): `container: { type: "header", variant: "first", section: 2 }`. Without it the patch fails validation with a message that lists the sections. The same applies to `container` on `add_table` and `add_list`.
+
 **Field placeholders:** Text supports `{{FIELD}}` placeholders that are converted to proper OOXML field codes. Supported fields: `{{PAGE}}` (current page number), `{{NUMPAGES}}` (total page count), `{{DATE}}`, `{{TIME}}`, `{{FILENAME}}`. Field placeholders and inline formatting can be combined in the same text:
 
 ```ts

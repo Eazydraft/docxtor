@@ -9,6 +9,7 @@
  */
 
 import type {
+  HeaderFooter,
   NormalizedDocument,
   NormalizedParagraph,
   NormalizedTable,
@@ -234,4 +235,50 @@ export function reNormalizeParagraph(doc: NormalizedDocument, para: NormalizedPa
   if (doc.xmlParts.numbering) {
     enrichListType(para, doc.xmlParts.numbering);
   }
+}
+
+/**
+ * Resolve a `container: { type, variant, section? }` to one header or footer.
+ *
+ * Without `section`, the container must name exactly one part: when several
+ * sections have a header or footer of that variant, the result is an error
+ * that lists them. With `section`, that section must have one.
+ */
+export function resolveHeaderFooterContainer(
+  doc: NormalizedDocument,
+  container: { type: "header" | "footer"; variant: string; section?: number },
+): { hf: HeaderFooter; rootNode: FXPNode } | { error: string } {
+  const map = container.type === "header" ? doc.headers : doc.footers;
+  const candidates = [...map.values()].filter((hf) => hf.variant === container.variant);
+  if (candidates.length === 0) {
+    return { error: `No ${container.type} with variant "${container.variant}" found` };
+  }
+
+  const sections = candidates.map((hf) => hf.sectionIndex);
+  const list =
+    sections.length > 1
+      ? `sections ${sections.slice(0, -1).join(", ")} and ${sections[sections.length - 1]}`
+      : `section ${sections[0]}`;
+
+  let hf: HeaderFooter | undefined;
+  if (container.section === undefined) {
+    if (candidates.length > 1) {
+      return {
+        error: `${container.type} '${container.variant}' exists in ${list}; say which with \`section\``,
+      };
+    }
+    hf = candidates[0];
+  } else {
+    hf = candidates.find((c) => c.sectionIndex === container.section);
+    if (!hf) {
+      return {
+        error: `No ${container.type} with variant "${container.variant}" in section ${container.section}; it exists in ${list}`,
+      };
+    }
+  }
+
+  const rootTag = container.type === "header" ? "w:hdr" : "w:ftr";
+  const rootNode = hf!.xmlRef.find((n) => getTagName(n) === rootTag);
+  if (!rootNode) return { error: `${container.type} part has no ${rootTag} root` };
+  return { hf: hf!, rootNode };
 }

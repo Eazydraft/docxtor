@@ -43,7 +43,28 @@ export function parseXml(xml: string): FXPNode[] {
   // element. Remember it so serializeXml can write the part back unchanged.
   const m = DECLARATION_RE.exec(xml);
   if (m) declarationWhitespace.set(nodes, m[1]!);
+  // Word writes empty elements self-closed in word/*.xml and as an open-close
+  // pair in docProps/*.xml. The form is a property of the part, so remember
+  // which one this part uses.
+  if (!xml.includes("/>") && EMPTY_PAIR_RE.test(xml)) expandedEmptyElements.add(nodes);
   return nodes;
+}
+
+/** An empty element written as an open-close pair: `<dc:title></dc:title>`. */
+const EMPTY_PAIR_RE = /<([^\s<>\/!?]+)(?:\s[^<>]*)?><\/\1>/;
+
+/**
+ * Parsed parts that write empty elements as an open-close pair: parts with
+ * at least one such pair and no self-closing tag. Every other part, and every
+ * part docxtor creates, is written self-closed.
+ */
+const expandedEmptyElements = new WeakSet<FXPNode[]>();
+
+/**
+ * Whether a part writes empty elements as `<a></a>` (true) or `<a/>` (false).
+ */
+export function usesExpandedEmptyElements(nodes: FXPNode[]): boolean {
+  return expandedEmptyElements.has(nodes);
 }
 
 /** The XML declaration at the start of a part, capturing the whitespace after it. */
@@ -67,11 +88,13 @@ export function getDeclarationWhitespace(nodes: FXPNode[]): string {
 }
 
 /**
- * Deep-clone a parsed part, keeping the declaration whitespace recorded for it.
+ * Deep-clone a parsed part, keeping what was recorded for it at parse time:
+ * the declaration whitespace and the form of its empty elements.
  */
 export function cloneXmlPart(nodes: FXPNode[]): FXPNode[] {
   const copy = JSON.parse(JSON.stringify(nodes)) as FXPNode[];
   const ws = declarationWhitespace.get(nodes);
   if (ws !== undefined) declarationWhitespace.set(copy, ws);
+  if (expandedEmptyElements.has(nodes)) expandedEmptyElements.add(copy);
   return copy;
 }
