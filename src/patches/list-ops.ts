@@ -38,6 +38,7 @@ import {
   findNormalizedContainer,
   deriveNewParagraphId,
   reNormalizeParagraph as reNormalize,
+  resolveHeaderFooterContainer,
 } from "./container-utils.js";
 import { stampNewParagraphs, findPartRootForId } from "../normalizer/para-id.js";
 
@@ -95,28 +96,20 @@ export function executeAddList(
 
   if (patch.container) {
     // Insert into header/footer
-    const map = patch.container.type === "header" ? doc.headers : doc.footers;
-    for (const hf of map.values()) {
-      if (hf.variant === patch.container.variant) {
-        const rootTag = hf.type === "header" ? "w:hdr" : "w:ftr";
-        const rootNode = hf.xmlRef.find((n) => getTagName(n) === rootTag);
-        if (rootNode) {
-          const rootChildren = getChildren(rootNode);
-          stampNewParagraphs(doc, nodes, rootNode);
-          rootChildren.push(...nodes);
-          const prefix = patch.container.type === "header" ? "hdr" : "ftr";
-          let nextPIdx = hf.paragraphs.length;
-          for (const node of nodes) {
-            const normalized = normalizeParagraph(
-              node,
-              `${prefix}.${patch.container.variant}.p${nextPIdx++}`,
-            );
-            if (doc.xmlParts.numbering) enrichListType(normalized, doc.xmlParts.numbering);
-            hf.paragraphs.push(normalized);
-          }
-        }
-        return;
-      }
+    const resolved = resolveHeaderFooterContainer(doc, patch.container);
+    if ("error" in resolved) throw new Error(resolved.error);
+    const { hf, rootNode } = resolved;
+    const rootChildren = getChildren(rootNode);
+    stampNewParagraphs(doc, nodes, rootNode);
+    rootChildren.push(...nodes);
+    let nextPIdx = hf.paragraphs.length;
+    for (const node of nodes) {
+      const normalized = normalizeParagraph(
+        node,
+        `${hf.idPrefix}.${hf.variant}.p${nextPIdx++}`,
+      );
+      if (doc.xmlParts.numbering) enrichListType(normalized, doc.xmlParts.numbering);
+      hf.paragraphs.push(normalized);
     }
     return;
   }

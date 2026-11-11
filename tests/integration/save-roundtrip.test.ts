@@ -4,14 +4,16 @@
  *
  * This holds for XML written the way Word, LibreOffice and Google Docs write
  * it. The parser does not keep formatting inside a tag, so a part with line
- * breaks between attributes, single-quoted attributes or `<a></a>` for an
- * empty element comes back as equivalent XML, not the same bytes.
+ * breaks between attributes or single-quoted attributes comes back as
+ * equivalent XML, not the same bytes. Empty elements keep the form the part
+ * uses, self-closed or an open-close pair, but a part that mixes the two is
+ * written self-closed.
  */
 
 import { describe, it, expect } from "vitest";
 import JSZip from "jszip";
 import { Docxtor } from "../../src/index.js";
-import { createLeaseDocx, createBodyDocx, createContentControlDocx } from "../fixtures/create-docx.js";
+import { createLeaseDocx, createBodyDocx, createContentControlDocx, createTwoSectionDocx } from "../fixtures/create-docx.js";
 
 /** Every file in a .docx (directory entries left out), as path → bytes. */
 async function parts(buffer: Buffer): Promise<Map<string, Buffer>> {
@@ -54,6 +56,8 @@ describe("a save with no patches", () => {
     ["lease (numbering, table, header, footer, footnotes, tracked changes, properties)", () => createLeaseDocx()],
     ["Word-style single-line XML with CRLF", () => wordStyleDocx()],
     ["content controls (inline, around a cell, around paragraphs, nested, in a header)", () => createContentControlDocx()],
+    ["two sections, empty docProps properties as open-close pairs, an apostrophe in an attribute", () => createTwoSectionDocx()],
+    ["two sections with native paragraph ids", () => createTwoSectionDocx({ withParaIds: true })],
   ])("returns every part byte for byte: %s", async (_name, make) => {
     const input = await make();
     const output = await (await Docxtor.load(input)).toBuffer();
@@ -72,6 +76,30 @@ describe("a save with no patches", () => {
     );
     expect(results.some((r) => !r.success)).toBe(true);
     expect(await changedParts(input, await doc.toBuffer())).toEqual([]);
+  });
+});
+
+describe("docProps parts", () => {
+  it("come back with their empty properties as open-close pairs", async () => {
+    const input = await createTwoSectionDocx();
+    const output = await (await Docxtor.load(input)).toBuffer();
+    const [before, after] = [await parts(input), await parts(output)];
+    for (const path of ["docProps/core.xml", "docProps/app.xml"]) {
+      expect(after.get(path)!.toString()).toBe(before.get(path)!.toString());
+    }
+    expect(after.get("docProps/core.xml")!.toString()).toContain("<dc:title></dc:title>");
+    expect(after.get("docProps/app.xml")!.toString()).toContain("<Company></Company>");
+    // word/*.xml in the same package still self-closes
+    expect(after.get("word/footer1.xml")!.toString()).toMatch(/<w:p\/>/);
+  });
+
+  it("keep the pair form when a property is set", async () => {
+    const doc = await Docxtor.load(await createTwoSectionDocx());
+    doc.setCoreProperties({ title: "Master Agreement" });
+    const core = (await parts(await doc.toBuffer())).get("docProps/core.xml")!.toString();
+    expect(core).toContain("<dc:title>Master Agreement</dc:title>");
+    expect(core).toContain("<dc:subject></dc:subject>");
+    expect(core).not.toContain("/>");
   });
 });
 

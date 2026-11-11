@@ -25,14 +25,20 @@ import { normalizeTable } from "./table.js";
  * @param type - "header" or "footer"
  * @param variant - "default", "first", or "even"
  * @param rId - The relationship ID
+ * @param sectionIndex - 1-based index of the section that references the part
+ * @param withSection - Put the section into the ids (`hdr.s2.first.p0`); set
+ *   when more than one section of the document has headers or footers
  */
 export function normalizeHeaderFooter(
   fxpNodes: FXPNode[],
   type: "header" | "footer",
   variant: string,
   rId: string,
+  sectionIndex: number = 1,
+  withSection: boolean = false,
 ): HeaderFooter {
-  const prefix = type === "header" ? "hdr" : "ftr";
+  const idPrefix = headerFooterIdPrefix(type, sectionIndex, withSection);
+  const prefix = idPrefix;
 
   // Find the root element (w:hdr or w:ftr)
   const rootTag = type === "header" ? "w:hdr" : "w:ftr";
@@ -77,8 +83,29 @@ export function normalizeHeaderFooter(
     type,
     variant,
     rId,
+    sectionIndex,
+    references: [{ sectionIndex, variant, rId }],
+    idPrefix,
     paragraphs,
     tables,
     xmlRef: fxpNodes,
   };
+}
+
+/**
+ * The start of every id inside a header or footer: `hdr` / `ftr`, or
+ * `hdr.s2` / `ftr.s2` when the ids carry the section.
+ */
+export function headerFooterIdPrefix(
+  type: "header" | "footer",
+  sectionIndex: number,
+  withSection: boolean,
+): string {
+  const base = type === "header" ? "hdr" : "ftr";
+  return withSection ? `${base}.s${sectionIndex}` : base;
+}
+
+/** Whether a header or footer's ids carry its section (`hdr.s2.first.p0`). */
+export function idsCarrySection(hf: HeaderFooter): boolean {
+  return hf.idPrefix !== (hf.type === "header" ? "hdr" : "ftr");
 }

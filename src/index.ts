@@ -486,6 +486,8 @@ export type {
   RemoveListPatch,
   SetListPropertiesPatch,
   HeaderFooterVariant,
+  HeaderFooterContainer,
+  HeaderFooterReference,
   FormattingUpdate,
   StyleInfo,
   PatchResult,

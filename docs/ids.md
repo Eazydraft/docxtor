@@ -13,6 +13,8 @@
 | Footer paragraph | `ftr.{variant}.p{n}` | `ftr.default.p0` |
 | Footer table | `ftr.{variant}.tbl{n}` | `ftr.default.tbl0` |
 
+In a document where more than one section has headers or footers, their ids carry the section: `hdr.s2.first.p0`, `ftr.s1.default.tbl0`. Sections are numbered from 1 in document order, and every header and footer id in such a document has the `s{n}` part, section 1 included. `HeaderFooter.sectionIndex` gives the section and `HeaderFooter.idPrefix` the start of its ids (`hdr` or `hdr.s2`). A part that several sections share appears once, under the first section that references it; `HeaderFooter.references` lists every reference.
+
 IDs are positional and stable within a single editing session. They are reassigned if you re-load the document.
 
 Paragraphs and table cells inside a content control are numbered like any other.

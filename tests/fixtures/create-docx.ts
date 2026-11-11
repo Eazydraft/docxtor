@@ -1132,3 +1132,110 @@ export async function createContentControlDocx(): Promise<Buffer> {
     includeDocRels: true,
   });
 }
+
+export interface TwoSectionDocxOptions {
+  /** Stamp a unique w14:paraId on every paragraph, as Word does. Default: false. */
+  withParaIds?: boolean;
+}
+
+/**
+ * Create a DOCX with two sections that each have their own headers and
+ * footers, written the way Word writes XML (one line, CRLF after the
+ * declaration, self-closed empty elements in word/*.xml, open-close pairs in
+ * docProps/*.xml).
+ *
+ *   Section 1 (ends at the section-break paragraph p1):
+ *     first-page header  header1.xml  "Section one first-page header"
+ *     first-page footer  footer1.xml  (one empty paragraph)
+ *   Section 2 (the body-level w:sectPr):
+ *     first-page header  header2.xml  "Section two first-page header"
+ *     first-page footer  footer2.xml  "Prepared by Acme Legal"
+ *     default header     header3.xml  "Running header"
+ *
+ * docProps/core.xml and docProps/app.xml have empty properties
+ * (`<dc:title></dc:title>`, `<Company></Company>`), and the body has a table
+ * whose description holds an apostrophe in an attribute value.
+ */
+export async function createTwoSectionDocx(options: TwoSectionDocxOptions = {}): Promise<Buffer> {
+  const W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+  const R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+  const DECL = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n`;
+  const ns = `xmlns:w="${W}" xmlns:r="${R}"${options.withParaIds ? ` xmlns:w14="${W14_NS}"` : ""}`;
+  let next = 0x0b000001;
+  const p = (inner: string): string => {
+    const id = options.withParaIds ? ` w14:paraId="${(next++).toString(16).toUpperCase().padStart(8, "0")}"` : "";
+    return inner ? `<w:p${id}>${inner}</w:p>` : `<w:p${id}/>`;
+  };
+  const text = (t: string): string => `<w:r><w:t>${t}</w:t></w:r>`;
+  const part = (root: "hdr" | "ftr", body: string): string => `${DECL}<w:${root} ${ns}>${body}</w:${root}>`;
+
+  const section1 =
+    `<w:sectPr><w:headerReference w:type="first" r:id="rId1"/><w:footerReference w:type="first" r:id="rId2"/>` +
+    `<w:pgSz w:w="12240" w:h="15840"/><w:titlePg/></w:sectPr>`;
+  const section2 =
+    `<w:sectPr><w:headerReference w:type="default" r:id="rId5"/><w:headerReference w:type="first" r:id="rId3"/>` +
+    `<w:footerReference w:type="first" r:id="rId4"/><w:pgSz w:w="12240" w:h="15840"/><w:titlePg/></w:sectPr>`;
+  const table =
+    `<w:tbl><w:tblPr><w:tblDescription w:val="Buyer's and supplier's details"/></w:tblPr>` +
+    `<w:tr><w:tc>${p(text("Buyer"))}</w:tc><w:tc>${p(text("Supplier"))}</w:tc></w:tr></w:tbl>`;
+  const documentXml =
+    `${DECL}<w:document ${ns}><w:body>` +
+    p(text("Cover page")) +
+    p(`<w:pPr>${section1}</w:pPr>${text("End of section one")}`) +
+    p(text("Body of section two")) +
+    table +
+    p("") +
+    `${section2}</w:body></w:document>`;
+
+  const rel = (id: string, kind: "header" | "footer", target: string): string =>
+    `<Relationship Id="${id}" Type="${R}/${kind}" Target="${target}"/>`;
+  const docRels =
+    `${DECL}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+    rel("rId1", "header", "header1.xml") + rel("rId2", "footer", "footer1.xml") +
+    rel("rId3", "header", "header2.xml") + rel("rId4", "footer", "footer2.xml") +
+    rel("rId5", "header", "header3.xml") +
+    `</Relationships>`;
+  const override = (name: string, type: string): string => `<Override PartName="${name}" ContentType="${type}"/>`;
+  const WML = "application/vnd.openxmlformats-officedocument.wordprocessingml";
+  const contentTypes =
+    `${DECL}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+    `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
+    `<Default Extension="xml" ContentType="application/xml"/>` +
+    override("/word/document.xml", `${WML}.document.main+xml`) +
+    ["header1", "header2", "header3"].map((n) => override(`/word/${n}.xml`, `${WML}.header+xml`)).join("") +
+    ["footer1", "footer2"].map((n) => override(`/word/${n}.xml`, `${WML}.footer+xml`)).join("") +
+    override("/docProps/core.xml", "application/vnd.openxmlformats-package.core-properties+xml") +
+    override("/docProps/app.xml", "application/vnd.openxmlformats-officedocument.extended-properties+xml") +
+    `</Types>`;
+  const rootRels =
+    `${DECL}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+    `<Relationship Id="rId1" Type="${R}/officeDocument" Target="word/document.xml"/>` +
+    `<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>` +
+    `<Relationship Id="rId3" Type="${R}/extended-properties" Target="docProps/app.xml"/>` +
+    `</Relationships>`;
+  const coreXml =
+    `${DECL}<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" ` +
+    `xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" ` +
+    `xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title></dc:title><dc:subject></dc:subject>` +
+    `<dc:creator>Jane Doe</dc:creator><cp:keywords></cp:keywords><cp:lastModifiedBy>Jane Doe</cp:lastModifiedBy>` +
+    `<dcterms:created xsi:type="dcterms:W3CDTF">2026-01-05T09:00:00Z</dcterms:created></cp:coreProperties>`;
+  const appXml =
+    `${DECL}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" ` +
+    `xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Template>Normal.dotm</Template>` +
+    `<Pages>2</Pages><Application>Microsoft Office Word</Application><Manager></Manager><Company></Company>` +
+    `<AppVersion>16.0000</AppVersion></Properties>`;
+
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", contentTypes);
+  zip.file("_rels/.rels", rootRels);
+  zip.file("word/document.xml", documentXml);
+  zip.file("word/_rels/document.xml.rels", docRels);
+  zip.file("word/header1.xml", part("hdr", p(text("Section one first-page header"))));
+  zip.file("word/footer1.xml", part("ftr", p("")));
+  zip.file("word/header2.xml", part("hdr", p(text("Section two first-page header"))));
+  zip.file("word/footer2.xml", part("ftr", p(text("Prepared by Acme Legal"))));
+  zip.file("word/header3.xml", part("hdr", p(text("Running header"))));
+  zip.file("docProps/core.xml", coreXml);
+  zip.file("docProps/app.xml", appXml);
+  return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }) as Promise<Buffer>;
+}

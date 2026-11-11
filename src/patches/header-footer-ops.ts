@@ -23,7 +23,7 @@ import {
   getTagName,
   getAttr,
 } from "../xml/helpers.js";
-import { normalizeHeaderFooter } from "../normalizer/header-footer.js";
+import { findHeaderFooterRefs, normalizeHeadersFooters } from "../normalizer/document.js";
 import { buildFieldRuns } from "./field-codes.js";
 import type { RevisionContext } from "./revision.js";
 import { createInsElement } from "./revision.js";
@@ -166,13 +166,10 @@ function executeAddHeaderFooter(
   // 7. Store the new FXP part
   existingParts.set(fullPath, fxpPart);
 
-  // 8. Normalize and add to doc.headers/doc.footers
-  const hf = normalizeHeaderFooter(fxpPart, type, variant, rId);
-  if (type === "header") {
-    doc.headers.set(rId, hf);
-  } else {
-    doc.footers.set(rId, hf);
-  }
+  // 8. Rebuild doc.headers/doc.footers. A new part can turn a document with
+  // headers in one section into one with headers in two, which changes the
+  // ids of the parts that were already there.
+  normalizeHeadersFooters(doc);
 }
 
 /**
@@ -211,26 +208,22 @@ function executeRemoveHeaderFooter(
   const target = findRelationshipTarget(doc, rId);
   const fullPath = target ? `word/${target}` : undefined;
 
-  // 4. Remove the relationship
-  removeRelationship(doc, rId);
+  // 4. Remove the relationship, unless another section still references it
+  const relationshipInUse = findHeaderFooterRefs(doc.xmlParts.document).some(
+    (ref) => ref.type === type && ref.rId === rId,
+  );
+  if (!relationshipInUse) removeRelationship(doc, rId);
 
-  // 5. Remove content type override
-  if (fullPath) {
+  // 5-6. Remove the part and its content type override, unless a remaining
+  // relationship still targets the part (a part can be shared by sections)
+  if (fullPath && target && !isRelationshipTargetInUse(doc, target)) {
     removeContentTypeOverride(doc, fullPath);
-  }
-
-  // 6. Remove from xmlParts
-  const parts = type === "header" ? doc.xmlParts.headers : doc.xmlParts.footers;
-  if (fullPath) {
+    const parts = type === "header" ? doc.xmlParts.headers : doc.xmlParts.footers;
     parts.delete(fullPath);
   }
 
-  // 7. Remove from normalized maps
-  if (type === "header") {
-    doc.headers.delete(rId);
-  } else {
-    doc.footers.delete(rId);
-  }
+  // 7. Rebuild the normalized maps (see executeAddHeaderFooter)
+  normalizeHeadersFooters(doc);
 }
 
 // =============================================================================
@@ -340,6 +333,15 @@ function findRelationshipTarget(
     }
   }
   return undefined;
+}
+
+/**
+ * Whether any relationship in document.xml.rels targets the given file.
+ */
+function isRelationshipTargetInUse(doc: NormalizedDocument, target: string): boolean {
+  const relsNode = doc.xmlParts.documentRels?.find((n) => getTagName(n) === "Relationships");
+  if (!relsNode) return false;
+  return findChildren(relsNode, "Relationship").some((rel) => getAttr(rel, "Target") === target);
 }
 
 /**

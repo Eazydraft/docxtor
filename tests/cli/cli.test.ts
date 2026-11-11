@@ -4,12 +4,13 @@
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { execFile } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { Docxtor } from "../../src/index.js";
-import { createLeaseDocx, createMultiParagraphDocx, createContentControlDocx } from "../fixtures/create-docx.js";
+import { createLeaseDocx, createMultiParagraphDocx, createContentControlDocx, createTwoSectionDocx } from "../fixtures/create-docx.js";
+import { allParagraphs, patchTargets } from "../../cli/paragraphs.js";
 
 const run = promisify(execFile);
 const CLI = join(import.meta.dirname, "../../cli/docxtor.ts");
@@ -288,4 +289,95 @@ describe("docxtor CLI", () => {
     expect(bad.err).toContain('"Lease" is not an option of the dropdown content control "Type of contract"');
     expect(bad.err).toContain('choose one of: "One-off purchase", "Ongoing supply"');
   }, 30_000);
+
+  describe("headers and footers in a document with two sections", () => {
+    const partText = async (file: string, path: string): Promise<string> => {
+      const JSZip = (await import("jszip")).default;
+      return (await JSZip.loadAsync(await readFile(file))).file(path)!.async("string");
+    };
+
+    it.each([
+      ["positional ids", false],
+      ["native paragraph ids", true],
+    ])("replace --find on text only in section 2's footer writes that footer (%s)", async (_name, withParaIds) => {
+      const file = join(dir, `sections-${withParaIds}.docx`);
+      await writeFile(file, await createTwoSectionDocx({ withParaIds }));
+      const out = join(dir, `sections-${withParaIds}-out.docx`);
+
+      const r = await cli("replace", file, "-o", out, "--find", "Acme Legal", "--replace", "Acme LLP", "--author", "Jane");
+      expect(r.code).toBe(0);
+      expect(r.out).toContain("1 replacement in 1 paragraph (ftr.s2.first.p0)");
+
+      expect(await partText(out, "word/footer2.xml")).toContain("LLP");
+      expect(await partText(out, "word/footer1.xml")).toBe(await partText(file, "word/footer1.xml"));
+      const footers = [...(await Docxtor.load(out)).getFooters().values()];
+      expect(footers.map((f) => f.paragraphs[0]!.text)).toEqual(["", "Prepared by Acme LLP"]);
+    }, 30_000);
+
+    it("replace --all changes the same word in both sections' headers", async () => {
+      const file = join(dir, "sections-all.docx");
+      await writeFile(file, await createTwoSectionDocx());
+      const out = join(dir, "sections-all-out.docx");
+      const r = await cli("replace", file, "-o", out, "--find", "first-page", "--replace", "cover", "--all", "--untracked");
+      expect(r.code).toBe(0);
+      expect(r.out).toContain("2 replacements in 2 paragraphs (hdr.s1.first.p0, hdr.s2.first.p0)");
+      const headers = [...(await Docxtor.load(out)).getHeaders().values()];
+      expect(headers.map((h) => h.paragraphs[0]!.text)).toEqual(["Section one cover header", "Running header", "Section two cover header"]);
+    }, 30_000);
+
+    it("replace --in takes a section id", async () => {
+      const file = join(dir, "sections-in.docx");
+      await writeFile(file, await createTwoSectionDocx());
+      const out = join(dir, "sections-in-out.docx");
+      const r = await cli("replace", file, "-o", out, "--find", "header", "--replace", "heading", "--in", "hdr.s2.first.p0", "--untracked");
+      expect(r.code).toBe(0);
+      const headers = [...(await Docxtor.load(out)).getHeaders().values()];
+      expect(headers.map((h) => h.paragraphs[0]!.text)).toEqual(["Section one first-page header", "Running header", "Section two first-page heading"]);
+    }, 30_000);
+
+    it("comment anchors in section 2's header and reports its id", async () => {
+      const file = join(dir, "sections-comment.docx");
+      await writeFile(file, await createTwoSectionDocx());
+      const out = join(dir, "sections-comment-out.docx");
+      const r = await cli("comment", file, "-o", out, "--find", "Section two", "--text", "Rename?");
+      expect(r.code).toBe(0);
+      expect(r.out).toContain("comment on [hdr.s2.first.p0]");
+      expect(await partText(out, "word/header2.xml")).toContain("w:commentRangeStart");
+      expect(await partText(out, "word/header1.xml")).not.toContain("w:commentRangeStart");
+    }, 30_000);
+
+    it("view shows the section in the dividers and ids", async () => {
+      const file = join(dir, "sections-view.docx");
+      await writeFile(file, await createTwoSectionDocx());
+      const v = (await cli("view", file)).out;
+      expect(v).toContain("--- Header (first, section 1) ---\n[hdr.s1.first.p0] Section one first-page header");
+      expect(v).toContain("--- Footer (first, section 2) ---\n[ftr.s2.first.p0] Prepared by Acme Legal");
+      expect(v.indexOf("section 1")).toBeLessThan(v.indexOf("section 2"));
+    }, 30_000);
+  });
+
+  describe("patchTargets", () => {
+    it("names a paragraph by its native id when it has one, by position otherwise", async () => {
+      const withIds = await Docxtor.load(await createTwoSectionDocx({ withParaIds: true }));
+      const paras = allParagraphs(withIds);
+      const target = patchTargets(paras);
+      const footer = paras.find((l) => l.para.id === "ftr.s2.first.p0")!.para;
+      expect(target(footer)).toBe(`para:${footer.paraId}`);
+
+      const without = await Docxtor.load(await createTwoSectionDocx());
+      const plain = allParagraphs(without);
+      expect(patchTargets(plain)(plain[0]!.para)).toBe("p0");
+    });
+
+    it("falls back to the positional id when two paragraphs share a native id", async () => {
+      const doc = await Docxtor.load(await createTwoSectionDocx({ withParaIds: true }));
+      const paras = allParagraphs(doc);
+      const [a, b] = [paras[0]!.para, paras[1]!.para];
+      b.paraId = a.paraId;
+      const target = patchTargets(paras);
+      expect(target(a)).toBe(a.id);
+      expect(target(b)).toBe(b.id);
+      expect(target(paras[2]!.para)).toBe(`para:${paras[2]!.para.paraId}`);
+    });
+  });
 });
