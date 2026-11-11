@@ -438,15 +438,36 @@ export function executeInsertText(
  * The run an insertion at `offset` goes into or next to: the first run whose
  * range reaches the offset, else the last run. Text inserted at the boundary
  * of two runs therefore joins the earlier one.
+ *
+ * The exception is a boundary where a content control starts or ends. There
+ * the text must land on the anchor's side: inserted before an anchor, it
+ * joins the run the anchor starts in, so text put before a word that follows
+ * a control stays outside the control (and text put before a control's first
+ * word goes inside it).
  */
 export function findInsertTargetRun(
   paragraph: NormalizedParagraph,
   offset: number,
+  position: "before" | "after" = "after",
 ): RunMapping | undefined {
-  for (const run of paragraph.runs) {
-    if (offset >= run.startOffset && offset <= run.endOffset) return run;
+  const runs = paragraph.runs;
+  for (let i = 0; i < runs.length; i++) {
+    const run = runs[i]!;
+    if (offset >= run.startOffset && offset <= run.endOffset) {
+      const next = runs[i + 1];
+      if (
+        position === "before" &&
+        offset === run.endOffset &&
+        next !== undefined &&
+        next.startOffset === offset &&
+        next.control !== run.control
+      ) {
+        return next;
+      }
+      return run;
+    }
   }
-  return paragraph.runs[paragraph.runs.length - 1];
+  return runs[runs.length - 1];
 }
 
 /**
@@ -459,7 +480,7 @@ function executeInsertTextDirect(
   insertOffset: number,
   markers: boolean,
 ): void {
-  const targetRun = findInsertTargetRun(paragraph, insertOffset);
+  const targetRun = findInsertTargetRun(paragraph, insertOffset, patch.position);
   if (!targetRun) {
     throw new Error(
       `No runs found in paragraph "${paragraph.id}" for insertion`,
@@ -517,7 +538,7 @@ function executeInsertTextRevision(
   revCtx: RevisionContext,
   markers: boolean,
 ): void {
-  const targetRun = findInsertTargetRun(paragraph, insertOffset);
+  const targetRun = findInsertTargetRun(paragraph, insertOffset, patch.position);
   if (!targetRun) {
     throw new Error(
       `No runs found in paragraph "${paragraph.id}" for insertion`,

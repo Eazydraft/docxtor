@@ -93,6 +93,8 @@ Filling an empty control:
 - `w:showingPlcHdr` is removed and `w:placeholder` is kept, so Word can show the prompt again if the field is emptied.
 - With `trackRevisions` the fill is one `w:ins` and no `w:del`. Rejecting it leaves the control empty rather than bringing the prompt back: the prompt text lives in the glossary part, which docxtor does not read. Word shows an empty field and restores the prompt on the next edit.
 
+`insert_text` next to a control lands on the anchor's side of its edge: text inserted before a word that follows a control, or after a word that precedes one, stays outside the control; text inserted before the control's first word or after its last goes inside.
+
 Refused, with a message that says why:
 
 - an edit that would leave a control empty ("clearing a content control is not supported"), and deleting a prompt;
@@ -102,7 +104,7 @@ Refused, with a message that says why:
 - a picture control;
 - `delete_paragraph` on a paragraph that holds a control locked against deletion (`sdtLocked`), or holds a control nested in one;
 - `delete_table_row` on a row that holds a locked control, whether it wraps a cell or sits inside one;
-- `add_table_row` and `delete_table_row` on a table inside a control locked against editing;
+- `add_table_row` and `delete_table_row` on a table inside a control that is locked against editing or data-bound;
 - `insert_paragraph`, `add_list_item`, `add_table` and `add_list` next to a paragraph or table wrapped by an empty control or by one that holds a single value (plain text, date, drop-down list). Inside a filled rich-text control they work, and the new content lands inside the same control.
 
 Repeating sections are shown as their content; adding or removing an item is not supported. docxtor does not create content controls.

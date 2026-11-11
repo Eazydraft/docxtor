@@ -609,6 +609,16 @@ describe("locks seen through nesting, tables and rows", () => {
     expect(apply(doc, { type: "delete_table_row", target: "tbl0", row: 0 }).success).toBe(true);
   });
 
+  it("rows of a table inside a data-bound control cannot change", async () => {
+    const doc = await from(
+      control(1, `<w:alias w:val="Feed"/><w:dataBinding w:xpath="/a" w:storeItemID="{0}"/>`, table(`<w:tr>${cell(run("a"))}${cell(run("b"))}</w:tr>`)),
+    );
+    const message =
+      'tbl0: the table is in a content control "Feed" bound to a custom XML part; Word overwrites its content from that part when the file is opened, so an edit here would be lost';
+    expect(apply(doc, { type: "add_table_row", target: "tbl0", afterRow: 0, cells: ["x", "y"] }).error).toBe(message);
+    expect(apply(doc, { type: "delete_table_row", target: "tbl0", row: 0 }).error).toBe(message);
+  });
+
   it("an empty control flagged as showing its prompt prints without a separator space", async () => {
     const doc = await from(
       `<w:p>${run("Name: ")}<w:sdt><w:sdtPr><w:id w:val="1"/><w:showingPlcHdr/></w:sdtPr><w:sdtContent/></w:sdt></w:p>` +
@@ -617,5 +627,45 @@ describe("locks seen through nesting, tables and rows", () => {
     const md = doc.project("markdown");
     expect(md).toContain("[p0] Name: {field:}");
     expect(md).toContain("[p1] When: {field date:}");
+  });
+});
+
+describe("insert_text at the edge of a control", () => {
+  it.each([[undefined], [TRACKED]])("before a word that follows an empty control stays outside it and leaves the prompt (%#)", async (options) => {
+    const doc = await load();
+    const before = doc.toString();
+    // p0: "Title: " [prompt] " ref " [ACME-42]; " ref " starts where the prompt ends
+    expect(apply(doc, { type: "insert_text", target: "p0", anchor: " ref", position: "before", text: " (draft)" }, options).success).toBe(true);
+    const xml = doc.toString();
+    expect(sdt(xml, "101")).toBe(sdt(before, "101"));
+    const p0 = doc.findParagraphById("p0")!;
+    expect(p0.text).toBe("Title: Insert Title for Contract (draft) ref ACME-42");
+    expect(p0.controls![0]!.control.placeholder).toBe(true);
+    expect(p0.controls![0]).toMatchObject({ startOffset: 7, endOffset: 32 });
+  });
+
+  it("before a word that follows a filled control stays outside it", async () => {
+    const doc = await load();
+    const before = doc.toString();
+    // p1: "Contact: " [Jane Roe] " " [Dept [Legal]]
+    expect(apply(doc, { type: "insert_text", target: "p1", anchor: " Dept", position: "before", text: "," }).success).toBe(true);
+    expect(sdt(doc.toString(), "103")).toBe(sdt(before, "103"));
+    expect(doc.findParagraphById("p1")!.text).toBe("Contact: Jane Roe, Dept Legal");
+  });
+
+  it("before the first word of a filled control goes inside it; after its last word too", async () => {
+    const doc = await load();
+    expect(apply(doc, { type: "insert_text", target: "p1", anchor: "Jane", position: "before", text: "Dr " }).success).toBe(true);
+    expect(apply(doc, { type: "insert_text", target: "p1", anchor: "Roe", position: "after", text: " QC" }).success).toBe(true);
+    expect(sdtContent(doc.toString(), "103")).toContain("Dr Jane Roe QC");
+    expect(doc.findParagraphById("p1")!.text).toBe("Contact: Dr Jane Roe QC Dept Legal");
+  });
+
+  it("after a word that precedes a control stays outside it", async () => {
+    const doc = await load();
+    const before = doc.toString();
+    expect(apply(doc, { type: "insert_text", target: "p1", anchor: "Contact: ", position: "after", text: "Ms " }).success).toBe(true);
+    expect(sdt(doc.toString(), "103")).toBe(sdt(before, "103"));
+    expect(doc.findParagraphById("p1")!.text).toBe("Contact: Ms Jane Roe Dept Legal");
   });
 });

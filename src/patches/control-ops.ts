@@ -191,13 +191,19 @@ export function checkParagraphDelete(para: NormalizedParagraph): void {
 
 /**
  * Check that the rows of a table may change (a row added or deleted): not
- * when a content-locked control wraps the table.
+ * when a content-locked or data-bound control wraps the table.
  */
 export function checkTableEditable(table: NormalizedTable): void {
   for (const c of controlChain(table.control)) {
     if (c.locked === "content" || c.locked === "both") {
       throw new ControlEditError(
         `${table.id}: the table is in a locked ${describe(c)}; its content cannot be edited`,
+      );
+    }
+    if (c.bound) {
+      throw new ControlEditError(
+        `${table.id}: the table is in a ${describe(c)} bound to a custom XML part; Word overwrites ` +
+          `its content from that part when the file is opened, so an edit here would be lost`,
       );
     }
   }
@@ -281,7 +287,7 @@ export function planControlEdit(
     const anchorControl = soleControl(matchRuns) ?? para.control;
     if (!(matchRuns.length > 0 && sameControl(matchRuns) && anchorControl?.placeholder)) {
       const offset = patch.position === "before" ? matchStart : matchEnd;
-      const target = findInsertTargetRun(para, offset);
+      const target = findInsertTargetRun(para, offset, patch.position);
       if (!target) return undefined;
       runs = [target];
       editStart = offset;
