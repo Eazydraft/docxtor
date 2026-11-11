@@ -13,7 +13,7 @@ import type {
   ProjectionOptions,
 } from "../types.js";
 import { projectToJson, projectToMarkdown } from "./formats.js";
-import type { JsonProjection, JsonProjectionPageBreak, JsonProjectionRunFormatting } from "./formats.js";
+import type { JsonProjection, JsonProjectionNote, JsonProjectionPageBreak, JsonProjectionRunFormatting } from "./formats.js";
 
 /**
  * Project a NormalizedDocument to an LLM-friendly format.
@@ -39,4 +39,4 @@ export function project(
 }
 
 export { projectToJson, projectToMarkdown };
-export type { JsonProjection, JsonProjectionPageBreak, JsonProjectionRunFormatting };
+export type { JsonProjection, JsonProjectionNote, JsonProjectionPageBreak, JsonProjectionRunFormatting };

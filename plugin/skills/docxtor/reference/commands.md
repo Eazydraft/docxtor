@@ -13,7 +13,7 @@ All commands: `docxtor <command> ...` (see SKILL.md for how to run it). Errors g
 docxtor view FILE [--grep REGEX [--context N]] [--no-revisions] [--formatting] [--styles] [--json]
 ```
 
-One line per paragraph, prefixed with its id. Table rows print as `| [tbl0.r1.c0.p0] text | [tbl0.r1.c1.p0] text |`, with `{+row inserted by …+}` or `{-row deleted by …-}` after a tracked row; headers and footers follow the body under `--- Header (default) ---` lines.
+One line per paragraph, prefixed with its id. Table rows print as `| [tbl0.r1.c0.p0] text | [tbl0.r1.c1.p0] text |`, with `{+row inserted by …+}` or `{-row deleted by …-}` after a tracked row; headers and footers follow the body under `--- Header (default) ---` lines, then footnotes and endnotes under `--- Footnotes ---` and `--- Endnotes ---` with ids `fn1.p0` and `en1.p0`. In the text, a tab prints as a tab character, and a footnote or endnote reference as `[^1]` or `[^e1]`: the number is the one in the note's id, and the mark is not part of the text.
 
 | Option | Effect |
 |---|---|
@@ -89,9 +89,9 @@ docxtor replace FILE -o OUT --find TEXT --replace TEXT [--find TEXT --replace TE
 wrote redline.docx (tracked, author "Acme")
 ```
 
-- Searches the body, table cells, headers and footers.
+- Searches the body, table cells, headers, footers, footnotes and endnotes.
 - Marks only the words that differ between `--find` and `--replace`.
-- Tries straight/curly quote variants when the literal text isn't found.
+- Tries straight/curly quote variants when the literal text isn't found, then lets a space match a tab: `--find "17.2 For goods"` finds `17.2⇥For goods`. The tab is kept, and the report shows the text that matched.
 - An empty `--replace ""` deletes the text.
 
 | Option | Effect |
@@ -116,7 +116,7 @@ error: "Seller" matches 83 times; nothing was written. Use --all, --in ID or --o
 docxtor comment FILE -o OUT --text TEXT (--find PASSAGE [--in ID] [--occurrence N] | --in ID)
 ```
 
-Anchors a Word comment to PASSAGE, which must match once (narrow it as for `replace`), or to the whole paragraph with `--in ID` alone. `\n` in TEXT starts a new comment paragraph. `--author` sets the comment author.
+Anchors a Word comment to PASSAGE, which must match once (narrow it as for `replace`; a space matches a tab here too), or to the whole paragraph with `--in ID` alone. `\n` in TEXT starts a new comment paragraph. `--author` sets the comment author.
 
 ## edit
 

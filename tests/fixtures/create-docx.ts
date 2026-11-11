@@ -1154,3 +1154,50 @@ export async function createTwoSectionDocx(options: TwoSectionDocxOptions = {}):
   zip.file("docProps/app.xml", appXml);
   return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }) as Promise<Buffer>;
 }
+
+export interface NotesDocxOptions {
+  /** Inner XML of `w:body`. */
+  body: string;
+  /** `w:footnote` elements; the two separator entries are added in front. Omit for no footnotes part. */
+  footnotes?: string;
+  /** `w:endnote` elements; the two separator entries are added in front. Omit for no endnotes part. */
+  endnotes?: string;
+}
+
+/**
+ * Create a DOCX with a footnotes and/or endnotes part, written on one line
+ * the way Word writes it. Each part starts with the separator and
+ * continuation-separator entries (ids -1 and 0) every Word file has.
+ */
+export async function createNotesDocx(options: NotesDocxOptions): Promise<Buffer> {
+  const W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+  const R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+  const REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+  const CT = "application/vnd.openxmlformats-officedocument.wordprocessingml";
+  const decl = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n`;
+  const separators = (tag: string): string =>
+    `<w:${tag} w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:${tag}>` +
+    `<w:${tag} w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:${tag}>`;
+
+  const zip = new JSZip();
+  const overrides = [`<Override PartName="/word/document.xml" ContentType="${CT}.document.main+xml"/>`];
+  const rels: string[] = [];
+  if (options.footnotes !== undefined) {
+    zip.file("word/footnotes.xml", `${decl}<w:footnotes xmlns:w="${W}">${separators("footnote")}${options.footnotes}</w:footnotes>`);
+    overrides.push(`<Override PartName="/word/footnotes.xml" ContentType="${CT}.footnotes+xml"/>`);
+    rels.push(`<Relationship Id="rId1" Type="${REL}/footnotes" Target="footnotes.xml"/>`);
+  }
+  if (options.endnotes !== undefined) {
+    zip.file("word/endnotes.xml", `${decl}<w:endnotes xmlns:w="${W}">${separators("endnote")}${options.endnotes}</w:endnotes>`);
+    overrides.push(`<Override PartName="/word/endnotes.xml" ContentType="${CT}.endnotes+xml"/>`);
+    rels.push(`<Relationship Id="rId2" Type="${REL}/endnotes" Target="endnotes.xml"/>`);
+  }
+  zip.file(
+    "[Content_Types].xml",
+    `${decl}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${overrides.join("")}</Types>`,
+  );
+  zip.file("_rels/.rels", TOP_RELS);
+  zip.file("word/_rels/document.xml.rels", `${decl}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.join("")}</Relationships>`);
+  zip.file("word/document.xml", `${decl}<w:document xmlns:w="${W}" xmlns:r="${R}"><w:body>${options.body}</w:body></w:document>`);
+  return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }) as Promise<Buffer>;
+}

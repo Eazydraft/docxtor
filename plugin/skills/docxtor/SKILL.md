@@ -49,11 +49,16 @@ Full options: [reference/commands.md](reference/commands.md). Every patch type f
 | [tbl0.r1.c0.p0] Diesel | [tbl0.r1.c1.p0] $900 |
 [hdr.default.p0] CONFIDENTIAL
 [p9] (BodyText) Payment is due in {-30-}{+45+} days.
+[p770] 17.2	For goods manufactured within the Purchaser's Country[^1], the price …
+--- Footnotes ---
+[fn1.p0] As defined in the Special Conditions of Contract.
 ```
 
 - `[p144]` is the paragraph id that patches target. Table cells are `tbl0.r1.c0.p0` (table, row, cell, paragraph). Headers and footers are `hdr.default.p0` and `ftr.default.p0`. In a document with more than one section the ids carry the section, `hdr.s2.first.p0`.
 - `(FirstParagraph)` is the style; `{list:1017 L0}` is a list paragraph (numbering id, level).
 - Numbering that Word generates, such as `c.` or `11.1`, is shown at the start of the text but is not part of it: don't put it in a `--find`.
+- A typed clause number is followed by a tab, printed as a tab (`17.2⇥For goods`). In `--find`, type a space there: `--find "17.2 For goods"` matches and the tab is kept. In an `edit` patch, write the tab as `\t`.
+- `[^1]` is a footnote reference and `[^e1]` an endnote reference. The mark is not part of the text: leave it out of a `--find`. The note's text is listed at the end under `--- Footnotes ---` or `--- Endnotes ---` as `fn1.p0` / `en1.p0`, and can be read, cited and edited like any other paragraph.
 - `{+…+}` is a tracked insertion and `{-…-}` a tracked deletion. The current text is the text without the `{-…-}` parts. A tracked table row ends with `{+row inserted by …+}` or `{-row deleted by …-}`.
 - Ids are positions. After an edit that adds or removes paragraphs, run `view` again before using ids.
 
@@ -70,7 +75,7 @@ Copy this checklist and tick it off for any edit:
 - [ ] 6. Report what changed, by its text, and the output file path
 ```
 
-Step 2 matters: .docx text often has curly quotes (’ “ ”), non-breaking spaces, en dashes or section signs that differ from what you would type. `replace` tries straight and curly quote variants itself.
+Step 2 matters: .docx text often has curly quotes (’ “ ”), non-breaking spaces, en dashes or section signs that differ from what you would type. `replace` tries straight and curly quote variants itself, and lets a space match a tab.
 
 ## Recipes
 
@@ -197,7 +202,7 @@ Cite section numbers as `view` prints them. For long documents, grep for heading
 | Message | What to do |
 |---|---|
 | `"X" matches N times` | Pick with `--occurrence N` or `--in ID`, or lengthen the find |
-| `"X" not found` | `view FILE --grep '<one distinctive word>'` and copy the exact text; it may sit inside a tracked deletion, which is no longer current text |
+| `"X" not found` | `view FILE --grep '<one distinctive word>'` and copy the exact text; it may sit inside a tracked deletion, which is no longer current text, or include a `[^1]` footnote mark, which is not text |
 | `not found in paragraph "p12"` (from `edit`) | The error prints the paragraph's current text: copy from it |
 | `Paragraph "p99" not found` | Ids shifted or are wrong: run `view` again |
 | `no tracked change has w:id ...` | Take the ids from `revisions` on the same file |

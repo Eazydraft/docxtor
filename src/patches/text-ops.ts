@@ -28,7 +28,7 @@ import {
   splitRunAtOffset,
   findRunParentChildren,
 } from "./run-splitter.js";
-import { readRunContent, writeRunContent } from "./run-content.js";
+import { readRunContent, writeRunContent, carryCharNodes } from "./run-content.js";
 import {
   getChildren,
   setTextContent,
@@ -42,6 +42,8 @@ import {
   findChild,
   cloneNode,
   createElement,
+  createRun,
+  runCharNodes,
   getAttr,
 } from "../xml/helpers.js";
 import type { RevisionContext } from "./revision.js";
@@ -192,10 +194,13 @@ function executeReplaceTextDirect(
       );
     }
 
+    // Tabs and soft breaks of the other matched runs: a replacement that
+    // still has one where they were keeps the original element.
+    const carried = matchedRuns.slice(1).flatMap(runCharNodes);
     if (!hasFormatting) {
-      setRunText(matchedRuns[0]!, plainText);
+      setRunText(matchedRuns[0]!, plainText, undefined, carried);
     } else {
-      replaceRunWithFormattedRuns(paragraph.xmlRef, matchedRuns[0]!, segments);
+      replaceRunWithFormattedRuns(paragraph.xmlRef, matchedRuns[0]!, segments, carried);
     }
 
     // Remove the text of the other matched runs. A run that also holds a
@@ -203,7 +208,7 @@ function executeReplaceTextDirect(
     for (let i = 1; i < matchedRuns.length; i++) {
       const content = readRunContent(matchedRuns[i]!);
       if (content.anchored.length > 0) {
-        writeRunContent(matchedRuns[i]!, { ...content, text: "" });
+        writeRunContent(matchedRuns[i]!, { rPr: content.rPr, text: "", anchored: content.anchored });
       } else {
         removeRunFromParagraph(paragraph.xmlRef, matchedRuns[i]!);
       }
@@ -249,11 +254,14 @@ function executeReplaceTextRevision(
   const hasFormatting = segments.some((s) => s.bold || s.italic || s.strikethrough || s.underline);
   const plainText = stripFormattingMarkers(patch.replace, markers);
 
+  // Copies of the tabs and soft breaks being deleted: the inserted text
+  // writes the same element where it still has one (a w:ptab stays a w:ptab).
+  const carried = matchedRuns.flatMap(runCharNodes).map(cloneNode);
   let newRuns: FXPNode[] = [];
   if (segments.length > 0 && plainText.length > 0) {
     newRuns = hasFormatting
-      ? createFormattedRuns(segments, rPrNode)
-      : [createRevisionRun(plainText, rPrNode)];
+      ? createFormattedRuns(segments, rPrNode, carried)
+      : [createRevisionRun(plainText, rPrNode, carried)];
   }
   // Mark the matched runs deleted (or drop them, where they were an
   // unaccepted insertion) and put the replacement where the match began.
@@ -607,53 +615,6 @@ function sideOfChildrenAtInsert(patch: InsertTextPatch): "before" | "after" {
   return patch.position === "after" ? "after" : "before";
 }
 
-/**
- * Create a w:r run node with text and optional formatting (for splitting).
- *
- * Handles \n in text by emitting w:br elements (matching the behavior
- * of getRunText which converts w:br → \n). Without this, splitting a
- * run containing line breaks would produce literal \n in w:t instead
- * of proper w:br elements.
- */
-function createRunWithTextAndFormatting(
-  text: string,
-  rPrNode: FXPNode | undefined,
-): FXPNode {
-  const children: FXPNode[] = [];
-  if (rPrNode) {
-    children.push(cloneNode(rPrNode));
-  }
-
-  if (text.includes("\n")) {
-    // Multi-line: interleave w:t and w:br
-    const segments = text.split("\n");
-    for (let i = 0; i < segments.length; i++) {
-      const seg = segments[i]!;
-      if (seg.length > 0 || i === 0) {
-        const textNode = { "#text": escapeXmlText(seg) } as unknown as FXPNode;
-        const wtNode: FXPNode = { "w:t": [textNode] };
-        if (needsSpacePreserve(seg)) {
-          setAttr(wtNode, "xml:space", "preserve");
-        }
-        children.push(wtNode);
-      }
-      if (i < segments.length - 1) {
-        children.push({ "w:br": [] as FXPNode[] });
-      }
-    }
-  } else {
-    // Single line
-    const textNode = { "#text": escapeXmlText(text) } as unknown as FXPNode;
-    const wtNode: FXPNode = { "w:t": [textNode] };
-    if (needsSpacePreserve(text)) {
-      setAttr(wtNode, "xml:space", "preserve");
-    }
-    children.push(wtNode);
-  }
-
-  return { "w:r": children };
-}
-
 // =============================================================================
 // Delete text
 // =============================================================================
@@ -749,18 +710,20 @@ function executeDeleteTextRevision(
  *
  * Each segment becomes a run. Formatting flags from the segment (bold, italic,
  * strikethrough) are layered on top of any existing rPr inherited from the
- * base run.
+ * base run. `\t` and `\n` in a segment become `w:tab` and `w:br`, taken from
+ * `reuse` where it has one (see `textToRunChildren`).
  */
 export function createFormattedRuns(
   segments: FormattedSegment[],
   baseRPr: FXPNode | undefined,
+  reuse?: FXPNode[],
 ): FXPNode[] {
   const runs: FXPNode[] = [];
 
   for (const seg of segments) {
     if (seg.text.length === 0) continue;
 
-    const run = createRunWithTextAndFormatting(seg.text, baseRPr);
+    const run = createRun(seg.text, baseRPr, reuse);
 
     // Layer GFM formatting on top
     if (seg.bold || seg.italic || seg.strikethrough || seg.underline) {
@@ -802,9 +765,10 @@ function replaceRunWithFormattedRuns(
   paragraphNode: FXPNode,
   runNode: FXPNode,
   segments: FormattedSegment[],
+  carried: FXPNode[] = [],
 ): void {
   const content = readRunContent(runNode);
-  const newRuns = createFormattedRuns(segments, content.rPr);
+  const newRuns = createFormattedRuns(segments, content.rPr, [...runCharNodes(runNode), ...carried]);
 
   if (newRuns.length === 0) {
     // All segments were empty — just clear the run text
@@ -849,24 +813,26 @@ function replaceRunWithFormattedRuns(
  *
  * A run that holds exactly one w:t and nothing else of note has that text
  * node updated in place. Otherwise the run is rebuilt from its content:
- * `\n` becomes a soft `w:br`, an old soft break never survives next to the
- * new text, and zero-width children (page and column breaks, tabs,
- * rendering hints) are kept. `remap` says where each such child goes in the
- * new text, given its old offset; without it, a child that preceded the old
- * text stays in front and every other one follows the new text.
+ * `\t` becomes a `w:tab` and `\n` a soft `w:br` (the run's own element where
+ * the new text still has that character, then one from `carried`, else a new
+ * one), and zero-width children (page and column breaks, rendering hints)
+ * are kept. `remap` says where each such child goes in the new text, given
+ * its old offset; without it, a child that preceded the old text stays in
+ * front and every other one follows the new text.
  */
 function setRunText(
   runNode: FXPNode,
   text: string,
   remap?: (offset: number) => number,
+  carried: FXPNode[] = [],
 ): void {
   const content = readRunContent(runNode);
   const wtNode = findTextNode(runNode);
   const simple =
     wtNode !== undefined &&
     content.anchored.length === 0 &&
-    !text.includes("\n") &&
-    !content.text.includes("\n") &&
+    !/[\n\t]/.test(text) &&
+    !/[\n\t]/.test(content.text) &&
     getChildren(runNode).filter((c) => "w:t" in c).length === 1;
 
   if (simple) {
@@ -892,5 +858,6 @@ function setRunText(
     rPr: content.rPr,
     text,
     anchored: content.anchored.map((a) => ({ node: a.node, offset: place(a.offset) })),
+    charNodes: carryCharNodes(content.text, content.charNodes, text, carried),
   });
 }
