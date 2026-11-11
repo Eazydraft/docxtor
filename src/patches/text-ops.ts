@@ -20,6 +20,7 @@ import type {
   InsertTextPatch,
   DeleteTextPatch,
   FXPNode,
+  RunMapping,
 } from "../types.js";
 import { findOccurrence, resolveRunRanges } from "../mapping/text-to-runs.js";
 import {
@@ -39,7 +40,6 @@ import {
 import {
   getChildren,
   setTextContent,
-  removeChild,
   getRunText,
   findTextNode,
   getTagName,
@@ -68,57 +68,41 @@ import {
 } from "./markdown-parser.js";
 
 /**
- * Find the parent node that directly contains a run, and remove the run.
- * Handles runs that are direct children of w:p or nested inside
- * w:hyperlink, w:ins, or w:del containers.
+ * Remove a run from whichever parent holds it: the paragraph itself, or a
+ * w:hyperlink, w:ins, w:del or content control inside it.
  */
 function removeRunFromParagraph(paragraphNode: FXPNode, runNode: FXPNode): void {
-  // Try direct removal first
-  if (removeChild(paragraphNode, runNode)) return;
-
-  // Try inside container elements (w:hyperlink, w:ins, w:del)
-  const children = getChildren(paragraphNode);
-  for (const child of children) {
-    const tag = getTagName(child);
-    if (tag === "w:hyperlink" || tag === "w:ins" || tag === "w:del") {
-      if (removeChild(child, runNode)) return;
-      // Check nested containers
-      const containerChildren = getChildren(child);
-      for (const nested of containerChildren) {
-        const nestedTag = getTagName(nested);
-        if (nestedTag === "w:hyperlink" || nestedTag === "w:ins" || nestedTag === "w:del") {
-          if (removeChild(nested, runNode)) return;
-        }
-      }
-    }
-  }
+  const parent = findRunParentChildren(paragraphNode, runNode);
+  if (!parent) return;
+  const idx = parent.indexOf(runNode);
+  if (idx !== -1) parent.splice(idx, 1);
 }
 
 /**
- * Find the container element (w:ins, w:del, w:hyperlink) that directly holds
- * a run, or undefined if the run is a direct child of the paragraph.
+ * Find the container element (w:ins, w:del, w:hyperlink, or the w:sdtContent
+ * of a content control) that directly holds a run, or undefined if the run
+ * is a direct child of the paragraph.
  */
 function findRunContainer(
   paragraphNode: FXPNode,
   runNode: FXPNode,
 ): FXPNode | undefined {
-  const children = getChildren(paragraphNode);
-  if (children.includes(runNode)) return undefined;
-
-  for (const child of children) {
-    const tag = getTagName(child);
-    if (tag === "w:hyperlink" || tag === "w:ins" || tag === "w:del") {
-      const containerChildren = getChildren(child);
-      if (containerChildren.includes(runNode)) return child;
-      for (const nested of containerChildren) {
-        const nestedTag = getTagName(nested);
-        if (nestedTag === "w:hyperlink" || nestedTag === "w:ins" || nestedTag === "w:del") {
-          if (getChildren(nested).includes(runNode)) return nested;
-        }
+  const search = (children: FXPNode[]): FXPNode | undefined => {
+    for (const child of children) {
+      const tag = getTagName(child);
+      if (tag === "w:hyperlink" || tag === "w:ins" || tag === "w:del" || tag === "w:sdtContent") {
+        if (getChildren(child).includes(runNode)) return child;
+        const found = search(getChildren(child));
+        if (found) return found;
+      } else if (tag === "w:sdt") {
+        const found = search(getChildren(child));
+        if (found) return found;
       }
     }
-  }
-  return undefined;
+    return undefined;
+  };
+  if (getChildren(paragraphNode).includes(runNode)) return undefined;
+  return search(getChildren(paragraphNode));
 }
 
 // =============================================================================
@@ -523,6 +507,42 @@ export function executeInsertText(
 }
 
 /**
+ * The run an insertion at `offset` goes into or next to: the first run whose
+ * range reaches the offset, else the last run. Text inserted at the boundary
+ * of two runs therefore joins the earlier one.
+ *
+ * The exception is a boundary where a content control starts or ends. There
+ * the text must land on the anchor's side: inserted before an anchor, it
+ * joins the run the anchor starts in, so text put before a word that follows
+ * a control stays outside the control (and text put before a control's first
+ * word goes inside it).
+ */
+export function findInsertTargetRun(
+  paragraph: NormalizedParagraph,
+  offset: number,
+  position: "before" | "after" = "after",
+): RunMapping | undefined {
+  const runs = paragraph.runs;
+  for (let i = 0; i < runs.length; i++) {
+    const run = runs[i]!;
+    if (offset >= run.startOffset && offset <= run.endOffset) {
+      const next = runs[i + 1];
+      if (
+        position === "before" &&
+        offset === run.endOffset &&
+        next !== undefined &&
+        next.startOffset === offset &&
+        next.control !== run.control
+      ) {
+        return next;
+      }
+      return run;
+    }
+  }
+  return runs[runs.length - 1];
+}
+
+/**
  * Direct (non-revision) insertion — modifies the run's text in-place,
  * or creates multiple formatted runs if the text contains GFM markers.
  */
@@ -532,23 +552,11 @@ function executeInsertTextDirect(
   insertOffset: number,
   markers: boolean,
 ): void {
-  let targetRun: typeof paragraph.runs[number] | undefined;
-
-  for (const run of paragraph.runs) {
-    if (insertOffset >= run.startOffset && insertOffset <= run.endOffset) {
-      targetRun = run;
-      break;
-    }
-  }
-
+  const targetRun = findInsertTargetRun(paragraph, insertOffset, patch.position);
   if (!targetRun) {
-    const lastRun = paragraph.runs[paragraph.runs.length - 1];
-    if (!lastRun) {
-      throw new Error(
-        `No runs found in paragraph "${paragraph.id}" for insertion`,
-      );
-    }
-    targetRun = lastRun;
+    throw new Error(
+      `No runs found in paragraph "${paragraph.id}" for insertion`,
+    );
   }
 
   const segments = parseFormattedText(patch.text, markers);
@@ -602,23 +610,11 @@ function executeInsertTextRevision(
   revCtx: RevisionContext,
   markers: boolean,
 ): void {
-  let targetRun: typeof paragraph.runs[number] | undefined;
-
-  for (const run of paragraph.runs) {
-    if (insertOffset >= run.startOffset && insertOffset <= run.endOffset) {
-      targetRun = run;
-      break;
-    }
-  }
-
+  const targetRun = findInsertTargetRun(paragraph, insertOffset, patch.position);
   if (!targetRun) {
-    const lastRun = paragraph.runs[paragraph.runs.length - 1];
-    if (!lastRun) {
-      throw new Error(
-        `No runs found in paragraph "${paragraph.id}" for insertion`,
-      );
-    }
-    targetRun = lastRun;
+    throw new Error(
+      `No runs found in paragraph "${paragraph.id}" for insertion`,
+    );
   }
 
   const localInsertOffset = insertOffset - targetRun.startOffset;

@@ -26,7 +26,9 @@ import {
   getChildren,
   getTagName,
   getAttr,
+  contentChildren,
 } from "../xml/helpers.js";
+import { ControlResolver } from "./control.js";
 import { normalizeParagraph } from "./paragraph.js";
 import { normalizeTable } from "./table.js";
 import { normalizeHeaderFooter } from "./header-footer.js";
@@ -142,18 +144,21 @@ function normalizeBody(documentFxp: FXPNode[]): BodyElement[] {
   const bodyNode = findChild(docNode, "w:body");
   if (!bodyNode) return elements;
 
-  const bodyChildren = getChildren(bodyNode);
+  const resolver = new ControlResolver();
   let paraIdx = 0;
   let tableIdx = 0;
   let pageBreakIdx = 0;
 
-  for (const child of bodyChildren) {
+  // Read through block-level content controls: a paragraph or table inside
+  // one is a body element like any other.
+  for (const { node: child, sdts } of contentChildren(bodyNode)) {
     const tag = getTagName(child);
+    const control = resolver.resolve(sdts);
     if (tag === "w:p") {
       // Normalize once and reuse the result for both the page-break-only
       // check and the final elements.push — avoids duplicating the full
       // run mapping + revision scanning work.
-      const normalized = normalizeParagraph(child, `p${paraIdx}`);
+      const normalized = normalizeParagraph(child, `p${paraIdx}`, control);
 
       if (normalized.hasPageBreak && normalized.text.trim().length === 0) {
         // Page-break-only paragraph — emit as NormalizedPageBreak
@@ -162,6 +167,7 @@ function normalizeBody(documentFxp: FXPNode[]): BodyElement[] {
           id: `pb${pageBreakIdx}`,
           xmlRef: child,
         };
+        if (control) pb.control = control;
         elements.push(pb);
         pageBreakIdx++;
         // Don't increment paraIdx — this isn't a paragraph in the projection
@@ -171,7 +177,7 @@ function normalizeBody(documentFxp: FXPNode[]): BodyElement[] {
       elements.push(normalized);
       paraIdx++;
     } else if (tag === "w:tbl") {
-      elements.push(normalizeTable(child, `tbl${tableIdx}`));
+      elements.push(normalizeTable(child, `tbl${tableIdx}`, control, resolver));
       tableIdx++;
     }
     // Other elements (w:sectPr, etc.) are ignored in the normalized view
@@ -281,9 +287,10 @@ export function findHeaderFooterRefs(documentFxp: FXPNode[]): HeaderFooterRef[] 
   if (!bodyNode) return refs;
 
   // A section's properties sit in the w:pPr of its last paragraph (a section
-  // break); the last section's are a child of w:body.
+  // break); the last section's are a child of w:body. A section-break
+  // paragraph may sit inside a block-level content control.
   const sectPrs: FXPNode[] = [];
-  for (const child of getChildren(bodyNode)) {
+  for (const { node: child } of contentChildren(bodyNode)) {
     if (getTagName(child) === "w:p") {
       const pPr = findChild(child, "w:pPr");
       if (pPr) {

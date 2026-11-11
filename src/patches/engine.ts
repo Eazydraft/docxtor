@@ -22,6 +22,7 @@ import type {
   AddTablePatch,
   DocxXmlParts,
   FXPNode,
+  ControlInfo,
 } from "../types.js";
 import {
   validatePatch,
@@ -78,6 +79,12 @@ import {
 } from "./container-utils.js";
 import { executeInsertParagraph, executeDeleteParagraph } from "./paragraph-ops.js";
 import { executeAddComment } from "./comment-ops.js";
+import {
+  planControlEdit,
+  applyControlPlan,
+  syncControlValue,
+  executeSetCheckbox,
+} from "./control-ops.js";
 import { stampNewParagraphs, findPartRootForId } from "../normalizer/para-id.js";
 
 /**
@@ -194,31 +201,42 @@ function applySinglePatch(
   revCtx?: RevisionContext,
   options?: PatchOptions,
 ): PatchResult {
+  const markers = markersFor(patch, options);
+
   // Validate
-  const validation = validatePatch(patch, doc);
+  const validation = validatePatch(patch, doc, markers);
   if (!validation.valid) {
     return { success: false, patch, error: validation.error };
   }
 
-  const markers = markersFor(patch, options);
-
   try {
     switch (patch.type) {
-      case "replace_text": {
+      case "replace_text":
+      case "insert_text":
+      case "delete_text":
+      case "replace_cell_text": {
         const para = findParagraphById(patch.target, doc)!;
-        executeReplaceText(para, patch, revCtx, markers);
+        // A match in a content control may fill it, flip a checkbox, or be
+        // an ordinary edit after which the control's stored value follows.
+        // validatePatch has already planned this edit once to refuse what a
+        // control does not allow; planControlEdit must stay free of side
+        // effects so planning it again here is safe.
+        const plan = planControlEdit(para, patch, markers);
+        if (plan && plan.mode !== "edit") {
+          applyControlPlan(para, plan, revCtx, markers);
+        } else {
+          if (patch.type === "replace_text") executeReplaceText(para, patch, revCtx, markers);
+          else if (patch.type === "insert_text") executeInsertText(para, patch, revCtx, markers);
+          else if (patch.type === "delete_text") executeDeleteText(para, patch, revCtx, markers);
+          else executeReplaceCellText(para, patch, revCtx, markers);
+          if (plan) syncControlValue(plan.control, plan.text);
+        }
         reNormalizeParagraph(doc, para);
         break;
       }
-      case "insert_text": {
+      case "set_checkbox": {
         const para = findParagraphById(patch.target, doc)!;
-        executeInsertText(para, patch, revCtx, markers);
-        reNormalizeParagraph(doc, para);
-        break;
-      }
-      case "delete_text": {
-        const para = findParagraphById(patch.target, doc)!;
-        executeDeleteText(para, patch, revCtx, markers);
+        executeSetCheckbox(para, patch, revCtx);
         reNormalizeParagraph(doc, para);
         break;
       }
@@ -239,12 +257,6 @@ function applySinglePatch(
           date: options?.revisionDate ?? revisionTimestamp(),
           markers,
         });
-        reNormalizeParagraph(doc, para);
-        break;
-      }
-      case "replace_cell_text": {
-        const para = findParagraphById(patch.target, doc)!;
-        executeReplaceCellText(para, patch, revCtx, markers);
         reNormalizeParagraph(doc, para);
         break;
       }
@@ -342,7 +354,7 @@ function reNormalizeTable(
   doc: NormalizedDocument,
   table: NormalizedTable,
 ): void {
-  const fresh = normalizeTable(table.xmlRef, table.id);
+  const fresh = normalizeTable(table.xmlRef, table.id, table.control);
 
   // Update in-place
   table.rows = fresh.rows;
@@ -551,11 +563,14 @@ function executeAddTablePatch(
   // Find the afterId target's xmlRef if specified
   let afterXmlRef: FXPNode | undefined;
   let afterElementId: string | undefined;
+  let afterControl: ControlInfo | undefined;
   if (patch.afterId) {
     const target = findElementById(patch.afterId, doc);
     if (target) {
       afterXmlRef = target.xmlRef;
       afterElementId = target.id;
+      // Next to an element inside a block-level control, the table is inside it too
+      afterControl = target.control;
     }
   }
 
@@ -564,7 +579,7 @@ function executeAddTablePatch(
   // Normalize and add to doc.body
   const { nextTblIdx } = getNextIds(doc);
   const id = `tbl${nextTblIdx}`;
-  const normalized = normalizeTable(tableNode, id);
+  const normalized = normalizeTable(tableNode, id, afterControl);
 
   // Insert into body array at correct position (after the target element)
   if (afterElementId !== undefined) {

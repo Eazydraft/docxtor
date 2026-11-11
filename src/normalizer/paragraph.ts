@@ -23,6 +23,8 @@ import type {
   RunFormatting,
   ListInfo,
   RevisionMark,
+  ControlInfo,
+  ControlRange,
   NoteReference,
 } from "../types.js";
 import { runNoteReferences } from "./notes.js";
@@ -39,52 +41,51 @@ import {
   paragraphHasPageBreak,
   runHasPageBreak,
   getRunPageBreakOffset,
+  sdtContentChildren,
 } from "../xml/helpers.js";
+import { controlInfoFor } from "./control.js";
+
+/** One step of a paragraph's content, in document order. */
+type ContentStep =
+  | { kind: "run"; node: FXPNode; control?: ControlInfo }
+  | { kind: "open" | "close"; control: ControlInfo };
 
 /**
  * Collect all w:r run nodes from a paragraph, including those nested
- * inside w:hyperlink and w:ins elements. Skips w:del entirely.
- * Preserves document order.
+ * inside w:hyperlink, w:ins and inline content controls (w:sdt). Skips
+ * w:del entirely. Preserves document order, and marks where each inline
+ * control opens and closes.
  *
  * This ensures:
  * - Inserted text (w:ins) is included in .text — subsequent patches see it
  * - Deleted text (w:del) is excluded from .text — subsequent patches don't see it
+ * - Text in a content control, a prompt included, is part of .text
+ *
+ * @param outer - the control wrapped around the whole paragraph, if any
+ * @param control - the inline control being walked (none at the top level)
  */
-function collectRuns(paragraphNode: FXPNode): FXPNode[] {
-  const children = getChildren(paragraphNode);
-  const runs: FXPNode[] = [];
-
+function collectContent(
+  children: FXPNode[],
+  steps: ContentStep[],
+  outer: ControlInfo | undefined,
+  control?: ControlInfo,
+): void {
   for (const child of children) {
     const tag = getTagName(child);
     if (tag === "w:r") {
-      runs.push(child);
-    } else if (tag === "w:hyperlink") {
-      // Collect runs inside the hyperlink (recurse for nested w:ins within hyperlink)
-      collectRunsFromContainer(child, runs);
-    } else if (tag === "w:ins") {
-      // Inserted runs are "current content" — recurse into them
-      collectRunsFromContainer(child, runs);
+      steps.push(control ? { kind: "run", node: child, control } : { kind: "run", node: child });
+    } else if (tag === "w:hyperlink" || tag === "w:ins") {
+      // Hyperlink runs and inserted runs are "current content" — recurse
+      collectContent(getChildren(child), steps, outer, control);
+    } else if (tag === "w:sdt") {
+      // An inline control sits in the one around it, or else in the control
+      // wrapped around the paragraph.
+      const inner = controlInfoFor(child, control ?? outer);
+      steps.push({ kind: "open", control: inner });
+      collectContent(sdtContentChildren(child), steps, outer, inner);
+      steps.push({ kind: "close", control: inner });
     }
     // w:del is intentionally skipped — deleted text is excluded from normalized text
-  }
-
-  return runs;
-}
-
-/**
- * Recursively collect runs from a container element (w:hyperlink, w:ins).
- * Handles nested containers (e.g., w:ins inside w:hyperlink or vice versa).
- */
-function collectRunsFromContainer(containerNode: FXPNode, runs: FXPNode[]): void {
-  const children = getChildren(containerNode);
-  for (const child of children) {
-    const tag = getTagName(child);
-    if (tag === "w:r") {
-      runs.push(child);
-    } else if (tag === "w:hyperlink" || tag === "w:ins") {
-      collectRunsFromContainer(child, runs);
-    }
-    // w:del inside containers is also skipped
   }
 }
 
@@ -93,18 +94,36 @@ function collectRunsFromContainer(containerNode: FXPNode, runs: FXPNode[]): void
  *
  * @param paragraphNode - The w:p FXP node (must have "w:p" key)
  * @param id - The stable ID to assign (e.g., "p0", "tbl0.r1.c0.p0")
+ * @param control - The innermost content control wrapped around the whole
+ *                  paragraph (a block-level control, or one around its cell)
  */
 export function normalizeParagraph(
   paragraphNode: FXPNode,
   id: string,
+  control?: ControlInfo,
 ): NormalizedParagraph {
-  const runs = collectRuns(paragraphNode);
+  const steps: ContentStep[] = [];
+  collectContent(getChildren(paragraphNode), steps, control);
   const runMappings: RunMapping[] = [];
+  const controls: ControlRange[] = [];
+  const open = new Map<ControlInfo, ControlRange>();
   let offset = 0;
   let pageBreakOffset: number | undefined;
   const noteRefs: NoteReference[] = [];
 
-  for (const runNode of runs) {
+  for (const step of steps) {
+    if (step.kind !== "run") {
+      if (step.kind === "open") {
+        const range: ControlRange = { control: step.control, startOffset: offset, endOffset: offset };
+        open.set(step.control, range);
+        controls.push(range);
+      } else {
+        open.get(step.control)!.endOffset = offset;
+      }
+      continue;
+    }
+
+    const runNode = step.node;
     const text = getRunText(runNode);
 
     // A footnote or endnote reference adds no text; note where it sits. The
@@ -139,6 +158,7 @@ export function normalizeParagraph(
       formatting,
     };
     if (textNode) mapping.textXmlRef = textNode;
+    if (step.control) mapping.control = step.control;
     runMappings.push(mapping);
 
     offset += text.length;
@@ -163,6 +183,9 @@ export function normalizeParagraph(
   if (paraId) {
     result.paraId = paraId.toUpperCase();
   }
+
+  if (control) result.control = control;
+  if (controls.length > 0) result.controls = controls;
 
   if (revisions.length > 0) {
     result.revisions = revisions;
@@ -333,7 +356,7 @@ function collectInsRunRefs(node: FXPNode, refs: Set<FXPNode>): void {
     if (tag === "w:ins") {
       // All runs inside this w:ins are "inserted"
       markAllRunsInContainer(child, refs);
-    } else if (tag === "w:hyperlink") {
+    } else if (tag === "w:hyperlink" || tag === "w:sdt" || tag === "w:sdtContent") {
       collectInsRunRefs(child, refs);
     }
     // Don't recurse into w:del — those are excluded
@@ -346,7 +369,7 @@ function markAllRunsInContainer(node: FXPNode, refs: Set<FXPNode>): void {
     const tag = getTagName(child);
     if (tag === "w:r") {
       refs.add(child);
-    } else if (tag === "w:hyperlink" || tag === "w:ins") {
+    } else if (tag === "w:hyperlink" || tag === "w:ins" || tag === "w:sdt" || tag === "w:sdtContent") {
       markAllRunsInContainer(child, refs);
     }
   }
@@ -377,7 +400,7 @@ function findInsInfoInChildren(
           id: getAttr(child, "w:id"),
         };
       }
-    } else if (tag === "w:hyperlink") {
+    } else if (tag === "w:hyperlink" || tag === "w:sdt" || tag === "w:sdtContent") {
       const result = findInsInfoInChildren(getChildren(child), runNode);
       if (result) return result;
     }
@@ -460,6 +483,8 @@ function walkForDeletions(
     } else if (tag === "w:hyperlink" || tag === "w:ins") {
       // Recurse into containers — they may contain w:r, w:del, or further nesting
       offset = walkForDeletions(getChildren(child), runMap, revisions, offset);
+    } else if (tag === "w:sdt") {
+      offset = walkForDeletions(sdtContentChildren(child), runMap, revisions, offset);
     }
   }
   return offset;

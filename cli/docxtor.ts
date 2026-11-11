@@ -8,7 +8,7 @@
 import { readFile } from "node:fs/promises";
 import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
 import { Docxtor, type NormalizedTable, type Patch, type PatchOptions, type PatchResult } from "../src/index.js";
-import { alignReplacement, allParagraphs, findHits, occurrenceAt, patchTargets, planEdit, snippet } from "./paragraphs.js";
+import { alignReplacement, allParagraphs, findHits, occurrenceAt, patchTargets, planEdit, promptRange, snippet } from "./paragraphs.js";
 import { formatChanges, listChanges } from "./revisions.js";
 import { formatComments, listComments } from "./comments.js";
 import { getAttr, getChildren, getTagName, unescapeXmlText } from "../src/xml/helpers.js";
@@ -20,6 +20,7 @@ Read
       Paragraphs with their ids ([p12], [tbl0.r1.c0.p0], [hdr.default.p0],
       [fn1.p0]). Tracked changes show inline as {+inserted+} and {-deleted-};
       a footnote reference shows as [^1], with the notes listed at the end.
+      Form fields show as {field: prompt} while empty; replace the prompt to fill one.
   revisions FILE [--json]
       Every tracked change, numbered, with its w:ids, author and context.
   comments FILE [--json]
@@ -241,7 +242,32 @@ async function cmdReplace(argv: string[]): Promise<void> {
     // Every match. If the literal text is absent, curly/straight quote variants are tried, then a space
     // for a tab. `id` is the positional id shown to the user; `target` is what the patch names; `find` is
     // the text that matched.
-    let hits = findHits(paras, typed, !!values["whole-word"]).map((h) => ({ id: h.para.id, target: targetOf(h.para), text: h.para.text, start: h.start, find: h.matched }));
+    //
+    // `fill` is set when the edit lands on the prompt of an empty content control. What changes is the
+    // part of the match where find and replace differ; when that part lies on a prompt, the edit fills
+    // the control. The match may reach outside the control ("Title: Insert name" -> "Title: Jane"): the
+    // text outside is the same on both sides, so the control gets the replacement without it. A prompt
+    // may hold the find more than once; the control still takes one replacement, so only its first
+    // match is kept.
+    const filled = new Set<unknown>();
+    let hits = findHits(paras, typed, !!values["whole-word"]).flatMap((h) => {
+      const hit: { id: string; target: string; text: string; start: number; find: string; fill?: { find: string; replace: string; start: number } } =
+        { id: h.para.id, target: targetOf(h.para), text: h.para.text, start: h.start, find: h.matched };
+      const written = alignReplacement(typed, h.matched, replace);
+      const edit = planEdit(h.matched, written);
+      const changed = edit.kind === "insert" ? edit.anchor : edit.find;
+      const end = h.start + h.matched.length;
+      const prompt = promptRange(h.para, h.start + edit.offset, h.start + edit.offset + changed.length);
+      if (!prompt) return [hit];
+      if (filled.has(prompt.control.xmlRef)) return [];
+      filled.add(prompt.control.xmlRef);
+      const before = hit.text.slice(h.start, Math.max(h.start, prompt.startOffset));
+      const after = hit.text.slice(Math.min(end, prompt.endOffset), end);
+      if (!written.startsWith(before) || !written.endsWith(after) || written.length < before.length + after.length) return [hit];
+      const inside = Math.max(h.start, prompt.startOffset);
+      hit.fill = { find: hit.text.slice(inside, Math.min(end, prompt.endOffset)), replace: written.slice(before.length, written.length - after.length), start: inside };
+      return [hit];
+    });
     if (hits.length === 0) {
       fail(`"${typed}" not found${values.in ? ` in ${values.in}` : ""}; nothing was written. Text in a docx may differ from what you expect (quotes, dashes, non-breaking spaces, a tracked deletion); check with: view FILE --grep '<a distinctive word>'`);
     }
@@ -262,6 +288,8 @@ async function cmdReplace(argv: string[]): Promise<void> {
       return m;
     };
     const patches: Patch[] = [...hits].reverse().map((h): Patch => {
+      // On the prompt of an empty content control the replacement fills the control, whole.
+      if (h.fill) return { type: "replace_text", target: h.target, find: h.fill.find, replace: h.fill.replace, occurrence: occurrenceAt(h.text, h.fill.find, h.fill.start) };
       const m = planFor(h.find);
       const start = h.start + m.offset;
       if (m.kind === "insert") {

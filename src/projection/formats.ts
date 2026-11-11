@@ -17,8 +17,12 @@ import type {
   RunMapping,
   StyleInfo,
   ProjectionOptions,
+  ControlInfo,
+  ControlRange,
+  FXPNode,
 } from "../types.js";
 import { idsCarrySection } from "../normalizer/header-footer.js";
+import { getChildren, getTagName, runHasContent } from "../xml/helpers.js";
 import { getLevelInfo } from "../patches/numbering.js";
 
 // =============================================================================
@@ -33,6 +37,14 @@ export interface JsonProjectionRunFormatting extends RunFormatting {
   /** End character offset in paragraph text (exclusive). */
   endOffset: number;
 }
+
+/** A content control in a paragraph: its properties and the text range it covers. */
+export type JsonProjectionControl = Omit<ControlInfo, "xmlRef" | "parent"> & {
+  /** Start character offset in paragraph text (inclusive). */
+  startOffset: number;
+  /** End character offset in paragraph text (exclusive). */
+  endOffset: number;
+};
 
 interface JsonProjectionParagraph {
   id: string;
@@ -53,6 +65,11 @@ interface JsonProjectionParagraph {
   noteRefs?: { note: string; offset: number }[];
   hasPageBreak?: boolean;
   pageBreakOffset?: number;
+  /**
+   * Content controls: one wrapped around the paragraph (covering all of its
+   * text) first, then those inside it in document order.
+   */
+  controls?: JsonProjectionControl[];
 }
 
 interface JsonProjectionTableCell {
@@ -332,7 +349,35 @@ function projectParagraphToJson(
     }
   }
 
+  const controls = controlRangesOf(para);
+  if (controls.length > 0) {
+    result.controls = controls.map(({ control: c, startOffset, endOffset }) => {
+      const out: JsonProjectionControl = { id: c.id, kind: c.kind, placeholder: c.placeholder, startOffset, endOffset };
+      if (c.alias !== undefined) out.alias = c.alias;
+      if (c.tag !== undefined) out.tag = c.tag;
+      if (c.options) out.options = c.options;
+      if (c.checked !== undefined) out.checked = c.checked;
+      if (c.locked) out.locked = c.locked;
+      if (c.bound) out.bound = true;
+      return out;
+    });
+  }
+
   return result;
+}
+
+/**
+ * Every content control of a paragraph with the text range it covers: the
+ * control wrapped around the paragraph (or its cell) first, covering all of
+ * the text, then the inline ones.
+ */
+function controlRangesOf(para: NormalizedParagraph): ControlRange[] {
+  const ranges: ControlRange[] = [];
+  if (para.control) {
+    ranges.push({ control: para.control, startOffset: 0, endOffset: para.text.length });
+  }
+  if (para.controls) ranges.push(...para.controls);
+  return ranges;
 }
 
 function projectTableToJson(
@@ -354,11 +399,13 @@ function projectTableToJson(
           cellResult.paraId = cell.paragraphs[0].paraId;
         }
         // Include individual paragraph details for multi-paragraph cells,
-        // when filtering runs (so matching runs in cells are reported), and
-        // when a paragraph holds a footnote or endnote reference: the mark is
-        // not in the cell's text, so its `noteRefs` are the only trace of it
+        // when filtering runs (so matching runs in cells are reported), when
+        // the cell holds content controls, and when a paragraph holds a
+        // footnote or endnote reference: the mark is not in the cell's text,
+        // so its `noteRefs` are the only trace of it
         const hasNoteRefs = cell.paragraphs.some((p) => p.noteRefs !== undefined && p.noteRefs.length > 0);
-        if (cell.paragraphs.length > 1 || runFilter !== undefined || hasNoteRefs) {
+        const hasControls = cell.paragraphs.some((p) => p.control !== undefined || p.controls !== undefined);
+        if (cell.paragraphs.length > 1 || runFilter !== undefined || hasNoteRefs || hasControls) {
           cellResult.paragraphs = cell.paragraphs.map((p) =>
             projectParagraphToJson(p, includeFormatting, includeRevisions, false, runFilter),
           );
@@ -650,11 +697,12 @@ function formatParagraphMarkdown(
 /**
  * A paragraph's text as the markdown view shows it: formatting markers and
  * revision marks when asked for, a footnote or endnote mark (`[^1]`) where
- * each reference sits, and the `[PAGE BREAK]` marker when asked for.
+ * each reference sits, the `[PAGE BREAK]` marker when asked for, and
+ * content-control markers (`{field: …}`) around the controls that get one.
  *
- * The marks and the page-break marker are not part of `para.text`. Each has
- * an offset in that text, which is mapped through whatever the formatting
- * and revision annotations added before it is inserted.
+ * The marks and markers are not part of `para.text`. Each has an offset in
+ * that text, which is mapped through whatever the formatting and revision
+ * annotations added before it is inserted.
  */
 function renderParagraphText(
   para: NormalizedParagraph,
@@ -665,55 +713,160 @@ function renderParagraphText(
   let text = includeFormatting
     ? annotateTextWithFormatting(para.text, para.runs)
     : para.text;
-  const hasRevisions = includeRevisions && para.revisions !== undefined && para.revisions.length > 0;
 
-  // Revisions, with their offsets moved past the formatting markers
-  const revisions: RevisionMark[] = !hasRevisions
-    ? []
-    : includeFormatting
-      ? para.revisions!.map((rev) => ({
+  // Revision offsets, mapped through the formatting markers when those are shown
+  let revisions: RevisionMark[] | undefined;
+  if (includeRevisions && para.revisions && para.revisions.length > 0) {
+    revisions = includeFormatting
+      ? para.revisions.map((rev) => ({
           ...rev,
           startOffset: mapOffsetToFormattedText(rev.startOffset, para.runs),
           endOffset: mapOffsetToFormattedText(rev.endOffset, para.runs),
         }))
-      : para.revisions!;
-  if (hasRevisions) text = annotateTextWithRevisions(text, revisions);
+      : para.revisions;
+    text = annotateTextWithRevisions(text, revisions);
+  }
+
+  // Everything else is spliced into the annotated text in one pass, so no
+  // marker shifts the position of another.
+  const splices: Splice[] = [];
 
   /** An offset in `para.text` → the same place in the annotated text. */
   const mapOffset = (offset: number): number => {
     let mapped = includeFormatting ? mapOffsetToFormattedText(offset, para.runs) : offset;
-    if (hasRevisions) mapped = mapOffsetToAnnotatedText(mapped, revisions);
+    if (revisions) mapped = mapOffsetToAnnotatedText(mapped, revisions);
     return mapped;
   };
 
-  const inserts: { at: number; mark?: string }[] = [];
-  for (const ref of para.noteRefs ?? []) {
+  // Footnote and endnote marks, in order where several share an offset
+  (para.noteRefs ?? []).forEach((ref, i) => {
     const mark = noteMark(ref);
-    if (mark.length > 0) inserts.push({ at: mapOffset(ref.offset), mark });
-  }
-  // The [PAGE BREAK] marker goes at the break's position in the text
+    if (mark.length > 0) splices.push({ at: mapOffset(ref.offset), rank: 1, seq: i, text: mark });
+  });
+
+  // The [PAGE BREAK] marker goes at the break's position in the text, after
+  // any note mark there
   if (includePageBreaks && para.hasPageBreak) {
-    inserts.push({ at: mapOffset(para.pageBreakOffset ?? 0) });
+    const offset = mapOffset(para.pageBreakOffset ?? 0);
+    const marker =
+      offset === 0 ? "[PAGE BREAK] " : offset >= text.length ? " [PAGE BREAK]" : " [PAGE BREAK] ";
+    splices.push({ at: offset, rank: 1, seq: STANDALONE_AFTER_NOTES, text: marker });
   }
 
-  // Right to left, so an insertion does not move the ones still to come.
-  // Marks at one offset keep their order.
-  const ordered = inserts.map((ins, i) => ({ ...ins, i })).sort((a, b) => b.at - a.at || b.i - a.i);
-  for (const ins of ordered) {
-    const before = text.slice(0, ins.at);
-    const after = text.slice(ins.at);
-    if (ins.mark !== undefined) {
-      text = `${before}${ins.mark}${after}`;
-    } else if (before.length === 0) {
-      text = `[PAGE BREAK] ${after}`;
-    } else if (after.length === 0) {
-      text = `${before} [PAGE BREAK]`;
+  // {field …} markers around content controls.
+  const ranges = controlRangesOf(para);
+  ranges.forEach((range, seq) => {
+    const whole = range.control === para.control;
+    const empty = range.startOffset === range.endOffset;
+    const marker = controlMarker(range.control, empty, whole);
+    if (!marker) return;
+    const place = (offset: number): number => {
+      let at = includeFormatting ? mapBoundaryToFormattedText(offset, para.runs) : offset;
+      if (revisions) at = mapBoundaryToAnnotatedText(at, revisions);
+      return at;
+    };
+    if (empty) {
+      splices.push({ at: place(range.startOffset), rank: 1, seq: STANDALONE_AFTER_NOTES + 1 + seq, text: marker.open + marker.close });
     } else {
-      text = `${before} [PAGE BREAK] ${after}`;
+      // At one position: closers first (innermost first), then openers (outermost first)
+      splices.push({ at: place(range.startOffset), rank: 2, seq, text: marker.open });
+      splices.push({ at: place(range.endOffset), rank: 0, seq: -seq, text: marker.close });
     }
-  }
+  });
 
-  return text;
+  if (splices.length === 0) return text;
+  splices.sort((a, b) => a.at - b.at || a.rank - b.rank || a.seq - b.seq);
+  let out = "";
+  let last = 0;
+  for (const splice of splices) {
+    out += text.slice(last, splice.at) + splice.text;
+    last = splice.at;
+  }
+  return out + text.slice(last);
+}
+
+/** Order of the page-break marker and empty-control markers after note marks at one position. */
+const STANDALONE_AFTER_NOTES = 1_000_000;
+
+/** Text to put into a rendered paragraph at a position. */
+interface Splice {
+  at: number;
+  /** Order at one position: 0 closes a marker, 1 stands alone, 2 opens one. */
+  rank: number;
+  seq: number;
+  text: string;
+}
+
+/** The word a control's kind adds to its marker. */
+const CONTROL_WORD: Partial<Record<ControlInfo["kind"], string>> = {
+  date: " date",
+  dropDownList: " dropdown",
+  comboBox: " combo",
+  checkbox: " checkbox",
+  picture: " picture",
+};
+
+/**
+ * The marker shown around a content control's text, if it gets one.
+ *
+ * - An empty control showing its prompt: `{field: Insert name}`, with the
+ *   kind and the list items for a typed one:
+ *   `{field dropdown "One-off" OR "Ongoing": Choose an item.}`.
+ * - A filled drop-down list, combo box or date: `{field date= 1 May 2026}`,
+ *   so the kind and the options stay visible.
+ * - A control with no text at all: `{field:}`, or `{field date:}` and the
+ *   like for a typed one; a picture: `{field picture}`.
+ * - A filled rich-text or plain-text control, a checkbox (its glyph reads
+ *   by itself) and a building-block gallery: no marker; they are content.
+ *
+ * @param empty - the control covers no text
+ * @param whole - the control wraps the whole paragraph rather than sitting in it
+ */
+function controlMarker(
+  control: ControlInfo,
+  empty: boolean,
+  whole: boolean,
+): { open: string; close: string } | undefined {
+  const word = CONTROL_WORD[control.kind] ?? "";
+  const options =
+    control.options && control.options.length > 0
+      ? ` ${control.options.map((o) => `"${o}"`).join(" OR ")}`
+      : "";
+
+  if (control.kind === "picture") {
+    return { open: empty ? "{field picture" : "{field picture: ", close: "}" };
+  }
+  if (control.placeholder) {
+    // Flagged as showing its prompt but holding no text: no separator space
+    return { open: empty ? `{field${word}${options}:` : `{field${word}${options}: `, close: "}" };
+  }
+  if (control.kind === "dropDownList" || control.kind === "comboBox" || control.kind === "date") {
+    // With no text there is no value to show, whatever the prompt flag says
+    return { open: empty ? `{field${word}${options}:` : `{field${word}${options}= `, close: "}" };
+  }
+  // A text control with nothing in it is still a field to see. An empty
+  // paragraph inside a block control that holds something elsewhere is just
+  // an empty paragraph.
+  if (
+    empty &&
+    (control.kind === "richText" || control.kind === "text") &&
+    (!whole || !controlHasContent(control))
+  ) {
+    return { open: "{field:", close: "}" };
+  }
+  return undefined;
+}
+
+/** True if a control holds any current text or object (deleted text does not count). */
+function controlHasContent(control: ControlInfo): boolean {
+  const visit = (nodes: FXPNode[]): boolean =>
+    nodes.some((node) => {
+      const tag = getTagName(node);
+      if (tag === undefined || tag === "w:del" || tag === "w:moveFrom" || tag === "w:sdtPr") return false;
+      if (tag === "w:r") return runHasContent(node);
+      return visit(getChildren(node));
+    });
+  return visit(getChildren(control.xmlRef));
 }
 
 /**
@@ -812,6 +965,52 @@ function mapOffsetToFormattedText(
   }
 
   return originalOffset + shift;
+}
+
+/**
+ * Like {@link mapOffsetToFormattedText}, for a boundary between runs: the
+ * position after the markers that close at `originalOffset` and before the
+ * ones that open there.
+ */
+function mapBoundaryToFormattedText(
+  originalOffset: number,
+  runs: RunMapping[],
+): number {
+  let shift = 0;
+  for (const run of runs) {
+    const { bold, italic, strikethrough, underline } = run.formatting;
+    if (!bold && !italic && !strikethrough && !underline) continue;
+    let prefixLen = 0;
+    let suffixLen = 0;
+    if (strikethrough) { prefixLen += 2; suffixLen += 2; }
+    if (bold) { prefixLen += 2; suffixLen += 2; }
+    if (italic) { prefixLen += 1; suffixLen += 1; }
+    if (underline) { prefixLen += 3; suffixLen += 4; }
+    if (originalOffset > run.startOffset) shift += prefixLen;
+    if (originalOffset >= run.endOffset) shift += suffixLen;
+  }
+  return originalOffset + shift;
+}
+
+/**
+ * Like {@link mapOffsetToAnnotatedText}, for a boundary: the position after
+ * the insertion marks that close at `offset` and before the insertion and
+ * deletion marks that start there.
+ */
+function mapBoundaryToAnnotatedText(
+  offset: number,
+  revisions: RevisionMark[],
+): number {
+  let shift = 0;
+  for (const rev of revisions) {
+    if (rev.type === "insert") {
+      if (offset > rev.startOffset) shift += 2;
+      if (offset >= rev.endOffset) shift += 2;
+    } else if (offset > rev.startOffset) {
+      shift += rev.text.length + 4;
+    }
+  }
+  return offset + shift;
 }
 
 /**

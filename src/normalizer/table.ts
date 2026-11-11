@@ -15,65 +15,89 @@ import type {
   NormalizedTable,
   NormalizedTableRow,
   NormalizedTableCell,
+  NormalizedParagraph,
+  ControlInfo,
 } from "../types.js";
 import {
   findChild,
-  findChildren,
+  contentChildren,
   getAttr,
 } from "../xml/helpers.js";
 import { normalizeParagraph } from "./paragraph.js";
+import { ControlResolver } from "./control.js";
 
 /**
  * Normalize a w:tbl FXP node into a NormalizedTable.
  *
  * @param tableNode - The w:tbl FXP node
  * @param id - The stable ID (e.g., "tbl0")
+ * @param control - The innermost content control wrapped around the table
+ * @param resolver - Shared across one part so a control is read once
  */
 export function normalizeTable(
   tableNode: FXPNode,
   id: string,
+  control?: ControlInfo,
+  resolver: ControlResolver = new ControlResolver(),
 ): NormalizedTable {
   const rows: NormalizedTableRow[] = [];
-  const trNodes = findChildren(tableNode, "w:tr");
+  // Rows, cells and cell content are read through content controls: a
+  // wrapped cell is still a cell, a wrapped paragraph still a paragraph.
+  const trNodes = contentChildren(tableNode).filter((c) => "w:tr" in c.node);
 
   for (let rowIdx = 0; rowIdx < trNodes.length; rowIdx++) {
-    const trNode = trNodes[rowIdx]!;
+    const tr = trNodes[rowIdx]!;
+    const rowControl = resolver.resolve(tr.sdts, control);
     const cells: NormalizedTableCell[] = [];
-    const tcNodes = findChildren(trNode, "w:tc");
+    const tcNodes = contentChildren(tr.node).filter((c) => "w:tc" in c.node);
 
     for (let colIdx = 0; colIdx < tcNodes.length; colIdx++) {
-      const tcNode = tcNodes[colIdx]!;
-      const paragraphs = findChildren(tcNode, "w:p");
-      const normalizedParas = paragraphs.map((pNode, pIdx) =>
-        normalizeParagraph(
-          pNode,
-          `${id}.r${rowIdx}.c${colIdx}.p${pIdx}`,
-        ),
-      );
+      const tc = tcNodes[colIdx]!;
+      const cellControl = resolver.resolve(tc.sdts, rowControl);
+      const normalizedParas: NormalizedParagraph[] = [];
+      const nestedTables: NormalizedTable[] = [];
 
-      // Normalize nested tables within this cell
-      const nestedTblNodes = findChildren(tcNode, "w:tbl");
-      const nestedTables = nestedTblNodes.map((tblNode, tblIdx) =>
-        normalizeTable(
-          tblNode,
-          `${id}.r${rowIdx}.c${colIdx}.tbl${tblIdx}`,
-        ),
-      );
+      for (const item of contentChildren(tc.node)) {
+        const inner = resolver.resolve(item.sdts, cellControl);
+        if ("w:p" in item.node) {
+          normalizedParas.push(
+            normalizeParagraph(
+              item.node,
+              `${id}.r${rowIdx}.c${colIdx}.p${normalizedParas.length}`,
+              inner,
+            ),
+          );
+        } else if ("w:tbl" in item.node) {
+          // Nested tables within this cell
+          nestedTables.push(
+            normalizeTable(
+              item.node,
+              `${id}.r${rowIdx}.c${colIdx}.tbl${nestedTables.length}`,
+              inner,
+              resolver,
+            ),
+          );
+        }
+      }
 
-      cells.push({
+      const cell: NormalizedTableCell = {
         rowIndex: rowIdx,
         colIndex: colIdx,
         paragraphs: normalizedParas,
         nestedTables,
-        xmlRef: tcNode,
-      });
+        xmlRef: tc.node,
+      };
+      if (cellControl) cell.control = cellControl;
+      cells.push(cell);
     }
 
-    rows.push({
+    const row: NormalizedTableRow = {
       index: rowIdx,
       cells,
-      xmlRef: trNode,
-    });
+      xmlRef: tr.node,
+    };
+    if (rowControl) row.control = rowControl;
+    rows.push(row);
   }
 
   // Extract table style
@@ -81,11 +105,13 @@ export function normalizeTable(
   const tblStyle = tblPr ? findChild(tblPr, "w:tblStyle") : undefined;
   const style = tblStyle ? getAttr(tblStyle, "w:val") : undefined;
 
-  return {
+  const table: NormalizedTable = {
     kind: "table",
     id,
     rows,
     xmlRef: tableNode,
     style,
   };
+  if (control) table.control = control;
+  return table;
 }

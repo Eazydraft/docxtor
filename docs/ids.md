@@ -23,6 +23,8 @@ In a footnote or endnote id, `n` is the note's number, from 1: the number Word d
 
 IDs are positional and stable within a single editing session. They are reassigned if you re-load the document.
 
+Paragraphs and table cells inside a content control are numbered like any other.
+
 ## Native paragraph identity (`w14:paraId`)
 
 Word 2010+ files stamp every paragraph with a `w14:paraId` (8 uppercase hex chars) that survives round trips through Word, hand edits and re-saves — unlike positional ids, which shift whenever a paragraph is inserted or deleted. docxtor exposes it everywhere a paragraph appears:

@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { Docxtor } from "../../src/index.js";
-import { createBodyDocx, createLeaseDocx, createMultiParagraphDocx, createNotesDocx, createTwoSectionDocx } from "../fixtures/create-docx.js";
+import { createBodyDocx, createLeaseDocx, createMultiParagraphDocx, createContentControlDocx, createNotesDocx, createTwoSectionDocx } from "../fixtures/create-docx.js";
 import { alignReplacement, allParagraphs, findHits, patchTargets } from "../../cli/paragraphs.js";
 
 const run = promisify(execFile);
@@ -29,7 +29,7 @@ async function cli(...args: string[]): Promise<{ code: number; out: string; err:
 const texts = async (file: string): Promise<string[]> => (await Docxtor.load(file)).getParagraphs().map((p) => p.text);
 
 let dir: string;
-let v1: string, lease: string;
+let v1: string, lease: string, form: string;
 
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), "docxtor-cli-"));
@@ -43,6 +43,8 @@ beforeAll(async () => {
     "4. Term. One year.",
   ]));
   await writeFile(lease, await createLeaseDocx());
+  form = join(dir, "form.docx");
+  await writeFile(form, await createContentControlDocx());
 }, 30_000);
 
 describe("docxtor CLI", () => {
@@ -270,6 +272,51 @@ describe("docxtor CLI", () => {
     expect(ok.code).toBe(0);
     expect((await texts(out))[3]).toBe("2A. New clause.");
   }, 30_000);
+
+  it("view shows form fields, and replace on a prompt fills the control whole", async () => {
+    const v = await cli("view", form);
+    expect(v.out).toContain("[p0] Title: {field: Insert Title for Contract} ref ACME-42");
+    expect(v.out).toContain("| [tbl0.r0.c0.p0] Start date | [tbl0.r0.c1.p0] {field date: Select date} |");
+
+    // The find and the replacement share a word; the prompt still goes whole.
+    const out = join(dir, "filled.docx");
+    const r = await cli("replace", form, "-o", out, "--find", "Insert Title", "--replace", "Insert Coin Ltd");
+    expect(r.code).toBe(0);
+    expect((await texts(out))[0]).toBe("Title: Insert Coin Ltd ref ACME-42");
+    expect((await cli("view", out)).out).toContain("[p0] Title: {+Insert Coin Ltd+} ref ACME-42");
+
+    // "n" occurs three times, all in the one prompt "Insert Title for Contract": that is one fill,
+    // not an ambiguous find, and not three patches of which two would fail.
+    const twice = join(dir, "twice.docx");
+    const t = await cli("replace", form, "-o", twice, "--find", "n", "--replace", "Deed", "--in", "p0", "--untracked");
+    expect(t.err).toBe("");
+    expect(t.out).toContain("1 replacement in 1 paragraph (p0)");
+    expect((await texts(twice))[0]).toBe("Title: Deed ref ACME-42");
+    const all = join(dir, "all.docx");
+    const a = await cli("replace", form, "-o", all, "--find", "t", "--replace", "Deed", "--in", "p0", "--all", "--untracked");
+    expect(a.err).toBe("");
+    expect(a.code).toBe(0);
+    // "Title: " has one "t" outside the prompt; the prompt's several are one fill
+    expect(a.out).toContain("2 replacements in 1 paragraph (p0)");
+    expect((await texts(all))[0]).toBe("TiDeedle: Deed ref ACME-42");
+
+    // A find that starts outside the control: the control gets the replacement minus the text outside,
+    // not just the words that differ.
+    const edge = join(dir, "edge.docx");
+    const e = await cli("replace", form, "-o", edge, "--find", "Title: Insert Title for Contract", "--replace", "Title: Insert Title for Widgets", "--untracked");
+    expect(e.err).toBe("");
+    expect((await texts(edge))[0]).toBe("Title: Insert Title for Widgets ref ACME-42");
+    const tail = join(dir, "tail.docx");
+    const tl = await cli("replace", form, "-o", tail, "--find", "for Contract ref", "--replace", "for Widgets ref", "--untracked");
+    expect(tl.err).toBe("");
+    expect((await texts(tail))[0]).toBe("Title: for Widgets ref ACME-42");
+
+    const bad = await cli("replace", form, "-o", join(dir, "bad.docx"), "--find", "Choose an item.", "--replace", "Lease");
+    expect(bad.code).toBe(1);
+    expect(bad.err).toContain('"Lease" is not an option of the dropdown content control "Type of contract"');
+    expect(bad.err).toContain('choose one of: "One-off purchase", "Ongoing supply"');
+  }, 30_000);
+
   describe("headers and footers in a document with two sections", () => {
     const partText = async (file: string, path: string): Promise<string> => {
       const JSZip = (await import("jszip")).default;

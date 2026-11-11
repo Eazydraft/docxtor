@@ -21,7 +21,8 @@ import type {
   NoteKind,
   NoteReference,
 } from "../types.js";
-import { getAttr, getChildren, getTagName, textElementContent, runChildChar } from "../xml/helpers.js";
+import { getAttr, getChildren, getTagName, textElementContent, runChildChar, contentChildren } from "../xml/helpers.js";
+import { ControlResolver } from "./control.js";
 import { normalizeParagraph } from "./paragraph.js";
 import { normalizeTable } from "./table.js";
 
@@ -70,7 +71,8 @@ function bodyNoteReferences(doc: NormalizedDocument): NoteReference[] {
       for (const cell of row.cells) {
         const paragraphs = new Map(cell.paragraphs.map((p) => [p.xmlRef, p]));
         const nested = new Map(cell.nestedTables.map((t) => [t.xmlRef, t]));
-        for (const child of getChildren(cell.xmlRef)) {
+        // Read through content controls, as the table normalizer does
+        for (const { node: child } of contentChildren(cell.xmlRef)) {
           const para = paragraphs.get(child);
           if (para) refs.push(...(para.noteRefs ?? []));
           const inner = nested.get(child);
@@ -143,10 +145,13 @@ function normalizeNotePart(
     const idPrefix = `${prefix}${number}`;
     const paragraphs: NormalizedParagraph[] = [];
     const tables: NormalizedTable[] = [];
-    for (const child of getChildren(node)) {
+    // Read through block-level content controls, as in the body
+    const resolver = new ControlResolver();
+    for (const { node: child, sdts } of contentChildren(node)) {
       const tag = getTagName(child);
-      if (tag === "w:p") paragraphs.push(normalizeParagraph(child, `${idPrefix}.p${paragraphs.length}`));
-      else if (tag === "w:tbl") tables.push(normalizeTable(child, `${idPrefix}.tbl${tables.length}`));
+      const control = resolver.resolve(sdts);
+      if (tag === "w:p") paragraphs.push(normalizeParagraph(child, `${idPrefix}.p${paragraphs.length}`, control));
+      else if (tag === "w:tbl") tables.push(normalizeTable(child, `${idPrefix}.tbl${tables.length}`, control, resolver));
     }
     const ref = first.get(noteId);
     notes.set(noteId, {

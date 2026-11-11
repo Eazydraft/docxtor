@@ -19,12 +19,15 @@ import {
   cloneNode,
   findChildren,
   getChildren,
-  insertAfter,
-  removeChild,
   findChild,
+  contentChildren,
+  sdtContentChildren,
   createElement,
   createRun,
+  getTagName,
+  RUN_CONTAINER_TAGS,
 } from "../xml/helpers.js";
+import { readControlInfo } from "../normalizer/control.js";
 import { executeReplaceText } from "./text-ops.js";
 import type { RevisionContext } from "./revision.js";
 import { createTrPrIns, createTrPrDel } from "./revision.js";
@@ -64,8 +67,11 @@ export function executeAddTableRow(
     );
   }
 
-  // Clone the source row
+  // Clone the source row. A content control in the row (around a cell, a
+  // paragraph or some runs) is not cloned with it: the copy keeps what the
+  // control held and drops the wrapper, so no control id appears twice.
   const newRowNode = cloneNode(sourceRow.xmlRef);
+  unwrapControls(newRowNode);
 
   // Replace text in each cell of the cloned row
   const tcNodes = findChildren(newRowNode, "w:tc");
@@ -93,19 +99,21 @@ export function executeAddTableRow(
     }
   }
 
-  // Insert the new row into the table XML
-  const tableChildren = getChildren(table.xmlRef);
+  // Insert the new row into the table XML, next to the source row in the
+  // array that really holds it (a row can sit inside a content control).
+  const rows = contentChildren(table.xmlRef).filter((c) => "w:tr" in c.node);
   if (patch.afterRow === -1) {
     // Insert at the beginning, after tblPr and tblGrid
-    const firstTr = tableChildren.find((c) => "w:tr" in c);
-    if (firstTr) {
-      const idx = tableChildren.indexOf(firstTr);
-      tableChildren.splice(idx, 0, newRowNode);
+    const first = rows[0];
+    if (first) {
+      first.siblings.splice(first.siblings.indexOf(first.node), 0, newRowNode);
     } else {
-      tableChildren.push(newRowNode);
+      getChildren(table.xmlRef).push(newRowNode);
     }
   } else {
-    insertAfter(table.xmlRef, sourceRow.xmlRef, newRowNode);
+    const source = rows.find((c) => c.node === sourceRow.xmlRef);
+    if (!source) throw new Error("Reference child not found in parent");
+    source.siblings.splice(source.siblings.indexOf(source.node) + 1, 0, newRowNode);
   }
 
   // If tracking revisions, add w:ins to the new row's w:trPr
@@ -152,7 +160,65 @@ export function executeDeleteTableRow(
     trPrChildren.push(createTrPrDel(revCtx));
   } else {
     // Without revision tracking: remove the row from XML
-    removeChild(table.xmlRef, row.xmlRef);
+    const holder = contentChildren(table.xmlRef).find((c) => c.node === row.xmlRef);
+    if (holder) {
+      holder.siblings.splice(holder.siblings.indexOf(row.xmlRef), 1);
+      // A control that wrapped only this row would be left empty in the
+      // table: it goes with the row (validation refuses a locked one).
+      removeEmptyWrappers(getChildren(table.xmlRef), holder.sdts);
+    }
+  }
+}
+
+/**
+ * Remove the wrappers in `sdts` (outermost first) that no longer hold any
+ * element, innermost first, from the tree under `children`.
+ */
+function removeEmptyWrappers(children: FXPNode[], sdts: FXPNode[]): void {
+  for (let i = sdts.length - 1; i >= 0; i--) {
+    const sdt = sdts[i]!;
+    if (sdtContentChildren(sdt).some((c) => !("#text" in c))) return;
+    const parent = i === 0 ? children : sdtContentChildren(sdts[i - 1]!);
+    const at = parent.indexOf(sdt);
+    if (at === -1) return;
+    parent.splice(at, 1);
+  }
+}
+
+/**
+ * Replace every content control under `node` by its content, in place.
+ * Used on a cloned row: the clone must not repeat the source's control ids.
+ * A control showing its prompt contributes structure only (its cell, its
+ * paragraphs): the prompt is not document text, so it is not copied.
+ */
+function unwrapControls(node: FXPNode): void {
+  const children = getChildren(node);
+  for (let i = 0; i < children.length; i++) {
+    const child = children[i]!;
+    if ("w:sdt" in child) {
+      const content = sdtContentChildren(child);
+      if (readControlInfo(child).placeholder) removeRuns(content);
+      children.splice(i, 1, ...content);
+      i--; // re-examine what took its place (a nested control, say)
+      continue;
+    }
+    if (!("#text" in child)) unwrapControls(child);
+  }
+}
+
+/** Remove every run under `children`, keeping paragraphs, cells and their properties. */
+function removeRuns(children: FXPNode[]): void {
+  for (let i = children.length - 1; i >= 0; i--) {
+    const child = children[i]!;
+    const tag = getTagName(child);
+    if (tag === undefined) continue;
+    if (RUN_CONTAINER_TAGS.has(tag)) {
+      children.splice(i, 1);
+    } else if (tag === "w:sdt") {
+      removeRuns(sdtContentChildren(child));
+    } else if (!tag.endsWith("Pr")) {
+      removeRuns(getChildren(child));
+    }
   }
 }
 

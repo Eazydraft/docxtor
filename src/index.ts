@@ -456,9 +456,19 @@ export class Docxtor {
   /**
    * Validate patches without applying them.
    * Returns validation results for each patch.
+   *
+   * @param options - Pass the options the patches will be applied with:
+   *   `inlineMarkers` decides how `find` and `anchor` are matched, which
+   *   matters for what a content control allows.
    */
-  validatePatches(patches: Patch[]): { valid: boolean; error?: string }[] {
-    return patches.map((patch) => _validatePatch(patch, this.doc));
+  validatePatches(
+    patches: Patch[],
+    options?: Pick<PatchOptions, "inlineMarkers">,
+  ): { valid: boolean; error?: string }[] {
+    return patches.map((patch) => {
+      const own = (patch as { markers?: boolean }).markers;
+      return _validatePatch(patch, this.doc, own ?? options?.inlineMarkers ?? true);
+    });
   }
 }
 
@@ -473,6 +483,8 @@ export type {
   RunMapping,
   RunFormatting,
   RunFilter,
+  ControlInfo,
+  ControlRange,
   ListInfo,
   HeaderFooter,
   NormalizedNote,
@@ -487,6 +499,7 @@ export type {
   InsertParagraphPatch,
   DeleteParagraphPatch,
   AddCommentPatch,
+  SetCheckboxPatch,
   AddTablePatch,
   AddTableRowPatch,
   DeleteTableRowPatch,
@@ -528,7 +541,7 @@ export { normalizeDocument, reNormalizeDocument } from "./normalizer/document.js
 export type { HeaderFooterRef } from "./normalizer/document.js";
 export { applyPatches, cloneDocument } from "./patches/engine.js";
 export { project, projectToJson, projectToMarkdown } from "./projection/llm.js";
-export type { JsonProjection, JsonProjectionNote, JsonProjectionPageBreak, JsonProjectionRunFormatting } from "./projection/llm.js";
+export type { JsonProjection, JsonProjectionNote, JsonProjectionPageBreak, JsonProjectionRunFormatting, JsonProjectionControl } from "./projection/llm.js";
 export { validatePatch, findParagraphById, findParagraphByParaId, findTableById } from "./patches/validator.js";
 export type { ValidationResult } from "./patches/validator.js";
 export { acceptAllRevisions, rejectAllRevisions } from "./revisions/accept-reject.js";

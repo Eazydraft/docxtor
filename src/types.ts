@@ -217,6 +217,8 @@ export interface NormalizedPageBreak {
   id: string;
   /** Direct reference to the w:p FXP node containing the page break. */
   xmlRef: FXPNode;
+  /** The innermost content control wrapped around the page-break paragraph, if any. */
+  control?: ControlInfo;
 }
 
 // =============================================================================
@@ -271,6 +273,83 @@ export interface NormalizedParagraph {
    * and text from this offset onward is on the next page.
    */
   pageBreakOffset?: number;
+  /**
+   * The innermost content control (`w:sdt`) that wraps this whole paragraph:
+   * a block-level control around it, or a control around its table cell.
+   */
+  control?: ControlInfo;
+  /**
+   * Inline content controls inside this paragraph, in document order, each
+   * with the character range of `.text` it covers. A nested control follows
+   * the one that holds it. A control with no text has an empty range.
+   */
+  controls?: ControlRange[];
+}
+
+// =============================================================================
+// Content controls (w:sdt)
+// =============================================================================
+
+/**
+ * A Word content control: a fillable field wrapped around runs, paragraphs,
+ * a table, a row or a cell. The text it holds is part of the paragraph text.
+ *
+ * One object stands for one `w:sdt` while the document is open: every node
+ * inside the control refers to the same object, and it is kept across
+ * patches, accept and reject. A patch that changes the control (a fill, a
+ * new drop-down value, a ticked checkbox) updates it in place, so it always
+ * describes the document as it is now. An atomic batch is the exception: it
+ * swaps in a copy of the document, with new objects.
+ *
+ * `kind` may gain values in later versions. Treat an unknown kind like
+ * `"other"`: a switch over it should have a default branch.
+ */
+export interface ControlInfo {
+  /** `w:id` of the control ("" when it has none). */
+  id: string;
+  kind:
+    | "richText"
+    | "text"
+    | "date"
+    | "dropDownList"
+    | "comboBox"
+    | "checkbox"
+    | "picture"
+    | "docPart"
+    | "other";
+  /** `w:alias`: the title Word shows on the control. */
+  alias?: string;
+  /** `w:tag`: the developer tag. */
+  tag?: string;
+  /**
+   * True while the control shows its prompt (`w:showingPlcHdr`): the text is
+   * a placeholder, not an answer.
+   */
+  placeholder: boolean;
+  /** Display texts of a drop-down list or combo box, in order. */
+  options?: string[];
+  /** State of a checkbox control. */
+  checked?: boolean;
+  /**
+   * `w:lock`: "content" (the content cannot be edited), "control" (the
+   * control cannot be deleted) or "both".
+   */
+  locked?: "content" | "control" | "both";
+  /** True when the control is bound to a custom XML part (`w:dataBinding`). */
+  bound?: boolean;
+  /** The control that holds this one, if any. */
+  parent?: ControlInfo;
+  /** Direct reference to the w:sdt FXP node. */
+  xmlRef: FXPNode;
+}
+
+/** An inline content control and the range of paragraph text it covers. */
+export interface ControlRange {
+  control: ControlInfo;
+  /** Start character offset in the paragraph text (inclusive). */
+  startOffset: number;
+  /** End character offset in the paragraph text (exclusive). */
+  endOffset: number;
 }
 
 /**
@@ -313,6 +392,8 @@ export interface RunMapping {
   textXmlRef?: FXPNode;
   /** Captured formatting properties. */
   formatting: RunFormatting;
+  /** The innermost inline content control holding this run, if any. */
+  control?: ControlInfo;
 }
 
 export interface RunFormatting {
@@ -367,6 +448,8 @@ export interface NormalizedTable {
   xmlRef: FXPNode;
   /** Table style name (if any). */
   style?: string;
+  /** The innermost content control wrapped around the table, if any. */
+  control?: ControlInfo;
 }
 
 export interface NormalizedTableRow {
@@ -376,6 +459,11 @@ export interface NormalizedTableRow {
   cells: NormalizedTableCell[];
   /** Direct reference to the w:tr FXP node. */
   xmlRef: FXPNode;
+  /**
+   * The innermost content control around this row: one wrapped around the
+   * row itself, else one around the table, if any.
+   */
+  control?: ControlInfo;
 }
 
 export interface NormalizedTableCell {
@@ -389,6 +477,11 @@ export interface NormalizedTableCell {
   nestedTables: NormalizedTable[];
   /** Direct reference to the w:tc FXP node. */
   xmlRef: FXPNode;
+  /**
+   * The innermost content control around this cell: one wrapped around the
+   * cell itself, else one around its row or table, if any.
+   */
+  control?: ControlInfo;
 }
 
 // =============================================================================
@@ -495,6 +588,7 @@ export type Patch =
   | InsertParagraphPatch
   | DeleteParagraphPatch
   | AddCommentPatch
+  | SetCheckboxPatch
   | AddTablePatch
   | AddTableRowPatch
   | DeleteTableRowPatch
@@ -563,6 +657,16 @@ export interface AddCommentPatch {
    * `PatchOptions.inlineMarkers`. Set `false` to write the text verbatim.
    */
   markers?: boolean;
+}
+
+export interface SetCheckboxPatch {
+  type: "set_checkbox";
+  /** Target paragraph ID (positional or `para:` form) holding the checkbox control. */
+  target: string;
+  /** The state to put the checkbox in. */
+  checked: boolean;
+  /** Which checkbox control in the paragraph (1-based). Default: 1. */
+  occurrence?: number;
 }
 
 export interface ReplaceTextPatch {

@@ -94,6 +94,57 @@ Delete a substring from a paragraph.
 }
 ```
 
+## Text patches inside a content control
+
+Text in a Word content control (a form field) is paragraph text, so `replace_text`, `insert_text`, `delete_text` and `replace_cell_text` reach it with no extra syntax. What the patch does depends on the control the match lies in:
+
+| The match is in | The patch |
+|---|---|
+| the prompt of an empty control (`{field: …}` in the view) | **fills the control**: the whole prompt goes, the new text replaces it, and the control stops being flagged as empty |
+| a filled rich-text or plain-text control | is an ordinary text edit, made inside the control |
+| a drop-down list | must leave the control holding one of its list items, or it fails and names the items; `w:lastValue` follows |
+| a combo box | takes a list item or any other text |
+| a date picker | writes the text as given; when it reads as a date (`2026-11-11`, `11 November 2026`, `November 11, 2026`) the control's `w:fullDate` is set too |
+| a checkbox | must replace one glyph by the other (`☐` ↔ `☒`); `w14:checked` flips with it. [`set_checkbox`](#set_checkbox) does the same without the glyph |
+
+Filling an empty control:
+
+```ts
+{ type: "replace_text", target: "p7", find: "Insert Title for Contract", replace: "Supply of Widgets" }
+```
+
+- A prompt is not document text, so every run of it is removed even when `find` matches only part of it: replacing `Insert` with `Supply` gives `Supply`, not `Supply Title for Contract`. `insert_text` anchored on a prompt fills the control with its `text` in the same way.
+- The new text is one run. It takes the control's own run properties (`w:sdtPr/w:rPr`) when the control has them and the paragraph's defaults otherwise, never the grey prompt style.
+- `w:showingPlcHdr` is removed and `w:placeholder` is kept, so Word can show the prompt again if the field is emptied.
+- From the command line, `replace` may name text around the field as well (`--find "Title: Insert name" --replace "Title: Jane Roe"`): the field gets the replacement without the unchanged text outside it.
+- With `trackRevisions` the fill is one `w:ins` and no `w:del`. Rejecting it leaves the control empty rather than bringing the prompt back: the prompt text lives in the glossary part, which docxtor does not read. Word shows an empty field and restores the prompt on the next edit.
+
+`insert_text` next to a control lands on the anchor's side of its edge: text inserted before a word that follows a control, or after a word that precedes one, stays outside the control; text inserted before the control's first word or after its last goes inside.
+
+Refused, with a message that says why:
+
+- an edit that would leave a control empty ("clearing a content control is not supported"), and deleting a prompt;
+- a match that starts inside a control and ends outside it, or the reverse, including the edge of a control nested in another: edit the two parts separately. The message names the innermost control whose edge is crossed;
+- a picture control;
+- **any change inside a closed control.** A control is closed when it is locked against editing (`w:lock` `contentLocked` or `sdtContentLocked`) or data-bound (`w:dataBinding`: Word overwrites its content from a custom XML part when the file is opened, so the edit would be lost). The control may sit anywhere around the target: in the paragraph, around it, around its cell, its row or its table, at any depth of nesting. This covers the text patches, `set_checkbox`, `apply_formatting`, `apply_style`, `insert_paragraph`, `delete_paragraph`, the list patches (`add_list_item`, `remove_list_item`, `convert_to_list`, `remove_list`, `set_list_properties`), `add_table` and `add_list` with `afterId`, `add_table_row` and `delete_table_row`;
+- **removing something that holds a locked control.** `delete_paragraph`, `remove_list_item` and `delete_table_row` are refused when the paragraph or row holds a control with any `w:lock`, at any depth: one locked against deletion (`sdtLocked`) would go with it, and one locked against editing would lose its content. A control wrapped around the paragraph is not removed with it, so a lock against deletion there does not stop the patch;
+- `insert_paragraph`, `add_list_item`, `add_table` and `add_list` next to a paragraph or table wrapped by an empty control or by one that holds a single value (plain text, date, drop-down list). Inside a filled rich-text control they work, and the new content lands inside the same control. `add_table_row` puts the new row next to the row it copies, so inside a control wrapped around that row.
+
+What these rules leave alone:
+
+- `add_comment` is allowed on text in a closed control: a comment changes no content. Filling a control or ticking a checkbox keeps a comment anchored on it.
+- A data-bound control may be removed whole, with the paragraph or row that holds it. Only edits to its content are refused.
+- `acceptAllRevisions` and `rejectAllRevisions` resolve tracked changes wherever they are, inside a locked control too: they settle edits already in the file.
+- `add_header`, `add_footer`, `remove_header` and `remove_footer` write or drop a whole header or footer part and do not look at the controls in it.
+- Deleting the only row a control wraps removes that control with it, since an empty control is not valid in a table.
+
+Limits to know:
+
+- A control with no text at all (`{field:}` in the view) has nothing for a text patch to match, so docxtor cannot fill it. This is the state a rejected tracked fill leaves; Word restores the prompt on the next edit there.
+- The values a typed control stores next to its text (`w:lastValue`, `w:fullDate`, `w14:checked`) are not revision-tracked. After a tracked change to such a control is rejected, the text is back to the old value and the stored value still says the new one.
+
+Repeating sections are shown as their content; adding or removing an item is not supported. docxtor does not create content controls.
+
 ## `append_text`
 
 Append a new paragraph to the end of the document body (or a header/footer). No `target` needed — this is a document-level operation. Particularly useful with `Docxtor.create()` to build documents from scratch.
@@ -232,6 +283,25 @@ Attach a Word comment to a paragraph or to a substring of it. Creates `word/comm
 
 The comment date comes from `PatchOptions.revisionDate` (default: now). Comments are left alone by `acceptAllRevisions` / `rejectAllRevisions`.
 
+## `set_checkbox`
+
+Check or uncheck a checkbox content control without knowing which glyph it shows.
+
+```ts
+{
+  type: "set_checkbox",
+  target: "p40",          // the paragraph holding the checkbox
+  checked: true,
+  occurrence: 1,          // which checkbox in the paragraph (1-based, default: 1)
+}
+```
+
+A checkbox control wrapped around a whole paragraph or cell changes only the run that shows its glyph; the other text there is left alone, and editing it is refused. If no run holds just the glyph, `set_checkbox` is refused rather than rewrite the paragraph. The one exception is a control that holds a single, completely empty paragraph (as rejecting a change can leave it): the glyph is written into that paragraph. In a control with several paragraphs, an empty one is refused like any other.
+
+The glyph, its font and `w14:checked` change together, using the control's own `w14:checkedState` / `w14:uncheckedState` (Word's defaults are `☒` and `☐` in MS Gothic). Setting the state the checkbox already has changes nothing. With `trackRevisions` the old glyph becomes a deletion and the new one an insertion; `w14:checked` is not itself revision-tracked, so after such a change is rejected it still says the new state while the glyph shows the old one.
+
+Only checkbox content controls are handled. Legacy form-field checkboxes and plain `☐` characters are ordinary text.
+
 ## `replace_cell_text`
 
 Replace text in a table cell paragraph (same as `replace_text` but uses the cell's paragraph ID).
@@ -247,7 +317,7 @@ Replace text in a table cell paragraph (same as `replace_text` but uses the cell
 
 ## `add_table_row`
 
-Add a row to a table. The new row copies the structure (cell properties, widths) from the last existing row.
+Add a row to a table. The new row copies the structure (cell properties, widths) of the row it is inserted after (the first row for `afterRow: -1`). Content controls in that row are not copied: the new row gets plain cells, so no control appears twice.
 
 ```ts
 {

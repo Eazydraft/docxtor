@@ -1048,6 +1048,91 @@ export async function createBodyDocx(bodyInnerXml: string): Promise<Buffer> {
   return buildDocx({ documentXml });
 }
 
+/**
+ * A form built from content controls (`w:sdt`), in Word's single-line shape:
+ *
+ * - p0: an empty inline rich-text control (a two-run prompt, with its own
+ *   `w:sdtPr/w:rPr`) and a filled one
+ * - p1: a filled plain-text control, and a rich-text control holding a
+ *   nested plain-text control
+ * - tbl0: a date picker and a drop-down list, both empty, each wrapped
+ *   around a whole cell; then a row of plain cells
+ * - p2, p3: two paragraphs inside one block-level rich-text control
+ * - p4: a checkbox control, unchecked
+ * - p5: a content-locked control; p6: a data-bound control
+ * - p7: an empty block-level control (the prompt is the whole paragraph)
+ * - p8: a filled drop-down list; p9: an empty combo box
+ * - header: an empty inline control
+ */
+export async function createContentControlDocx(): Promise<Buffer> {
+  const prompt = (text: string): string =>
+    `<w:r><w:rPr><w:rStyle w:val="PlaceholderText"/></w:rPr><w:t xml:space="preserve">${text}</w:t></w:r>`;
+  const run = (text: string): string => `<w:r><w:t xml:space="preserve">${text}</w:t></w:r>`;
+  const plc = `<w:placeholder><w:docPart w:val="DefaultPlaceholder_1081868574"/></w:placeholder>`;
+  const cell = (inner: string): string => `<w:tc><w:tcPr><w:tcW w:w="4500" w:type="dxa"/></w:tcPr>${inner}</w:tc>`;
+  const items =
+    `<w:listItem w:displayText="One-off purchase" w:value="one-off"/>` +
+    `<w:listItem w:displayText="Ongoing supply" w:value="ongoing"/>`;
+
+  const body =
+    // p0
+    `<w:p>${run("Title: ")}` +
+    `<w:sdt><w:sdtPr><w:rPr><w:sz w:val="22"/></w:rPr><w:alias w:val="Title"/><w:tag w:val="title"/><w:id w:val="101"/>${plc}<w:showingPlcHdr/></w:sdtPr>` +
+    `<w:sdtContent>${prompt("Insert Title ")}${prompt("for Contract")}</w:sdtContent></w:sdt>` +
+    `${run(" ref ")}` +
+    `<w:sdt><w:sdtPr><w:alias w:val="Reference"/><w:id w:val="102"/>${plc}</w:sdtPr><w:sdtContent>${run("ACME-42")}</w:sdtContent></w:sdt></w:p>` +
+    // p1
+    `<w:p>${run("Contact: ")}` +
+    `<w:sdt><w:sdtPr><w:alias w:val="Contact"/><w:id w:val="103"/><w:text/></w:sdtPr><w:sdtContent>${run("Jane Roe")}</w:sdtContent></w:sdt>` +
+    `${run(" ")}` +
+    `<w:sdt><w:sdtPr><w:id w:val="104"/></w:sdtPr><w:sdtContent>${run("Dept ")}` +
+    `<w:sdt><w:sdtPr><w:id w:val="105"/><w:text/></w:sdtPr><w:sdtContent>${run("Legal")}</w:sdtContent></w:sdt>` +
+    `</w:sdtContent></w:sdt></w:p>` +
+    // tbl0
+    `<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid><w:gridCol w:w="4500"/><w:gridCol w:w="4500"/></w:tblGrid>` +
+    `<w:tr>${cell(`<w:p>${run("Start date")}</w:p>`)}` +
+    `<w:sdt><w:sdtPr><w:alias w:val="Start date"/><w:id w:val="106"/>${plc}<w:showingPlcHdr/><w:date><w:dateFormat w:val="d MMMM yyyy"/><w:lid w:val="en-NZ"/><w:storeMappedDataAs w:val="dateTime"/><w:calendar w:val="gregorian"/></w:date></w:sdtPr>` +
+    `<w:sdtContent>${cell(`<w:p>${prompt("Select date")}</w:p>`)}</w:sdtContent></w:sdt></w:tr>` +
+    `<w:tr>${cell(`<w:p>${run("Type of contract")}</w:p>`)}` +
+    `<w:sdt><w:sdtPr><w:alias w:val="Type of contract"/><w:id w:val="107"/>${plc}<w:showingPlcHdr/><w:dropDownList>${items}</w:dropDownList></w:sdtPr>` +
+    `<w:sdtContent>${cell(`<w:p>${prompt("Choose an item.")}</w:p>`)}</w:sdtContent></w:sdt></w:tr>` +
+    `<w:tr>${cell(`<w:p>${run("Notes")}</w:p>`)}${cell(`<w:p>${run("None")}</w:p>`)}</w:tr></w:tbl>` +
+    // p2, p3
+    `<w:sdt><w:sdtPr><w:alias w:val="Scope"/><w:id w:val="109"/></w:sdtPr><w:sdtContent>` +
+    `<w:p>${run("Scope of work.")}</w:p><w:p>${run("Deliverables follow.")}</w:p></w:sdtContent></w:sdt>` +
+    // p4
+    `<w:p><w:sdt><w:sdtPr><w:id w:val="110"/><w14:checkbox><w14:checked w14:val="0"/><w14:checkedState w14:val="2612" w14:font="MS Gothic"/><w14:uncheckedState w14:val="2610" w14:font="MS Gothic"/></w14:checkbox></w:sdtPr>` +
+    `<w:sdtContent><w:r><w:rPr><w:rFonts w:ascii="MS Gothic" w:eastAsia="MS Gothic" w:hAnsi="MS Gothic"/></w:rPr><w:t>☐</w:t></w:r></w:sdtContent></w:sdt>` +
+    `${run(" Agency has implemented the plan")}</w:p>` +
+    // p5
+    `<w:p>${run("Fixed: ")}<w:sdt><w:sdtPr><w:alias w:val="Fixed"/><w:lock w:val="contentLocked"/><w:id w:val="111"/></w:sdtPr><w:sdtContent>${run("Locked text")}</w:sdtContent></w:sdt></w:p>` +
+    // p6
+    `<w:p>${run("Company: ")}<w:sdt><w:sdtPr><w:alias w:val="Company"/><w:id w:val="112"/><w:dataBinding w:xpath="/ns0:root[1]/ns0:company[1]" w:storeItemID="{11111111-2222-3333-4444-555555555555}"/><w:text/></w:sdtPr><w:sdtContent>${run("Bound value")}</w:sdtContent></w:sdt></w:p>` +
+    // p7
+    `<w:sdt><w:sdtPr><w:alias w:val="Background"/><w:id w:val="113"/>${plc}<w:showingPlcHdr/></w:sdtPr><w:sdtContent><w:p>${prompt("Click here to enter text.")}</w:p></w:sdtContent></w:sdt>` +
+    // p8
+    `<w:p>${run("Mode: ")}<w:sdt><w:sdtPr><w:alias w:val="Mode"/><w:id w:val="114"/><w:dropDownList w:lastValue="ongoing">${items}</w:dropDownList></w:sdtPr><w:sdtContent>${run("Ongoing supply")}</w:sdtContent></w:sdt></w:p>` +
+    // p9
+    `<w:p>${run("Colour: ")}<w:sdt><w:sdtPr><w:alias w:val="Colour"/><w:id w:val="115"/>${plc}<w:showingPlcHdr/><w:comboBox><w:listItem w:displayText="Red" w:value="r"/><w:listItem w:displayText="Blue" w:value="b"/></w:comboBox></w:sdtPr><w:sdtContent>${prompt("Pick or type")}</w:sdtContent></w:sdt></w:p>` +
+    `<w:sectPr><w:headerReference w:type="default" r:id="rId1"/><w:footerReference w:type="default" r:id="rId2"/><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>`;
+
+  const ns =
+    `xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+    `xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ` +
+    `xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" ` +
+    `xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" mc:Ignorable="w14"`;
+  const decl = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n`;
+
+  return buildDocx({
+    documentXml: `${decl}<w:document ${ns}><w:body>${body}</w:body></w:document>`,
+    headerXml:
+      `${decl}<w:hdr ${ns}><w:p>${run("Doc ref: ")}` +
+      `<w:sdt><w:sdtPr><w:id w:val="116"/>${plc}<w:showingPlcHdr/></w:sdtPr><w:sdtContent>${prompt("Insert ref")}</w:sdtContent></w:sdt></w:p></w:hdr>`,
+    footerXml: `${decl}<w:ftr ${ns}><w:p>${run("Page footer")}</w:p></w:ftr>`,
+    includeDocRels: true,
+  });
+}
+
 export interface TwoSectionDocxOptions {
   /** Stamp a unique w14:paraId on every paragraph, as Word does. Default: false. */
   withParaIds?: boolean;

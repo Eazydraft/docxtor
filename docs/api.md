@@ -85,6 +85,26 @@ List paragraphs show a `{list:N LX}` hint where `N` is the numbering definition 
 
 Every element has a stable ID (`p0`, `tbl0.r1.c0.p0`, `hdr.default.p0`, `fn1.p0`, etc.) that patches use as targets. In a document with more than one section the header and footer ids carry the section, `hdr.s2.first.p0`, and the divider names it: `--- Header (first, section 2) ---`. See [ids.md](ids.md).
 
+**Content controls.** The text inside a Word content control (a form field, `w:sdt`) is part of the paragraph text, whether the control sits inside a paragraph, wraps whole paragraphs or wraps a table cell. The markdown projection marks the controls a reader must not mistake for ordinary text:
+
+```
+[p7] {field: Insert Title for Contract} {field: Add Contract reference if applicable}
+| [tbl5.r3.c0.p0] Type of contract | [tbl5.r3.c1.p0] {field dropdown "One-off purchase" OR "Ongoing supply": Choose an item.} |
+[p119] {field date: Select date}
+[p120] {field date= 1 May 2026}
+[p40] ☐ Agency has implemented the plan
+```
+
+| Marker | Meaning |
+|---|---|
+| `{field: prompt}` | An empty control. The text is its prompt, not an answer. |
+| `{field date: prompt}`, `{field dropdown "A" OR "B": prompt}`, `{field combo "A" OR "B": prompt}` | An empty date picker, drop-down list or combo box, with the list items. |
+| `{field date= value}`, `{field dropdown "A" OR "B"= value}` | A filled date picker, drop-down list or combo box. |
+| `{field:}`, `{field date:}`, `{field dropdown "A" OR "B":}` | A control with no text at all, not even a prompt. |
+| `{field picture}` | A picture control. |
+
+A filled rich-text or plain-text control prints as ordinary text, a checkbox prints its glyph (`☐`, `☒`), and a building-block gallery such as a table of contents prints as its content. The markers are annotations, not document text: `find` matches the text inside them. [Text patches inside a content control](patches.md#text-patches-inside-a-content-control) says what an edit there does.
+
 **Inline formatting markers:** When `includeFormatting: true` is set, the markdown projection annotates text with inline markers showing existing formatting:
 
 ```ts
@@ -147,6 +167,37 @@ When `includeFormatting` is enabled, each paragraph gains a `formatting` array o
   ]
 }
 ```
+
+A paragraph that holds content controls, or sits inside one, has a `controls` array. A control wrapped around the paragraph (or around its table cell) comes first and covers all of the text; the controls inside the paragraph follow in document order, a nested control after the one that holds it. Each entry is a `ControlInfo` without its XML reference, plus the range of `text` it covers:
+
+```json
+{
+  "id": "tbl5.r3.c1.p0",
+  "text": "Choose an item.",
+  "controls": [
+    {
+      "id": "-564876532", "kind": "dropDownList", "alias": "Type of contract",
+      "placeholder": true, "options": ["One-off purchase", "Ongoing supply"],
+      "startOffset": 0, "endOffset": 15
+    }
+  ]
+}
+```
+
+| Field | |
+|---|---|
+| `id` | the control's `w:id` |
+| `kind` | `richText`, `text`, `date`, `dropDownList`, `comboBox`, `checkbox`, `picture`, `docPart` (a building-block gallery) or `other` |
+| `alias`, `tag` | the control's title and developer tag, when set |
+| `placeholder` | `true` while the control shows its prompt: the text in the range is not an answer |
+| `options` | display texts of a drop-down list or combo box |
+| `checked` | state of a checkbox |
+| `locked` | `content` (the content cannot be edited), `control` (the control cannot be deleted) or `both` |
+| `bound` | `true` when the control mirrors a value in a custom XML part |
+
+In the AST the same information is on `RunMapping.control` (the innermost inline control holding a run) and `NormalizedParagraph.controls` (the inline controls and their ranges). `NormalizedParagraph.control`, `NormalizedTable.control`, `NormalizedTableRow.control` and `NormalizedTableCell.control` all mean the same thing: the innermost control around that node, whether it wraps the node itself or something further out (a cell's control may be the one around its row or table). A table cell's JSON entry carries its `paragraphs` whenever one of them has controls.
+
+`ControlInfo` objects are live: there is one per control, shared by every node inside it, and it is kept across patches. A patch that changes the control, or re-reads the paragraph or table around it, updates that object in place. `acceptAllRevisions` and `rejectAllRevisions` keep them as well. An atomic batch (`atomic: true`) is the exception: it works on a copy of the document and, when it succeeds, swaps the copy in, so read the controls again after one. `kind` may gain values in later versions; treat an unknown kind like `"other"`.
 
 When `includePageBreaks` is enabled, docxtor detects all three OOXML page break mechanisms:
 
@@ -244,7 +295,7 @@ doc.scrubMetadata();
 // leaves title, created and modified untouched
 ```
 
-## `doc.validatePatches(patches)`
+## `doc.validatePatches(patches, options?)`
 
 Validate patches without applying them.
 
@@ -252,6 +303,8 @@ Validate patches without applying them.
 const validations = doc.validatePatches(patches);
 // [{ valid: true }, { valid: false, error: "Paragraph 'p99' not found" }]
 ```
+
+Validation covers what a content control allows, which depends on where `find` and `anchor` match. If the patches will be applied with `inlineMarkers: false`, pass the same option here: `doc.validatePatches(patches, { inlineMarkers: false })`.
 
 ## `doc.toBuffer()` / `doc.toFile(path)`
 

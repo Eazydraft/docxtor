@@ -13,7 +13,7 @@
 import { describe, it, expect } from "vitest";
 import JSZip from "jszip";
 import { Docxtor } from "../../src/index.js";
-import { createLeaseDocx, createBodyDocx, createNotesDocx, createTwoSectionDocx } from "../fixtures/create-docx.js";
+import { createLeaseDocx, createBodyDocx, createContentControlDocx, createNotesDocx, createTwoSectionDocx } from "../fixtures/create-docx.js";
 
 /** Every file in a .docx (directory entries left out), as path → bytes. */
 async function parts(buffer: Buffer): Promise<Map<string, Buffer>> {
@@ -68,6 +68,7 @@ describe("a save with no patches", () => {
   it.each([
     ["lease (numbering, table, header, footer, footnotes, tracked changes, properties)", () => createLeaseDocx()],
     ["Word-style single-line XML with CRLF", () => wordStyleDocx()],
+    ["content controls (inline, around a cell, around paragraphs, nested, in a header)", () => createContentControlDocx()],
     ["two sections, empty docProps properties as open-close pairs, an apostrophe in an attribute", () => createTwoSectionDocx()],
     ["two sections with native paragraph ids", () => createTwoSectionDocx({ withParaIds: true })],
     ["tabs, a positional tab, footnotes and endnotes", () => tabsAndNotesDocx()],

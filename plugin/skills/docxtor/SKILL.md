@@ -49,6 +49,8 @@ Full options: [reference/commands.md](reference/commands.md). Every patch type f
 | [tbl0.r1.c0.p0] Diesel | [tbl0.r1.c1.p0] $900 |
 [hdr.default.p0] CONFIDENTIAL
 [p9] (BodyText) Payment is due in {-30-}{+45+} days.
+[p7] Contract title: {field: Insert Title for Contract}
+| [tbl5.r3.c0.p0] Type of contract | [tbl5.r3.c1.p0] {field dropdown "One-off purchase" OR "Ongoing supply": Choose an item.} |
 [p770] 17.2	For goods manufactured within the Purchaser's Country[^1], the price …
 --- Footnotes ---
 [fn1.p0] As defined in the Special Conditions of Contract.
@@ -60,6 +62,7 @@ Full options: [reference/commands.md](reference/commands.md). Every patch type f
 - A typed clause number is followed by a tab, printed as a tab (`17.2⇥For goods`). In `--find`, type a space there: `--find "17.2 For goods"` matches and the tab is kept. In an `edit` patch, write the tab as `\t`.
 - `[^1]` is a footnote reference and `[^e1]` an endnote reference. The mark is not part of the text: leave it out of a `--find`. The note's text is listed at the end under `--- Footnotes ---` or `--- Endnotes ---` as `fn1.p0` / `en1.p0`, and can be read, cited and edited like any other paragraph.
 - `{+…+}` is a tracked insertion and `{-…-}` a tracked deletion. The current text is the text without the `{-…-}` parts. A tracked table row ends with `{+row inserted by …+}` or `{-row deleted by …-}`.
+- `{field: …}` is an empty form field (a Word content control) and the text is its prompt, not an answer. A date picker or drop-down list says so and lists its items; once filled it reads `{field date= 1 May 2026}`. A filled text field is ordinary text, and a checkbox shows as `☐` or `☒`. The braces and the words before `:` or `=` are not part of the text: don't put them in a `--find`.
 - Ids are positions. After an edit that adds or removes paragraphs, run `view` again before using ids.
 
 ## Core workflow
@@ -144,6 +147,24 @@ docxtor edit msa.docx -o msa-redline.docx /tmp/patches.json
 
 Tables, lists, formatting, styles, headers and footers: see [reference/patches.md](reference/patches.md).
 
+### Fill in a form or template
+
+```bash
+docxtor view template.docx --grep '\{field|☐'          # every empty field and checkbox
+docxtor replace template.docx -o filled.docx --author "Acme" \
+  --find "Insert Title for Contract" --replace "Supply of Widgets" \
+  --find "Choose an item from this dropdown list." --replace "Ongoing supply"
+docxtor replace filled.docx -o filled.docx --author "Acme" --in tbl4.r1.c1.p0 \
+  --find "Insert name" --replace "Jane Roe"
+```
+
+- To fill a field, replace its prompt with the answer. The whole prompt goes, and the field stops showing as `{field: …}`.
+- The same prompt often repeats ("Insert name", "Select date"). `--in ID`, with the id from `view`, says which one; it applies to every pair in the call, so give such fields a call of their own.
+- A drop-down list accepts one of the items `view` lists, spelled exactly; anything else is refused with the list. A date field takes a date as text ("11 November 2026").
+- Tick a checkbox with a patch: `{ "type": "set_checkbox", "target": "p40", "checked": true }` through `docxtor edit`. Add `"occurrence": 2` for the second checkbox in the paragraph.
+- A locked field, or one bound to document data, is refused with the reason. Tell the user rather than working around it.
+- Filling is tracked like any other edit. Use `--untracked` when the user wants a completed form, not a redline.
+
 ### Resolve someone else's tracked changes
 
 1. List them:
@@ -206,3 +227,6 @@ Cite section numbers as `view` prints them. For long documents, grep for heading
 | `not found in paragraph "p12"` (from `edit`) | The error prints the paragraph's current text: copy from it |
 | `Paragraph "p99" not found` | Ids shifted or are wrong: run `view` again |
 | `no tracked change has w:id ...` | Take the ids from `revisions` on the same file |
+| `"X" is not an option of the dropdown content control` | Use one of the items the message lists, spelled exactly |
+| `crosses the edge of a content control` | The find starts inside a form field and ends outside it (or crosses into a field nested in another): edit the field's text and the text around it separately |
+| `locked content control` / `bound to a custom XML part` | The field can't be edited here; tell the user |

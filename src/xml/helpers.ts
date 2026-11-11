@@ -96,6 +96,53 @@ export function findByPath(
 }
 
 // =============================================================================
+// Content controls (w:sdt)
+// =============================================================================
+
+/**
+ * The children array of a content control's `w:sdtContent`: the real array,
+ * so splicing it edits the control. A control without `w:sdtContent` gives a
+ * detached empty array.
+ */
+export function sdtContentChildren(sdtNode: FXPNode): FXPNode[] {
+  const content = findChild(sdtNode, "w:sdtContent");
+  return content ? getChildren(content) : [];
+}
+
+/** One child seen through content-control wrappers. */
+export interface ContentChild {
+  /** The child node (never a `w:sdt`). */
+  node: FXPNode;
+  /** The array that really holds `node`: the parent's children, or a `w:sdtContent`'s. */
+  siblings: FXPNode[];
+  /** The `w:sdt` wrappers crossed to reach `node`, outermost first. */
+  sdts: FXPNode[];
+}
+
+/**
+ * The children of `children` in document order, reading through content
+ * controls: a `w:sdt` child is replaced by the children of its
+ * `w:sdtContent`, recursively. Returns a snapshot, so the caller may splice
+ * `siblings` while iterating.
+ */
+export function contentChildrenOf(children: FXPNode[], sdts: FXPNode[] = []): ContentChild[] {
+  const out: ContentChild[] = [];
+  for (const child of children) {
+    if ("w:sdt" in child) {
+      out.push(...contentChildrenOf(sdtContentChildren(child), [...sdts, child]));
+    } else {
+      out.push({ node: child, siblings: children, sdts });
+    }
+  }
+  return out;
+}
+
+/** {@link contentChildrenOf} for the children of a node. */
+export function contentChildren(node: FXPNode): ContentChild[] {
+  return contentChildrenOf(getChildren(node));
+}
+
+// =============================================================================
 // Attribute access
 // =============================================================================
 
@@ -252,6 +299,57 @@ export function getRunText(runNode: FXPNode): string {
 }
 
 /**
+ * Elements of a paragraph that are runs or hold runs: what a paragraph's
+ * text is made of. Content controls (`w:sdt`) are not listed: callers that
+ * read through them say so.
+ */
+export const RUN_CONTAINER_TAGS: ReadonlySet<string> = new Set([
+  "w:r",
+  "w:ins",
+  "w:del",
+  "w:moveTo",
+  "w:moveFrom",
+  "w:hyperlink",
+  "w:smartTag",
+  "w:fldSimple",
+  "w:customXml",
+]);
+
+/** Run children that are content although they add no characters to the text. */
+const RUN_OBJECT_TAGS: ReadonlySet<string> = new Set([
+  "w:drawing",
+  "w:pict",
+  "w:object",
+  "w:sym",
+  "w:fldChar",
+  "w:instrText",
+  "w:footnoteReference",
+  "w:endnoteReference",
+]);
+
+/** Run children that anchor a comment or a note to its place in the text. */
+const ANCHOR_TAGS: ReadonlySet<string> = new Set([
+  "w:commentReference",
+  "w:footnoteReference",
+  "w:endnoteReference",
+]);
+
+/** True if a run shows anything: text (tabs and soft breaks included) or an object. */
+export function runHasContent(runNode: FXPNode): boolean {
+  if (getRunText(runNode).length > 0) return true;
+  return getChildren(runNode).some((c) => RUN_OBJECT_TAGS.has(getTagName(c) ?? ""));
+}
+
+/**
+ * True for a run that only anchors a comment, footnote or endnote reference:
+ * it holds such a reference and no text.
+ */
+export function isAnchorRun(node: FXPNode): boolean {
+  if (getTagName(node) !== "w:r" || getRunText(node).length > 0) return false;
+  return getChildren(node).some((c) => ANCHOR_TAGS.has(getTagName(c) ?? ""));
+}
+
+/**
  * Find the w:t node inside a w:r run node.
  * Returns the first w:t element found.
  */
@@ -345,6 +443,8 @@ function _scanForPageBreak(children: FXPNode[]): boolean {
       if (runHasPageBreak(child)) return true;
     } else if (tag === "w:hyperlink" || tag === "w:ins") {
       if (_scanForPageBreak(getChildren(child))) return true;
+    } else if (tag === "w:sdt") {
+      if (_scanForPageBreak(sdtContentChildren(child))) return true;
     }
   }
   return false;

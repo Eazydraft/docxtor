@@ -18,7 +18,7 @@
 
 import type { FXPNode } from "../types.js";
 import type { ResolvedRunRange } from "../mapping/text-to-runs.js";
-import { getChildren, getTagName } from "../xml/helpers.js";
+import { getChildren, getTagName, sdtContentChildren } from "../xml/helpers.js";
 import {
   readRunContent,
   partitionContent,
@@ -42,8 +42,9 @@ export interface SplitResult {
  * Find the parent children array that directly contains a run node.
  *
  * Runs can be direct children of w:p, or nested inside w:hyperlink,
- * w:ins, or w:del. We need the actual parent's children array to do
- * splice operations.
+ * w:ins, w:del or an inline content control (w:sdt, whose runs live in its
+ * w:sdtContent). We need the actual parent's children array to do splice
+ * operations: a run inside a control must be replaced inside the control.
  */
 export function findRunParentChildren(
   paragraphNode: FXPNode,
@@ -68,8 +69,8 @@ function findRunInContainers(
 ): FXPNode[] | undefined {
   for (const child of children) {
     const tag = getTagName(child);
-    if (tag === "w:hyperlink" || tag === "w:ins" || tag === "w:del") {
-      const containerChildren = getChildren(child);
+    if (tag === "w:hyperlink" || tag === "w:ins" || tag === "w:del" || tag === "w:sdt") {
+      const containerChildren = tag === "w:sdt" ? sdtContentChildren(child) : getChildren(child);
       if (containerChildren.includes(runNode)) {
         return containerChildren;
       }
