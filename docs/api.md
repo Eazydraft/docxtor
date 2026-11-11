@@ -57,6 +57,7 @@ const md = doc.project("markdown");
 [p2] {list:1 L0} - First item
 [p3] {list:1 L0} - Second item
 [p4] {list:1 L1}   - Sub-item
+[p5] 17.2	For goods manufactured within the Purchaser's Country[^1], the price …
 
 | [tbl0.r0.c0.p0] Term | [tbl0.r0.c1.p0] Value |
 | [tbl0.r1.c0.p0] Duration | [tbl0.r1.c1.p0] 12 months |
@@ -67,6 +68,9 @@ const md = doc.project("markdown");
 --- Footer (default) ---
 [ftr.default.p0] Page 1
 
+--- Footnotes ---
+[fn1.p0] As defined in the Special Conditions of Contract.
+
 --- Available Styles ---
 [paragraph] Normal — Normal
 [paragraph] Heading1 — heading 1
@@ -75,7 +79,11 @@ const md = doc.project("markdown");
 
 List paragraphs show a `{list:N LX}` hint where `N` is the numbering definition ID (`numId`) and `X` is the nesting level. Bullet items render with `- ` prefix, ordered items with `1. `, `2. `, etc., and multilevel items with compound prefixes like `1.2.1. `. To continue an existing list sequence when adding items, reuse the same `numId` from the hint.
 
-Every element has a stable ID (`p0`, `tbl0.r1.c0.p0`, `hdr.default.p0`, etc.) that patches use as targets. In a document with more than one section the header and footer ids carry the section, `hdr.s2.first.p0`, and the divider names it: `--- Header (first, section 2) ---`. See [ids.md](ids.md).
+**Tabs.** A tab in the text (`w:tab`, or the positional `w:ptab` of headers and footers) is one tab character, in the markdown view, in the JSON `text` and in the text that patches match against. A clause typed as a number, a tab and its text reads `17.2⇥For goods…`, not `17.2For goods…`. The tab stops a paragraph defines (`w:pPr/w:tabs`) are layout, not text, and are not shown.
+
+**Footnotes and endnotes.** A reference prints as `[^1]` (footnote) or `[^e1]` (endnote), numbered by position in the text as Word displays them. The mark is drawn by the view: it is not part of the paragraph's text, so it does not count in offsets and must not be put in a `find`. A reference that carries its own mark (`w:customMarkFollows`) prints that mark, which is ordinary text, and no number. The notes themselves follow the footers under `--- Footnotes ---` and `--- Endnotes ---`, one line per paragraph with ids `fn1.p0`, `en1.p0`; the note's own leading number is not repeated and the separator entries of the part are left out. Note paragraphs can be targeted like any other (see [patches](patches.md#footnotes-and-endnotes)). `includeNotes: false` leaves the two sections out; the marks stay.
+
+Every element has a stable ID (`p0`, `tbl0.r1.c0.p0`, `hdr.default.p0`, `fn1.p0`, etc.) that patches use as targets. In a document with more than one section the header and footer ids carry the section, `hdr.s2.first.p0`, and the divider names it: `--- Header (first, section 2) ---`. See [ids.md](ids.md).
 
 **Content controls.** The text inside a Word content control (a form field, `w:sdt`) is part of the paragraph text, whether the control sits inside a paragraph, wraps whole paragraphs or wraps a table cell. The markdown projection marks the controls a reader must not mistake for ordinary text:
 
@@ -131,7 +139,21 @@ const json = doc.project("json", {
   includeTables: true,          // include tables (default: true)
   includeRevisions: true,       // include revision marks from tracked changes (default: false)
   includePageBreaks: true,      // include page break elements and hints (default: false)
+  includeNotes: true,           // include footnote and endnote text (default: true)
 });
+```
+
+The JSON projection has `footnotes` and `endnotes` arrays next to `headers` and `footers`, and a paragraph that holds a reference lists it in `noteRefs`, with the offset in `text` where the mark sits:
+
+```json
+{
+  "body": [
+    { "id": "p5", "text": "The Bank lends to the Borrower.", "noteRefs": [{ "note": "fn1", "offset": 8 }] }
+  ],
+  "footnotes": [
+    { "id": "fn1", "number": 1, "paragraphs": [{ "id": "fn1.p0", "text": " IBRD and IDA are the World Bank." }] }
+  ]
+}
 ```
 
 When `includeFormatting` is enabled, each paragraph gains a `formatting` array of `JsonProjectionRunFormatting` objects. Only runs that have at least one formatting property set (bold, italic, underline, strikethrough, fontSize, fontFamily, color, highlight) are included — plain/unformatted runs are omitted to keep the output lean. Each entry includes `text`, `startOffset`, and `endOffset` for precise positioning within the paragraph text.
@@ -307,7 +329,7 @@ const xml = doc.toString();
 
 ## Inspection methods
 
-`doc.findParagraphByParaId("4F2A1C7B")` resolves a paragraph by its native `w14:paraId` (case-insensitive; body including table cells, then headers, then footers).
+`doc.findParagraphByParaId("4F2A1C7B")` resolves a paragraph by its native `w14:paraId` (case-insensitive; body including table cells, then headers, footers, footnotes and endnotes).
 
 ```ts
 doc.getAST();                    // Full NormalizedDocument
@@ -316,8 +338,10 @@ doc.getParagraphs();             // Body-level paragraphs only
 doc.getTables();                 // Body-level tables only
 doc.getHeaders();                // Map<string, HeaderFooter>
 doc.getFooters();                // Map<string, HeaderFooter>
-doc.findParagraphById("p5");     // Search everywhere (body, tables, headers, footers)
-doc.findTableById("tbl0");       // Search body, headers, footers + nested tables
+doc.getFootnotes();              // Map<string, NormalizedNote>, keyed by w:id, in number order
+doc.getEndnotes();               // Map<string, NormalizedNote>
+doc.findParagraphById("p5");     // Search everywhere (body, tables, headers, footers, footnotes, endnotes)
+doc.findTableById("tbl0");       // Search body, headers, footers, notes + nested tables
 doc.getStyles();                 // StyleInfo[] from styles.xml
 ```
 
@@ -340,7 +364,7 @@ import {
   findParagraphById,
   findParagraphByParaId,
   findTableById,
-  reNormalizeDocument,  // rebuild body/headers/footers from the XML parts in place
+  reNormalizeDocument,  // rebuild body/headers/footers/notes from the XML parts in place
   cloneDocument,        // deep clone (used by atomic batches)
   acceptAllRevisions,   // operate on a NormalizedDocument directly (call reNormalizeDocument after)
   rejectAllRevisions,
@@ -350,5 +374,5 @@ import {
 } from "@lucio-ai/docxtor";
 
 // Types
-import type { PatchOptions, RevisionMark, RevisionFilterOptions, CoreProperties, RunFilter, NormalizedPageBreak, JsonProjectionPageBreak, JsonProjectionRunFormatting, HeaderFooterVariant, HeaderFooterRef, InsertParagraphPatch, DeleteParagraphPatch, AddCommentPatch, AddListPatch, AddListItemPatch, RemoveListItemPatch, ConvertToListPatch, RemoveListPatch, SetListPropertiesPatch } from "@lucio-ai/docxtor";
+import type { PatchOptions, RevisionMark, RevisionFilterOptions, CoreProperties, RunFilter, NormalizedPageBreak, NormalizedNote, NoteReference, JsonProjectionNote, JsonProjectionPageBreak, JsonProjectionRunFormatting, HeaderFooterVariant, HeaderFooterRef, InsertParagraphPatch, DeleteParagraphPatch, AddCommentPatch, AddListPatch, AddListItemPatch, RemoveListItemPatch, ConvertToListPatch, RemoveListPatch, SetListPropertiesPatch } from "@lucio-ai/docxtor";
 ```

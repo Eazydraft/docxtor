@@ -9,7 +9,7 @@
 - Document metadata (`getCoreProperties`, `setCoreProperties`, `scrubMetadata`)
 - Comments (`add_comment`, creating `word/comments.xml` on demand)
 - Reading runs by formatting, e.g. red-text answers (`runFilter` in the JSON projection)
-- Footnotes and endnotes parts (preserved, and walked by accept/reject)
+- Footnotes and endnotes: reference marks in the view (`[^1]`, `[^e1]`), note text with ids (`fn1.p0`, `en1.p0`), text patches, formatting, comments and accept/reject inside a note
 - Table creation (`add_table` — inserts a new table with TableGrid style)
 - Markdown table conversion in `append_text` (pipe-delimited syntax → real OOXML tables)
 - Paragraphs, runs, and text across split runs
@@ -30,7 +30,8 @@
 - Page breaks — surfaced via `includePageBreaks` option with positional `pageBreakOffset` (see [projection options](api.md#docprojectformat-options) for details)
 - XML entity escaping (`&amp;`, `&lt;`, `&gt;`)
 - Newlines in `append_text` (`\n` creates separate `w:p` paragraphs; markdown tables create `w:tbl`)
-- Soft line breaks (`w:br` ↔ `\n`, one character each, in projections and patch offsets alike)
+- Soft line breaks (`w:br`, `w:cr` ↔ `\n`, one character each, in projections and patch offsets alike)
+- Tabs (`w:tab`, `w:ptab` ↔ `\t`, one character each; a kept `w:ptab` stays a `w:ptab`)
 - Verbatim text (`inlineMarkers: false` / per-patch `markers: false`, plus backslash escapes)
 - List/numbering info in projections
 - List operations (`add_list`, `add_list_item`, `remove_list_item`, `convert_to_list`, `remove_list`, `set_list_properties`)
@@ -42,6 +43,8 @@
 
 - Merged cells (`gridSpan` / `vMerge`)
 - Creating content controls, repeating sections, picture controls, and writing data-bound values to their custom XML part
+- Adding or deleting a footnote or endnote (existing notes can be read and edited)
+- Symbol characters, non-breaking and soft hyphens in a run (`w:sym`, `w:noBreakHyphen`, `w:softHyphen`): preserved, not shown as text
 - Image manipulation
 - Style creation (can only apply pre-existing styles)
 - Reading or resolving existing comments (only `add_comment` is supported)

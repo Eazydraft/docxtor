@@ -9,8 +9,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { Docxtor } from "../../src/index.js";
-import { createLeaseDocx, createMultiParagraphDocx, createContentControlDocx, createTwoSectionDocx } from "../fixtures/create-docx.js";
-import { allParagraphs, patchTargets } from "../../cli/paragraphs.js";
+import { createBodyDocx, createLeaseDocx, createMultiParagraphDocx, createContentControlDocx, createNotesDocx, createTwoSectionDocx } from "../fixtures/create-docx.js";
+import { alignReplacement, allParagraphs, findHits, patchTargets } from "../../cli/paragraphs.js";
 
 const run = promisify(execFile);
 const CLI = join(import.meta.dirname, "../../cli/docxtor.ts");
@@ -229,10 +229,11 @@ describe("docxtor CLI", () => {
     expect(list).toMatchObject([{ paragraph: "p3", anchor: "" }]);
   }, 30_000);
 
-  it("revisions lists tracked changes outside paragraphs too, and their ids resolve", async () => {
-    const changes = JSON.parse((await cli("revisions", lease, "--json")).out) as { kind: string; ids: string[]; context: string }[];
-    const note = changes.find((c) => c.context.startsWith("footnotes:"));
-    expect(note).toBeDefined();
+  it("revisions lists a tracked change in a footnote under the note's paragraph, and its id resolves", async () => {
+    const changes = JSON.parse((await cli("revisions", lease, "--json")).out) as { kind: string; paragraph: string; ids: string[]; inserted: string }[];
+    const note = changes.find((c) => c.paragraph === "fn1.p0");
+    expect(note).toMatchObject({ kind: "insertion", inserted: "revised ", ids: ["3"] });
+    expect(changes.filter((c) => c.ids.includes("3"))).toHaveLength(1);
     const out = join(dir, "lease-fn.docx");
     const r = await cli("accept", lease, "-o", out, "--ids", note!.ids.join(","));
     expect(r.code).toBe(0);
@@ -405,5 +406,108 @@ describe("docxtor CLI", () => {
       expect(target(b)).toBe(b.id);
       expect(target(paras[2]!.para)).toBe(`para:${paras[2]!.para.paraId}`);
     });
+  });
+
+  describe("tabs and footnotes", () => {
+    const TAB = `<w:r><w:tab/></w:r>`;
+    const t = (text: string): string => `<w:r><w:t xml:space="preserve">${text}</w:t></w:r>`;
+    let clauses: string, notes: string;
+
+    beforeAll(async () => {
+      clauses = join(dir, "clauses.docx");
+      await writeFile(clauses, await createBodyDocx(
+        `<w:p>${t("17.2")}${TAB}${t("For goods Manufactured within the Purchaser’s Country.")}</w:p>` +
+        `<w:p>${t("17.3")}${TAB}${t("If any of the documents are missing.")}</w:p>` +
+        `<w:p>${t("By:")}${TAB}${t("Alice")}<w:ins w:id="1" w:author="Acme" w:date="2026-01-01T00:00:00Z"><w:r><w:tab/><w:t>Director</w:t></w:r></w:ins></w:p>`,
+      ));
+      notes = join(dir, "notes.docx");
+      await writeFile(notes, await createNotesDocx({
+        body: `<w:p>${t("The Bank")}<w:r><w:footnoteReference w:id="3"/></w:r>${t(" lends.")}</w:p>`,
+        footnotes: `<w:footnote w:id="3"><w:p><w:r><w:footnoteRef/></w:r>${t(" IBRD and IDA are generally called the World Bank.")}</w:p></w:footnote>`,
+      }));
+    }, 30_000);
+
+    it("view prints a tab as a tab, so a clause number is not glued to its text", async () => {
+      const r = await cli("view", clauses);
+      expect(r.out).toContain("[p0] 17.2\tFor goods Manufactured");
+      expect(r.out).not.toContain("17.2For");
+    }, 30_000);
+
+    it("replace --find with a space matches a tab, keeps the tab and reports the text that matched", async () => {
+      const out = join(dir, "clauses-out.docx");
+      const r = await cli("replace", clauses, "-o", out, "--find", "17.2 For goods", "--replace", "17.2 For Goods");
+      expect(r.code).toBe(0);
+      expect(r.out).toContain(`"17.2\tFor goods" -> "17.2\tFor Goods" (marked: "goods" -> "Goods")`);
+      expect((await texts(out))[0]).toBe("17.2\tFor Goods Manufactured within the Purchaser’s Country.");
+      const xml = (await Docxtor.load(out)).toString();
+      expect(xml).toContain(`<w:r><w:t xml:space="preserve">17.2</w:t></w:r><w:r><w:tab/></w:r>`);
+      expect(xml.match(/<w:tab\/>/g)).toHaveLength(4);
+      const changes = JSON.parse((await cli("revisions", out, "--json")).out) as { deleted: string; inserted: string; paragraph: string }[];
+      expect(changes.filter((c) => c.paragraph === "p0").map((c) => [c.deleted, c.inserted])).toEqual([["goods", "Goods"]]);
+    }, 30_000);
+
+    it("a replacement typed with a space where the document has a tab keeps the tab", async () => {
+      const out = join(dir, "clauses-colon.docx");
+      const r = await cli("replace", clauses, "-o", out, "--find", "17.3 If", "--replace", "17.3: If", "--untracked");
+      expect(r.code).toBe(0);
+      expect((await texts(out))[1]).toBe("17.3:\tIf any of the documents are missing.");
+    }, 30_000);
+
+    it("the text exactly as typed is tried before a space is allowed to match a tab", async () => {
+      const doc = await Docxtor.load(await createBodyDocx(`<w:p>${t("By:")}${TAB}${t("Alice")}</w:p><w:p>${t("By: Alice")}</w:p>`));
+      const paras = allParagraphs(doc);
+      expect(findHits(paras, "By: Alice", false).map((h) => [h.para.id, h.matched])).toEqual([["p1", "By: Alice"]]);
+      expect(findHits(paras.slice(0, 1), "By: Alice", false).map((h) => [h.para.id, h.matched])).toEqual([["p0", "By:\tAlice"]]);
+      expect(findHits(paras, "By:Alice", false)).toEqual([]);
+      // Characters the replacement shares with what was typed come from the document
+      expect(alignReplacement("By: Alice", "By:\tAlice", "By: Bob")).toBe("By:\tBob");
+      expect(alignReplacement("Seller's address", "Seller’s address", "Seller's office")).toBe("Seller’s office");
+      expect(alignReplacement("By: Alice", "By: Alice", "By:  Alice")).toBe("By:  Alice");
+    });
+
+    it("comment --find with a space anchors across a tab", async () => {
+      const out = join(dir, "clauses-comment.docx");
+      const r = await cli("comment", clauses, "-o", out, "--find", "By: Alice", "--text", "Confirm the signatory.");
+      expect(r.code).toBe(0);
+      const list = JSON.parse((await cli("comments", out, "--json")).out) as { paragraph: string; anchor: string }[];
+      expect(list).toMatchObject([{ paragraph: "p2", anchor: "By:\tAlice" }]);
+    }, 30_000);
+
+    it("view, revisions and comments show the same text for a tabbed paragraph", async () => {
+      const out = join(dir, "clauses-same.docx");
+      await cli("comment", clauses, "-o", out, "--in", "p2", "--text", "Whole line.");
+      const view = (await cli("view", out)).out.split("\n").find((l) => l.startsWith("[p2]"))!;
+      expect(view).toBe("[p2] By:\tAlice{+\tDirector+}");
+      const change = (JSON.parse((await cli("revisions", out, "--json")).out) as { paragraph: string; inserted: string }[])[0]!;
+      expect(change).toMatchObject({ paragraph: "p2", inserted: "\tDirector" });
+      const comment = (JSON.parse((await cli("comments", out, "--json")).out) as { anchor: string }[])[0]!;
+      expect(comment.anchor).toBe("By:\tAlice\tDirector");
+    }, 30_000);
+
+    it("view shows the footnote mark and the notes section", async () => {
+      const r = await cli("view", notes);
+      expect(r.out).toBe("[p0] The Bank[^1] lends.\n\n--- Footnotes ---\n[fn1.p0]  IBRD and IDA are generally called the World Bank.\n");
+      const g = await cli("view", notes, "--grep", "IBRD");
+      expect(g.out.trim()).toBe("[fn1.p0]  IBRD and IDA are generally called the World Bank.");
+    }, 30_000);
+
+    it("replace --find on text that exists only in a footnote succeeds and names fn1.p0", async () => {
+      const out = join(dir, "notes-out.docx");
+      const r = await cli("replace", notes, "-o", out, "--find", "generally called", "--replace", "together");
+      expect(r.code).toBe(0);
+      expect(r.out).toContain("1 replacement in 1 paragraph (fn1.p0)");
+      const doc = await Docxtor.load(out);
+      expect(doc.project("markdown", { includeRevisions: true })).toContain("[fn1.p0]  IBRD and IDA are {-generally called-}{+together+} the World Bank.");
+      expect(doc.toString()).not.toContain("w:ins");
+    }, 30_000);
+
+    it("comment --find on footnote text anchors inside the note", async () => {
+      const out = join(dir, "notes-comment.docx");
+      const r = await cli("comment", notes, "-o", out, "--find", "World Bank", "--text", "Define this.");
+      expect(r.code).toBe(0);
+      expect(r.out).toContain("comment on [fn1.p0]");
+      const list = JSON.parse((await cli("comments", out, "--json")).out) as { paragraph: string; anchor: string }[];
+      expect(list).toMatchObject([{ paragraph: "fn1.p0", anchor: "World Bank" }]);
+    }, 30_000);
   });
 });

@@ -253,35 +253,47 @@ export function setTextContent(node: FXPNode, text: string): void {
 }
 
 /**
- * Get all text from w:t elements inside a w:r run node.
- * Unescapes XML entities so the returned text is natural.
- * Converts w:br (line break) elements to \n characters.
- * Structural breaks — page breaks (w:br w:type="page") and column
- * breaks (w:br w:type="column") — are skipped (not included in text).
+ * The one character a run child other than `w:t` adds to the text:
+ * - `w:tab` and `w:ptab` (the positional tab of headers and footers): `\t`
+ * - `w:br` with no type or `textWrapping`, and `w:cr`: `\n`
+ *
+ * Everything else adds none: page and column breaks, drawings, field
+ * characters, footnote references. The `w:tab` elements that define tab
+ * stops live in `w:pPr/w:tabs`, not in a run, so they are never seen here.
+ */
+export function runChildChar(child: FXPNode): string | undefined {
+  if ("w:tab" in child || "w:ptab" in child) return "\t";
+  if ("w:cr" in child) return "\n";
+  if ("w:br" in child) {
+    const brType = getAttr(child, "w:type");
+    return !brType || brType === "textWrapping" ? "\n" : undefined;
+  }
+  return undefined;
+}
+
+/** The unescaped text of a `w:t` (or `w:delText`) element. */
+export function textElementContent(node: FXPNode, tag: "w:t" | "w:delText" = "w:t"): string {
+  const children = node[tag];
+  let text = "";
+  if (Array.isArray(children)) {
+    for (const child of children) {
+      if ("#text" in child) text += unescapeXmlText(String(child["#text"]));
+    }
+  }
+  return text;
+}
+
+/**
+ * Get the text of a w:r run node: its w:t elements, unescaped, plus one
+ * character for each tab (`\t`) and soft line break (`\n`), in order.
+ * Structural breaks, page breaks (w:br w:type="page") and column breaks
+ * (w:br w:type="column"), add nothing.
  */
 export function getRunText(runNode: FXPNode): string {
-  const children = getChildren(runNode);
   let text = "";
-  for (const child of children) {
-    if ("w:t" in child) {
-      const tChildren = child["w:t"];
-      if (Array.isArray(tChildren)) {
-        for (const tChild of tChildren) {
-          if ("#text" in tChild) {
-            text += unescapeXmlText(String(tChild["#text"]));
-          }
-        }
-      }
-    } else if ("w:br" in child) {
-      // Page breaks (w:type="page") and column breaks (w:type="column")
-      // are structural breaks, not text — skip them
-      const brType = getAttr(child, "w:type");
-      if (!brType || brType === "textWrapping") {
-        // Regular line break
-        text += "\n";
-      }
-      // page/column breaks produce no text
-    }
+  for (const child of getChildren(runNode)) {
+    if ("w:t" in child) text += textElementContent(child);
+    else text += runChildChar(child) ?? "";
   }
   return text;
 }
@@ -328,29 +340,18 @@ export function runHasPageBreak(runNode: FXPNode): boolean {
  * Returns -1 if no page break is found in this run.
  */
 export function getRunPageBreakOffset(runNode: FXPNode): number {
-  const children = getChildren(runNode);
   let charsSeen = 0;
 
-  for (const child of children) {
+  for (const child of getChildren(runNode)) {
     if ("w:t" in child) {
-      const tChildren = child["w:t"];
-      if (Array.isArray(tChildren)) {
-        for (const tChild of tChildren) {
-          if ("#text" in tChild) {
-            charsSeen += unescapeXmlText(String(tChild["#text"])).length;
-          }
-        }
-      }
-    } else if ("w:br" in child) {
-      const brType = getAttr(child, "w:type");
-      if (!brType || brType === "textWrapping") {
-        // Regular line break counts as one char (\n)
-        charsSeen += 1;
-      } else if (brType === "page") {
-        return charsSeen;
-      }
+      charsSeen += textElementContent(child).length;
     } else if ("w:lastRenderedPageBreak" in child) {
       return charsSeen;
+    } else if ("w:br" in child && getAttr(child, "w:type") === "page") {
+      return charsSeen;
+    } else {
+      // A tab or a soft line break counts as one character
+      charsSeen += (runChildChar(child) ?? "").length;
     }
   }
 
@@ -523,36 +524,64 @@ export function needsSpacePreserve(text: string): boolean {
 }
 
 /**
+ * Turn run text into run children: `w:t` for the characters, `<w:tab/>` for
+ * each `\t` and `<w:br/>` for each `\n`, the reverse of `getRunText`.
+ * Empty text gives one empty `w:t`.
+ *
+ * `reuse` holds nodes the text had before an edit (`w:tab`, `w:ptab`,
+ * `w:br`, `w:cr`), in order. A `\t` or `\n` takes the first of them that
+ * reads as that character, so a positional tab that survives an edit is
+ * still a `w:ptab`; one that is new in the text is a plain `w:tab`. Nodes
+ * taken are removed from `reuse`.
+ */
+export function textToRunChildren(text: string, reuse?: FXPNode[]): FXPNode[] {
+  const children: FXPNode[] = [];
+  let buf = "";
+  const flush = (): void => {
+    if (buf.length > 0) children.push(createWt(buf));
+    buf = "";
+  };
+  for (const ch of text) {
+    if (ch === "\t" || ch === "\n") {
+      flush();
+      children.push(takeCharNode(ch, reuse));
+    } else {
+      buf += ch;
+    }
+  }
+  flush();
+  if (children.length === 0) children.push(createWt(""));
+  return children;
+}
+
+/** The node for a `\t` or `\n`: the first matching one in `reuse`, or a new one. */
+export function takeCharNode(ch: string, reuse?: FXPNode[]): FXPNode {
+  if (reuse) {
+    const idx = reuse.findIndex((n) => runChildChar(n) === ch);
+    if (idx !== -1) return reuse.splice(idx, 1)[0]!;
+  }
+  return ch === "\t" ? { "w:tab": [] as FXPNode[] } : { "w:br": [] as FXPNode[] };
+}
+
+/** The tab and soft-break nodes of a run, in order (see `textToRunChildren`). */
+export function runCharNodes(runNode: FXPNode): FXPNode[] {
+  return getChildren(runNode).filter((c) => runChildChar(c) !== undefined);
+}
+
+/**
  * Create a w:r run element with text and optional formatting.
  * If rPrNode is provided, it's cloned and used as the run properties.
- *
- * Handles newlines (\n) by interleaving w:t and w:br elements,
- * matching the behavior of getRunText() which converts w:br → \n.
+ * `\t` and `\n` in the text become `w:tab` and `w:br` (see `textToRunChildren`).
  */
 export function createRun(
   text: string,
   rPrNode?: FXPNode,
+  reuse?: FXPNode[],
 ): FXPNode {
   const children: FXPNode[] = [];
   if (rPrNode) {
     children.push(cloneNode(rPrNode));
   }
-
-  if (text.includes("\n")) {
-    // Multi-line: interleave w:t and w:br
-    const segments = text.split("\n");
-    for (let i = 0; i < segments.length; i++) {
-      const seg = segments[i]!;
-      if (seg.length > 0 || i === 0) {
-        children.push(createWt(seg));
-      }
-      if (i < segments.length - 1) {
-        children.push({ "w:br": [] as FXPNode[] });
-      }
-    }
-  } else {
-    children.push(createWt(text));
-  }
-
+  children.push(...textToRunChildren(text, reuse));
   return { "w:r": children };
 }

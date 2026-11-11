@@ -24,6 +24,7 @@ import {
   findCheckbox,
 } from "./control-ops.js";
 import { resolveHeaderFooterContainer } from "./container-utils.js";
+import { allNotes, findNoteOfParagraph, holdsNoteMark } from "../normalizer/notes.js";
 
 export interface ValidationResult {
   valid: boolean;
@@ -148,7 +149,7 @@ function validateStructure(
       if (!para) {
         return { valid: false, error: `Paragraph "${patch.target}" not found` };
       }
-      return { valid: true };
+      return validateNoteParagraphRemoval(para, doc);
     }
     case "add_comment": {
       const para = findParagraphById(patch.target, doc);
@@ -489,7 +490,7 @@ function validateStructure(
       if (!para.listInfo) {
         return { valid: false, error: `Paragraph "${patch.target}" is not a list item` };
       }
-      return { valid: true };
+      return validateNoteParagraphRemoval(para, doc);
     }
 
     case "convert_to_list": {
@@ -553,6 +554,26 @@ function validateStructure(
   }
 }
 
+/**
+ * A note keeps the paragraph that holds its number, and at least one
+ * paragraph: removing either would leave a note Word cannot show. Deleting a
+ * whole note (with its reference in the text) is not supported.
+ */
+function validateNoteParagraphRemoval(
+  para: NormalizedParagraph,
+  doc: NormalizedDocument,
+): ValidationResult {
+  const note = findNoteOfParagraph(doc, para);
+  if (!note) return { valid: true };
+  if (note.paragraphs.length === 1 || holdsNoteMark(para.xmlRef)) {
+    return {
+      valid: false,
+      error: `Paragraph "${para.id}" is the ${note.kind}'s own paragraph (it holds the note's number); deleting a ${note.kind} is not supported. Use delete_text to remove its text`,
+    };
+  }
+  return { valid: true };
+}
+
 function validateContainerTarget(
   container: { type: string; variant: string; section?: number },
   doc: NormalizedDocument,
@@ -582,10 +603,10 @@ function validateContainerTarget(
 
 /**
  * Find a paragraph by its ID anywhere in the document
- * (body, tables, headers, footers).
+ * (body, tables, headers, footers, footnotes, endnotes).
  *
- * Accepts either a positional id (`p12`, `tbl0.r1.c0.p0`, `hdr.default.p0`)
- * or a native id in the form `para:4F2A1C7B`.
+ * Accepts either a positional id (`p12`, `tbl0.r1.c0.p0`, `hdr.default.p0`,
+ * `fn1.p0`) or a native id in the form `para:4F2A1C7B`.
  */
 export function findParagraphById(
   id: string,
@@ -600,7 +621,7 @@ export function findParagraphById(
 /**
  * Find a paragraph by its native `w14:paraId` anywhere in the document.
  * Resolution order: body (paragraphs and table cells in document order),
- * headers, footers. Case-insensitive.
+ * headers, footers, footnotes, endnotes. Case-insensitive.
  */
 export function findParagraphByParaId(
   paraId: string,
@@ -642,6 +663,17 @@ function findParagraph(
     }
   }
 
+  // Search footnotes, then endnotes
+  for (const note of allNotes(doc)) {
+    for (const para of note.paragraphs) {
+      if (predicate(para)) return para;
+    }
+    for (const table of note.tables) {
+      const found = searchParagraphInTable(predicate, table);
+      if (found) return found;
+    }
+  }
+
   return undefined;
 }
 
@@ -670,6 +702,14 @@ export function findTableById(
   // Search footer tables
   for (const footer of doc.footers.values()) {
     for (const table of footer.tables) {
+      const found = searchTableInTable(id, table);
+      if (found) return found;
+    }
+  }
+
+  // Search footnote and endnote tables
+  for (const note of allNotes(doc)) {
+    for (const table of note.tables) {
       const found = searchTableInTable(id, table);
       if (found) return found;
     }

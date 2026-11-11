@@ -107,7 +107,7 @@ docxtor reject counterparty.docx -o resolved.docx \
 
 | Command | Description |
 |---|---|
-| `view` | Inspect document contents, including paragraphs, tables, headers, footers, and inline revision markers. Supports `--grep`. |
+| `view` | Inspect document contents, including paragraphs, tables, headers, footers, footnotes and endnotes, and inline revision markers. Supports `--grep`. |
 | `revisions` | List tracked changes with their IDs, authors, and surrounding context. |
 | `replace` | Find and replace text using native tracked changes. Only differing text is marked. |
 | `comment` | Add a Word comment anchored to a specific passage. |
@@ -226,7 +226,7 @@ await doc.toFile("contract-redline.docx");
 
 **Structured document representation**
 
-- Stable positional IDs for paragraphs, table cells, headers, and footers.
+- Stable positional IDs for paragraphs, table cells, headers, footers, footnotes, and endnotes.
 - Access to native Word `w14:paraId` identifiers, with support for assigning them when absent.
 - Markdown and JSON projections for LLM consumption.
 - Inline formatting markers, revision markers, page breaks, and run filtering by colour.

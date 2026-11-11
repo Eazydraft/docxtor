@@ -230,7 +230,8 @@ export function stampNewParagraphs(
 
 /**
  * Resolve the part root node that contains a normalized element, judged by
- * its positional id prefix (`hdr.` / `ftr.` → that header/footer, else body).
+ * its positional id prefix (`hdr.` / `ftr.` → that header/footer, `fn1.` /
+ * `en1.` → the footnotes/endnotes part, else body).
  */
 export function findPartRootForId(doc: NormalizedDocument, id: string): FXPNode | undefined {
   const m = id.match(/^(hdr|ftr)\./);
@@ -244,6 +245,11 @@ export function findPartRootForId(doc: NormalizedDocument, id: string): FXPNode 
       }
     }
     return undefined;
+  }
+  const note = /^(fn|en)\d+\./.exec(id);
+  if (note) {
+    const part = note[1] === "fn" ? doc.xmlParts.footnotes : doc.xmlParts.endnotes;
+    return part ? findPartRoot(part) : undefined;
   }
   return doc.xmlParts.document.find((n) => getTagName(n) === "w:document");
 }

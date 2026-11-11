@@ -505,7 +505,7 @@ function isCommentAnchor(node: FXPNode): boolean {
   const children = getChildren(node);
   return (
     children.some((c) => getTagName(c) === "w:commentReference") &&
-    !children.some((c) => getTagName(c) === "w:t" || getTagName(c) === "w:br")
+    !children.some((c) => ["w:t", "w:br", "w:tab", "w:cr"].includes(getTagName(c) ?? ""))
   );
 }
 

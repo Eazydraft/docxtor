@@ -23,8 +23,7 @@ import {
   contentChildren,
   sdtContentChildren,
   createElement,
-  escapeXmlText,
-  needsSpacePreserve,
+  createRun,
 } from "../xml/helpers.js";
 import { executeReplaceText } from "./text-ops.js";
 import type { RevisionContext } from "./revision.js";
@@ -93,17 +92,7 @@ export function executeAddTableRow(
       }
 
       // Add a new run with the cell text
-      const wtNode: Record<string, unknown> = {
-        "w:t": [{ "#text": escapeXmlText(cellText) } as any],
-      };
-      if (needsSpacePreserve(cellText)) {
-        if (!wtNode[":@"]) wtNode[":@"] = {};
-        (wtNode[":@"] as Record<string, string>)["@_xml:space"] = "preserve";
-      }
-      const newRun = {
-        "w:r": [wtNode as any],
-      };
-      pChildren.push(newRun);
+      pChildren.push(createRun(cellText));
     }
   }
 
@@ -327,14 +316,7 @@ export function buildTableNode(
 function buildTableRowNode(cells: string[]): FXPNode {
   const tcNodes: FXPNode[] = [];
   for (const cellText of cells) {
-    const wt: FXPNode = {
-      "w:t": [{ "#text": escapeXmlText(cellText) } as any],
-    };
-    if (needsSpacePreserve(cellText)) {
-      if (!wt[":@"]) wt[":@"] = {};
-      (wt[":@"] as Record<string, string>)["@_xml:space"] = "preserve";
-    }
-    const run: FXPNode = { "w:r": [wt] };
+    const run = createRun(cellText);
     const para: FXPNode = { "w:p": [run] };
     const tc = createElement("w:tc", [
       createElement("w:tcPr", [

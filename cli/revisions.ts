@@ -35,7 +35,7 @@ function runText(run: FXPNode): string {
     const tag = getTagName(c);
     if (tag === "w:t" || tag === "w:delText") {
       for (const t of getChildren(c)) if (t["#text"] !== undefined) s += unescapeXmlText(String(t["#text"]));
-    } else if (tag === "w:tab") s += "\t";
+    } else if (tag === "w:tab" || tag === "w:ptab") s += "\t";
     else if (tag === "w:br" || tag === "w:cr") s += "\n";
     else if (tag === "w:noBreakHyphen") s += "-";
   }

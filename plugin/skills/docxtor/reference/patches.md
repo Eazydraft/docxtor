@@ -1,6 +1,6 @@
 # Patch reference for `docxtor edit`
 
-`edit` applies a JSON array of patches. Each patch has a `type` and, usually, a `target`: a paragraph id from `view` (`p12`, `tbl0.r1.c0.p0`, `hdr.default.p0`) or a native id (`para:4F2A1C7B`). In a document with more than one section the header and footer ids carry the section, `hdr.s2.first.p0`.
+`edit` applies a JSON array of patches. Each patch has a `type` and, usually, a `target`: a paragraph id from `view` (`p12`, `tbl0.r1.c0.p0`, `hdr.default.p0`, `fn1.p0`) or a native id (`para:4F2A1C7B`). In a document with more than one section the header and footer ids carry the section, `hdr.s2.first.p0`.
 
 ## Contents
 
@@ -13,7 +13,8 @@
 - Tables: [add_table](#add_table), [add_table_row](#add_table_row), [delete_table_row](#delete_table_row)
 - Lists: [add_list](#add_list), [add_list_item](#add_list_item), [remove_list_item](#remove_list_item), [convert_to_list](#convert_to_list), [remove_list](#remove_list), [set_list_properties](#set_list_properties)
 - Headers and footers: [add_header / add_footer](#add_header--add_footer), [remove_header / remove_footer](#remove_header--remove_footer)
-- [Text options: markers, line breaks, fields](#text-options)
+- [Footnotes and endnotes](#footnotes-and-endnotes)
+- [Text options: markers, line breaks, tabs, fields](#text-options)
 
 ## How a batch behaves
 
@@ -21,7 +22,7 @@
 - **All or nothing.** If any patch fails, nothing is written. The error names the patch and, for a text that isn't found, prints what the paragraph says at that point.
 - **In order.** Patches apply one after another, and each sees the results of the earlier ones. A new paragraph gets the next free id (an insert after `p12` in a 40-paragraph document becomes `p40`) and can be targeted by later patches. Adding a table row shifts the rows below it within the batch: after inserting at row 1, the old row 1 is row 2.
 - **Check first:** `docxtor edit FILE --dry-run patches.json` reports each patch as `ok` or `FAILS` with the reason, and writes nothing.
-- `find`, `anchor` and `occurrence`: `find` must match the paragraph's current text exactly (without the `{-deleted-}` parts shown by `view`). `occurrence` picks the Nth match (default 1).
+- `find`, `anchor` and `occurrence`: `find` must match the paragraph's current text exactly (without the `{-deleted-}` parts and the `[^1]` footnote marks shown by `view`). A tab in the text is `\t` in the JSON: `"find": "17.2\tFor goods"`. Unlike `replace --find`, a space here does not match a tab. `occurrence` picks the Nth match (default 1).
 
 ## Text in a paragraph
 
@@ -225,6 +226,16 @@ Changes an existing list paragraph's level and/or list type.
 { "type": "remove_header", "variant": "first" }
 ```
 
+## Footnotes and endnotes
+
+```json
+{ "type": "replace_text", "target": "fn1.p0", "find": "World Bank", "replace": "Bank Group" }
+```
+
+The paragraphs of a note are `fn1.p0`, `fn1.p1` (footnote 1) and `en1.p0` (endnote 1), listed at the end of `view`; the number is the one in the note's mark in the text, `[^1]` or `[^e1]`. `replace_text`, `insert_text`, `delete_text`, `apply_formatting`, `apply_style`, `add_comment` and `insert_paragraph` work on them as on any paragraph, tracked or not.
+
+Adding a note and deleting a note are not supported. `delete_paragraph` on the paragraph that holds a note's number, or on a note's only paragraph, fails; use `delete_text` to remove its text. The reference in the body is not text and cannot be matched, moved or removed with a patch; edits beside it leave it in place.
+
 ## Text options
 
 - **Text is written exactly as given.** `*`, `_` and `~` are ordinary characters. To write formatted text, add `"markers": true` to that patch and use `**bold**`, `_italic_`, `~~strikethrough~~` or `<u>underline</u>`:
@@ -232,4 +243,5 @@ Changes an existing list paragraph's level and/or list type.
   { "type": "insert_paragraph", "target": "p12", "position": "after", "text": "**Note:** prices exclude VAT.", "markers": true }
   ```
 - **Line breaks.** In `replace_text`, `insert_text` and similar, `\n` is a line break inside the paragraph. In `insert_paragraph` and `append_text`, `\n` starts a new paragraph.
+- **Tabs.** `\t` is a tab, in every text field: `find` and `anchor` match one, `replace` and `text` write one. To change a tabbed clause and keep its tab, put `\t` on both sides: `"find": "17.2\tFor goods", "replace": "17.2\tFor Goods"`.
 - **Fields.** `{{PAGE}}`, `{{NUMPAGES}}`, `{{DATE}}`, `{{TIME}}` and `{{FILENAME}}` become live Word fields in `append_text`, `insert_paragraph`, `add_header` and `add_footer`.

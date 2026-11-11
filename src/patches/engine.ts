@@ -144,6 +144,8 @@ function applyPatchesAtomic(
     doc.body = clone.body;
     doc.headers = clone.headers;
     doc.footers = clone.footers;
+    doc.footnotes = clone.footnotes;
+    doc.endnotes = clone.endnotes;
     doc.xmlParts = clone.xmlParts;
   }
 
@@ -171,6 +173,8 @@ export function cloneDocument(doc: NormalizedDocument): NormalizedDocument {
     body: [],
     headers: new Map(),
     footers: new Map(),
+    footnotes: new Map(),
+    endnotes: new Map(),
     xmlParts,
     styles: doc.styles,
     loadOptions: doc.loadOptions,

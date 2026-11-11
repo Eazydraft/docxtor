@@ -39,7 +39,32 @@ Rules that keep ordinary document text intact:
 // paragraph text now contains the literal "**TBD** _____"
 ```
 
-**Line breaks.** A soft line break (`w:br`) is one `\n` in paragraph text, both in projections and in the text that `find` / `occurrence` are resolved against, so offsets computed from a projection always line up. `find` may span a break (`"By:\nName:"`), and `\n` in `replace` / `text` becomes a `w:br` (`insert_paragraph` and `append_text` are the exception: there `\n` starts a new paragraph).
+**Line breaks.** A soft line break (`w:br`, `w:cr`) is one `\n` in paragraph text, both in projections and in the text that `find` / `occurrence` are resolved against, so offsets computed from a projection always line up. `find` may span a break (`"By:\nName:"`), and `\n` in `replace` / `text` becomes a `w:br` (`insert_paragraph` and `append_text` are the exception: there `\n` starts a new paragraph).
+
+**Tabs.** A tab (`w:tab`, and the positional `w:ptab`) is one `\t` in paragraph text, in the same way. `find` and `anchor` match it as `\t`, exactly: a clause typed in Word as a number, a tab and its text is `"17.2\tFor goods"`, and neither `"17.2 For goods"` nor `"17.2For goods"` matches. `\t` in `replace`, `text` and the other text fields of every patch writes a `<w:tab/>`, never a raw tab character inside `w:t`. In JSON a tab is written `"\t"`; no other syntax is needed, and inline formatting markers are unaffected.
+
+```ts
+{ type: "replace_text", target: "p770", find: "17.2\tFor goods", replace: "17.2\tFor Goods" }  // the tab is kept
+{ type: "insert_text", target: "p12", position: "after", anchor: "By:", text: "\t____________" } // adds a tab
+{ type: "delete_text", target: "p12", find: "\t" }                                               // removes one
+```
+
+A tab that an edit keeps is the element the document had: a `w:ptab` stays a `w:ptab` with its alignment and leader. Only a tab that is new in the replacement text is written as a plain `w:tab`. A tracked deletion that spans a tab holds the `w:tab` inside the `w:del` run, so rejecting it restores the original.
+
+In `append_text`, a tab at the start of a list line (`\t- item`) is still indentation, one level per tab; a tab inside the item's text is a tab.
+
+## Footnotes and endnotes
+
+The paragraphs of a footnote or endnote have ids of their own, `fn1.p0` and `en1.p0`, where the number is the one in the note's mark (`[^1]`, `[^e1]`; see [ids](ids.md)). They are targets like any other paragraph:
+
+```ts
+{ type: "replace_text", target: "fn1.p0", find: "World Bank", replace: "Bank Group" }
+{ type: "add_comment", target: "en2.p0", find: "Schedule 2", text: "Check the schedule number." }
+```
+
+`replace_text`, `insert_text`, `delete_text`, `apply_formatting`, `apply_style`, `add_comment` and `insert_paragraph` work in a note, tracked or not, and change `word/footnotes.xml` or `word/endnotes.xml` only. `acceptAllRevisions` and `rejectAllRevisions` resolve the changes in notes with the rest.
+
+Not supported: adding a note, and deleting one. A note keeps the paragraph that holds its number, so `delete_paragraph` (and `remove_list_item`) on that paragraph, or on a note's only paragraph, fails validation; `delete_text` removes its text. The reference in the body is not text: an edit beside it leaves it in place, and a replacement that spans it keeps it, after the new text.
 
 ## `insert_text`
 

@@ -41,6 +41,7 @@ import type {
   LoadOptions,
   BodyElement,
   HeaderFooter,
+  NormalizedNote,
   StyleInfo,
   CoreProperties,
   RevisionFilterOptions,
@@ -404,8 +405,24 @@ export class Docxtor {
   }
 
   /**
+   * Get all footnotes, keyed by `w:id`, in the order of their numbers.
+   * Paragraph ids are `fn1.p0`, where 1 is the number Word displays.
+   */
+  getFootnotes(): Map<string, NormalizedNote> {
+    return this.doc.footnotes;
+  }
+
+  /**
+   * Get all endnotes, keyed by `w:id`, in the order of their numbers.
+   * Paragraph ids are `en1.p0`.
+   */
+  getEndnotes(): Map<string, NormalizedNote> {
+    return this.doc.endnotes;
+  }
+
+  /**
    * Find a paragraph by its ID anywhere in the document
-   * (body, tables, headers, footers, nested tables).
+   * (body, tables, headers, footers, footnotes, endnotes, nested tables).
    */
   findParagraphById(id: string): NormalizedParagraph | undefined {
     return _findParagraphById(id, this.doc);
@@ -413,7 +430,8 @@ export class Docxtor {
 
   /**
    * Find a paragraph by its native `w14:paraId` (8 hex chars, case-insensitive).
-   * Resolution order: body (including table cells), headers, footers.
+   * Resolution order: body (including table cells), headers, footers,
+   * footnotes, endnotes.
    */
   findParagraphByParaId(paraId: string): NormalizedParagraph | undefined {
     return _findParagraphByParaId(paraId, this.doc);
@@ -469,6 +487,9 @@ export type {
   ControlRange,
   ListInfo,
   HeaderFooter,
+  NormalizedNote,
+  NoteKind,
+  NoteReference,
   BodyElement,
   Patch,
   ReplaceTextPatch,
@@ -520,7 +541,7 @@ export { normalizeDocument, reNormalizeDocument } from "./normalizer/document.js
 export type { HeaderFooterRef } from "./normalizer/document.js";
 export { applyPatches, cloneDocument } from "./patches/engine.js";
 export { project, projectToJson, projectToMarkdown } from "./projection/llm.js";
-export type { JsonProjection, JsonProjectionPageBreak, JsonProjectionRunFormatting, JsonProjectionControl } from "./projection/llm.js";
+export type { JsonProjection, JsonProjectionNote, JsonProjectionPageBreak, JsonProjectionRunFormatting, JsonProjectionControl } from "./projection/llm.js";
 export { validatePatch, findParagraphById, findParagraphByParaId, findTableById } from "./patches/validator.js";
 export type { ValidationResult } from "./patches/validator.js";
 export { acceptAllRevisions, rejectAllRevisions } from "./revisions/accept-reject.js";

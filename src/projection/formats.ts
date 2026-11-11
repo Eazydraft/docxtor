@@ -7,8 +7,10 @@
 import type {
   HeaderFooter,
   NormalizedDocument,
+  NormalizedNote,
   NormalizedParagraph,
   NormalizedTable,
+  NoteReference,
   RevisionMark,
   RunFormatting,
   RunFilter,
@@ -67,6 +69,12 @@ interface JsonProjectionParagraph {
   numId?: string;
   formatting?: JsonProjectionRunFormatting[];
   revisions?: RevisionMark[];
+  /**
+   * Footnote and endnote references in the paragraph: the note's id prefix
+   * (`fn1`, `en2`) and the offset in `text` where the mark sits. The mark is
+   * not part of `text`.
+   */
+  noteRefs?: { note: string; offset: number }[];
   hasPageBreak?: boolean;
   pageBreakOffset?: number;
   /**
@@ -100,6 +108,15 @@ interface JsonProjectionHeaderFooter {
   tables?: JsonProjectionTable[];
 }
 
+export interface JsonProjectionNote {
+  /** `fn1`, `en2`: what the ids of the note's paragraphs start with. */
+  id: string;
+  /** The note's number (the one Word displays, for a note with an automatic mark). */
+  number: number;
+  paragraphs: JsonProjectionParagraph[];
+  tables?: JsonProjectionTable[];
+}
+
 export interface JsonProjectionPageBreak {
   id: string;
   type: "page_break";
@@ -109,6 +126,8 @@ export interface JsonProjection {
   body: (JsonProjectionParagraph | JsonProjectionTable | JsonProjectionPageBreak)[];
   headers?: JsonProjectionHeaderFooter[];
   footers?: JsonProjectionHeaderFooter[];
+  footnotes?: JsonProjectionNote[];
+  endnotes?: JsonProjectionNote[];
   styles?: StyleInfo[];
 }
 
@@ -125,6 +144,8 @@ export function projectToJson(
   const includeTables = options.includeTables ?? true;
   const includeRevisions = options.includeRevisions ?? false;
   const includePageBreaks = options.includePageBreaks ?? false;
+  const includeNotes = options.includeNotes ?? true;
+  activeNoteIds = noteIdLookup(doc);
 
   const body: (JsonProjectionParagraph | JsonProjectionTable | JsonProjectionPageBreak)[] = [];
 
@@ -186,7 +207,54 @@ export function projectToJson(
     }
   }
 
+  if (includeNotes) {
+    const projectNotes = (notes: Map<string, NormalizedNote>): JsonProjectionNote[] =>
+      [...notes.values()].map((note) => ({
+        id: note.idPrefix,
+        number: note.number,
+        paragraphs: note.paragraphs.map((p) =>
+          projectParagraphToJson(p, includeFormatting, includeRevisions, false, runFilter),
+        ),
+        ...(includeTables && note.tables.length > 0
+          ? { tables: note.tables.map((t) => projectTableToJson(t, includeFormatting, includeRevisions, runFilter)) }
+          : {}),
+      }));
+    if (doc.footnotes.size > 0) result.footnotes = projectNotes(doc.footnotes);
+    if (doc.endnotes.size > 0) result.endnotes = projectNotes(doc.endnotes);
+  }
+
   return result;
+}
+
+// =============================================================================
+// Footnote and endnote marks
+// =============================================================================
+
+/** Looks up the id prefix (`fn1`, `en2`) of the note a reference points at. */
+type NoteIdLookup = (ref: NoteReference) => NormalizedNote | undefined;
+
+function noteIdLookup(doc: NormalizedDocument): NoteIdLookup {
+  return (ref) => (ref.kind === "footnote" ? doc.footnotes : doc.endnotes).get(ref.noteId);
+}
+
+/**
+ * The lookup for the document being projected. Set at the start of each
+ * projection call, which is synchronous, so the paragraph and table
+ * formatters below do not each need the document passed down to them.
+ */
+let activeNoteIds: NoteIdLookup = () => undefined;
+
+/**
+ * The mark the markdown view prints for a note reference: `[^1]` for a
+ * footnote, `[^e1]` for an endnote. A reference with a custom mark prints
+ * nothing: the mark is the text that follows it. So does a reference to a
+ * note the part does not hold.
+ */
+function noteMark(ref: NoteReference): string {
+  if (ref.customMark) return "";
+  const note = activeNoteIds(ref);
+  if (!note) return "";
+  return ref.kind === "footnote" ? `[^${note.number}]` : `[^e${note.number}]`;
 }
 
 /**
@@ -278,6 +346,14 @@ function projectParagraphToJson(
     result.revisions = para.revisions;
   }
 
+  if (para.noteRefs && para.noteRefs.length > 0) {
+    const refs = para.noteRefs.flatMap((ref) => {
+      const note = activeNoteIds(ref);
+      return note ? [{ note: note.idPrefix, offset: ref.offset }] : [];
+    });
+    if (refs.length > 0) result.noteRefs = refs;
+  }
+
   if (includePageBreaks && para.hasPageBreak) {
     result.hasPageBreak = true;
     if (para.pageBreakOffset !== undefined) {
@@ -335,13 +411,13 @@ function projectTableToJson(
           cellResult.paraId = cell.paragraphs[0].paraId;
         }
         // Include individual paragraph details for multi-paragraph cells,
-        // when filtering runs (so matching runs in cells are reported), or
-        // when the cell holds content controls
-        if (
-          cell.paragraphs.length > 1 ||
-          runFilter !== undefined ||
-          cell.paragraphs.some((p) => p.control !== undefined || p.controls !== undefined)
-        ) {
+        // when filtering runs (so matching runs in cells are reported), when
+        // the cell holds content controls, and when a paragraph holds a
+        // footnote or endnote reference: the mark is not in the cell's text,
+        // so its `noteRefs` are the only trace of it
+        const hasNoteRefs = cell.paragraphs.some((p) => p.noteRefs !== undefined && p.noteRefs.length > 0);
+        const hasControls = cell.paragraphs.some((p) => p.control !== undefined || p.controls !== undefined);
+        if (cell.paragraphs.length > 1 || runFilter !== undefined || hasNoteRefs || hasControls) {
           cellResult.paragraphs = cell.paragraphs.map((p) =>
             projectParagraphToJson(p, includeFormatting, includeRevisions, false, runFilter),
           );
@@ -507,7 +583,14 @@ function buildListPrefix(
  *
  * --- Footer (default) ---
  * [ftr.default.p0] Footer text
+ *
+ * --- Footnotes ---
+ * [fn1.p0] Footnote text
  * ```
+ *
+ * A tab in the text prints as a tab character. A footnote or endnote
+ * reference prints as `[^1]` / `[^e1]`; the mark is not part of the
+ * paragraph's text.
  */
 export function projectToMarkdown(
   doc: NormalizedDocument,
@@ -518,6 +601,8 @@ export function projectToMarkdown(
   const includeRevisions = options.includeRevisions ?? false;
   const includePageBreaks = options.includePageBreaks ?? false;
   const includeFormatting = options.includeFormatting ?? false;
+  const includeNotes = options.includeNotes ?? true;
+  activeNoteIds = noteIdLookup(doc);
   const lines: string[] = [];
 
   // List counter state: "numId:level" → current count
@@ -573,6 +658,28 @@ export function projectToMarkdown(
     }
   }
 
+  if (includeNotes) {
+    for (const [title, notes] of [["Footnotes", doc.footnotes], ["Endnotes", doc.endnotes]] as const) {
+      if (notes.size === 0) continue;
+      lines.push("");
+      lines.push(`--- ${title} ---`);
+      for (const note of notes.values()) {
+        const noteCounters = new Map<string, number>();
+        for (const para of note.paragraphs) {
+          const listPrefix = buildListPrefix(para, noteCounters, numberingFxp);
+          lines.push(formatParagraphMarkdown(para, includeRevisions, false, includeFormatting, listPrefix));
+        }
+        if (includeTables) {
+          for (const table of note.tables) {
+            lines.push("");
+            lines.push(...formatTableMarkdown(table, includeRevisions, includeFormatting));
+            lines.push("");
+          }
+        }
+      }
+    }
+  }
+
   // Include available styles
   if (doc.styles.length > 0) {
     lines.push("");
@@ -594,14 +701,20 @@ function formatParagraphMarkdown(
 ): string {
   const styleHint = para.style ? ` (${para.style})` : "";
   const text = renderParagraphText(para, includeRevisions, includePageBreaks, includeFormatting);
+
   const listHint = para.listInfo ? ` {list:${para.listInfo.numId} L${para.listInfo.level}}` : "";
   return `[${formatIdToken(para)}]${styleHint}${listHint} ${listPrefix}${text}`;
 }
 
 /**
- * A paragraph's text as the markdown view shows it: formatting markers,
- * revision marks, a page-break marker and content-control markers, each
- * when asked for or present.
+ * A paragraph's text as the markdown view shows it: formatting markers and
+ * revision marks when asked for, a footnote or endnote mark (`[^1]`) where
+ * each reference sits, the `[PAGE BREAK]` marker when asked for, and
+ * content-control markers (`{field: …}`) around the controls that get one.
+ *
+ * The marks and markers are not part of `para.text`. Each has an offset in
+ * that text, which is mapped through whatever the formatting and revision
+ * annotations added before it is inserted.
  */
 function renderParagraphText(
   para: NormalizedParagraph,
@@ -630,15 +743,26 @@ function renderParagraphText(
   // marker shifts the position of another.
   const splices: Splice[] = [];
 
-  // [PAGE BREAK] marker at the position of the break.
-  if (includePageBreaks && para.hasPageBreak) {
-    let offset = para.pageBreakOffset ?? 0;
-    if (includeFormatting) offset = mapOffsetToFormattedText(offset, para.runs);
-    if (revisions) offset = mapOffsetToAnnotatedText(offset, revisions);
+  /** An offset in `para.text` → the same place in the annotated text. */
+  const mapOffset = (offset: number): number => {
+    let mapped = includeFormatting ? mapOffsetToFormattedText(offset, para.runs) : offset;
+    if (revisions) mapped = mapOffsetToAnnotatedText(mapped, revisions);
+    return mapped;
+  };
 
+  // Footnote and endnote marks, in order where several share an offset
+  (para.noteRefs ?? []).forEach((ref, i) => {
+    const mark = noteMark(ref);
+    if (mark.length > 0) splices.push({ at: mapOffset(ref.offset), rank: 1, seq: i, text: mark });
+  });
+
+  // The [PAGE BREAK] marker goes at the break's position in the text, after
+  // any note mark there
+  if (includePageBreaks && para.hasPageBreak) {
+    const offset = mapOffset(para.pageBreakOffset ?? 0);
     const marker =
       offset === 0 ? "[PAGE BREAK] " : offset >= text.length ? " [PAGE BREAK]" : " [PAGE BREAK] ";
-    splices.push({ at: offset, rank: 1, seq: 0, text: marker });
+    splices.push({ at: offset, rank: 1, seq: STANDALONE_AFTER_NOTES, text: marker });
   }
 
   // {field …} markers around content controls.
@@ -654,7 +778,7 @@ function renderParagraphText(
       return at;
     };
     if (empty) {
-      splices.push({ at: place(range.startOffset), rank: 1, seq, text: marker.open + marker.close });
+      splices.push({ at: place(range.startOffset), rank: 1, seq: STANDALONE_AFTER_NOTES + 1 + seq, text: marker.open + marker.close });
     } else {
       // At one position: closers first (innermost first), then openers (outermost first)
       splices.push({ at: place(range.startOffset), rank: 2, seq, text: marker.open });
@@ -672,6 +796,9 @@ function renderParagraphText(
   }
   return out + text.slice(last);
 }
+
+/** Order of the page-break marker and empty-control markers after note marks at one position. */
+const STANDALONE_AFTER_NOTES = 1_000_000;
 
 /** Text to put into a rendered paragraph at a position. */
 interface Splice {
@@ -743,7 +870,11 @@ function controlMarker(
 }
 
 /** Elements that are content of a run even though they carry no text. */
-const RUN_OBJECTS = new Set(["w:drawing", "w:pict", "w:object", "w:sym", "w:fldChar", "w:instrText"]);
+const RUN_OBJECTS = new Set([
+  "w:drawing", "w:pict", "w:object", "w:sym", "w:fldChar", "w:instrText",
+  // text that is not in a w:t
+  "w:tab", "w:br", "w:cr", "w:footnoteReference", "w:endnoteReference",
+]);
 
 /** True if a control holds any current text or object (deleted text does not count). */
 function controlHasContent(control: ControlInfo): boolean {

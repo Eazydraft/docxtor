@@ -25,7 +25,9 @@ import type {
   RevisionMark,
   ControlInfo,
   ControlRange,
+  NoteReference,
 } from "../types.js";
+import { runNoteReferences } from "./notes.js";
 import {
   findChild,
   getAttr,
@@ -34,7 +36,8 @@ import {
   getRunText,
   findTextNode,
   isTag,
-  unescapeXmlText,
+  runChildChar,
+  textElementContent,
   paragraphHasPageBreak,
   runHasPageBreak,
   getRunPageBreakOffset,
@@ -106,6 +109,7 @@ export function normalizeParagraph(
   const open = new Map<ControlInfo, ControlRange>();
   let offset = 0;
   let pageBreakOffset: number | undefined;
+  const noteRefs: NoteReference[] = [];
 
   for (const step of steps) {
     if (step.kind !== "run") {
@@ -122,6 +126,12 @@ export function normalizeParagraph(
     const runNode = step.node;
     const text = getRunText(runNode);
 
+    // A footnote or endnote reference adds no text; note where it sits. The
+    // run that holds one usually has no text at all, so look before skipping.
+    for (const ref of runNoteReferences(runNode)) {
+      noteRefs.push({ ...ref, offset: offset + ref.offset });
+    }
+
     // Check for page break in this run before skipping empty runs.
     // A page-break-only run has text.length === 0 but still contains a break.
     if (pageBreakOffset === undefined && runHasPageBreak(runNode)) {
@@ -132,8 +142,8 @@ export function normalizeParagraph(
     }
 
     // Skip runs that contribute nothing to the text (empty w:t, page-break-only,
-    // field chars, drawings). A run holding only a line break still yields "\n",
-    // so every w:br is one character in .text — the same text the projection
+    // field chars, drawings). A run holding only a tab or a line break still
+    // yields "\t" or "\n", so every w:tab and w:br is one character in .text — the same text the projection
     // shows, so offsets and occurrences computed from it resolve correctly.
     if (text.length === 0) continue;
 
@@ -179,6 +189,10 @@ export function normalizeParagraph(
 
   if (revisions.length > 0) {
     result.revisions = revisions;
+  }
+
+  if (noteRefs.length > 0) {
+    result.noteRefs = noteRefs;
   }
 
   // Detect page breaks — check w:pageBreakBefore (always offset 0) and run-level breaks
@@ -479,7 +493,8 @@ function walkForDeletions(
 /**
  * Extract text content from runs inside a w:del element.
  * Reads from both w:delText and w:t elements (some docs use w:t inside w:del);
- * a deleted soft line break (w:br) reads as "\n", as in live text.
+ * a deleted tab reads as "\t" and a deleted soft line break as "\n", as in
+ * live text.
  */
 function getDeletedText(delNode: FXPNode): string {
   const children = getChildren(delNode);
@@ -489,28 +504,9 @@ function getDeletedText(delNode: FXPNode): string {
     if (tag === "w:r") {
       const runChildren = getChildren(child);
       for (const rc of runChildren) {
-        if ("w:br" in rc) {
-          const brType = getAttr(rc, "w:type");
-          if (!brType || brType === "textWrapping") text += "\n";
-        } else if ("w:delText" in rc) {
-          const dtChildren = rc["w:delText"];
-          if (Array.isArray(dtChildren)) {
-            for (const dtChild of dtChildren as FXPNode[]) {
-              if ("#text" in dtChild) {
-                text += unescapeXmlText(String(dtChild["#text"]));
-              }
-            }
-          }
-        } else if ("w:t" in rc) {
-          const tChildren = rc["w:t"];
-          if (Array.isArray(tChildren)) {
-            for (const tChild of tChildren as FXPNode[]) {
-              if ("#text" in tChild) {
-                text += unescapeXmlText(String(tChild["#text"]));
-              }
-            }
-          }
-        }
+        if ("w:delText" in rc) text += textElementContent(rc, "w:delText");
+        else if ("w:t" in rc) text += textElementContent(rc);
+        else text += runChildChar(rc) ?? "";
       }
     }
   }

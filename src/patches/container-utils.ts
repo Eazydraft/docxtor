@@ -19,6 +19,7 @@ import type {
 import { findChild, getChildren, getTagName, contentChildrenOf } from "../xml/helpers.js";
 import { normalizeParagraph } from "../normalizer/paragraph.js";
 import { enrichListType } from "../normalizer/document.js";
+import { allNotes } from "../normalizer/notes.js";
 
 /** Any array that holds normalized paragraphs (body, hf.paragraphs, cell.paragraphs). */
 export type NormalizedContainerArray = Array<
@@ -81,9 +82,9 @@ export function getNextPIdx(doc: NormalizedDocument): number {
 
 /**
  * Find the FXP parent children array that directly contains a paragraph's xmlRef.
- * Searches w:body, w:tc (table cells, recursively), and header/footer roots,
- * reading through content controls: for a paragraph inside a block-level
- * control this is the children of its `w:sdtContent`.
+ * Searches w:body, w:tc (table cells, recursively), header/footer roots and
+ * footnotes/endnotes, reading through content controls: for a paragraph
+ * inside a block-level control this is the children of its `w:sdtContent`.
  */
 export function findParentChildren(
   doc: NormalizedDocument,
@@ -100,6 +101,12 @@ export function findParentChildren(
       const result = findInBlocks(getChildren(rootNode), xmlRef);
       if (result) return result;
     }
+  }
+
+  // Check footnotes/endnotes
+  for (const note of allNotes(doc)) {
+    const result = findInBlocks(getChildren(note.xmlRef), xmlRef);
+    if (result) return result;
   }
 
   return undefined;
@@ -147,13 +154,22 @@ export function findNormalizedContainer(
     if (hfIdx !== -1) return { array: hf.paragraphs, index: hfIdx };
   }
 
-  // Check table cell paragraphs (body tables + hf tables), recursing into nested tables
+  // Check footnote/endnote paragraphs
+  for (const note of allNotes(doc)) {
+    const noteIdx = note.paragraphs.findIndex((p) => p.id === paraId);
+    if (noteIdx !== -1) return { array: note.paragraphs, index: noteIdx };
+  }
+
+  // Check table cell paragraphs (body, hf and note tables), recursing into nested tables
   const allTables: NormalizedTable[] = [];
   for (const el of doc.body) {
     if (el.kind === "table") allTables.push(el);
   }
   for (const hf of [...doc.headers.values(), ...doc.footers.values()]) {
     allTables.push(...hf.tables);
+  }
+  for (const note of allNotes(doc)) {
+    allTables.push(...note.tables);
   }
 
   for (const table of allTables) {
@@ -225,6 +241,7 @@ export function reNormalizeParagraph(doc: NormalizedDocument, para: NormalizedPa
   para.style = fresh.style;
   para.listInfo = fresh.listInfo;
   para.revisions = fresh.revisions;
+  para.noteRefs = fresh.noteRefs;
   para.paraId = fresh.paraId;
   para.hasPageBreak = fresh.hasPageBreak;
   para.pageBreakOffset = fresh.pageBreakOffset;
