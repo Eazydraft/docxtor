@@ -940,6 +940,48 @@ describe("comments, validation options and emptied row controls", () => {
     expect(doc.findTableById("tbl0")!.rows.map((r) => r.cells[0]!.paragraphs[0]!.text)).toEqual(["keep"]);
   });
 
+  it.each([["untracked"], ["tracked, then accepted"]])("nested controls around a deleted row all go with it (%s)", async (mode) => {
+    const doc = await Docxtor.load(
+      await createBodyDocx(
+        `<w:tbl><w:tblPr/><w:tblGrid><w:gridCol/></w:tblGrid><w:tr>${cell(run("keep"))}</w:tr>` +
+          control(1, "", control(2, "", `<w:tr>${cell(run("go"))}</w:tr>`)) +
+          `</w:tbl><w:p/>`,
+      ),
+    );
+    expect(apply(doc, { type: "delete_table_row", target: "tbl0", row: 1 }, mode === "untracked" ? undefined : TRACKED).success).toBe(true);
+    if (mode !== "untracked") doc.acceptAllRevisions();
+    expect(doc.toString()).not.toContain("<w:sdt>");
+    expect(doc.findTableById("tbl0")!.rows).toHaveLength(1);
+  });
+
+  it("an outer control that still holds a row stays when a nested one is emptied", async () => {
+    const doc = await Docxtor.load(
+      await createBodyDocx(
+        `<w:tbl><w:tblPr/><w:tblGrid><w:gridCol/></w:tblGrid>` +
+          control(1, "", `<w:tr>${cell(run("stay"))}</w:tr>` + control(2, "", `<w:tr>${cell(run("go"))}</w:tr>`)) +
+          `</w:tbl><w:p/>`,
+      ),
+    );
+    expect(apply(doc, { type: "delete_table_row", target: "tbl0", row: 1 }, TRACKED).success).toBe(true);
+    doc.acceptAllRevisions();
+    const xml = doc.toString();
+    expect(xml.match(/<w:sdt>/g)).toHaveLength(1);
+    expect(xml).toContain('<w:id w:val="1"/>');
+    expect(xml).toMatch(/<w:sdtContent><w:tr>.*stay.*<\/w:tr><\/w:sdtContent>/);
+  });
+
+  it("rejecting an inserted row inside a nested control leaves no empty control either", async () => {
+    const doc = await Docxtor.load(
+      await createBodyDocx(
+        `<w:tbl><w:tblPr/><w:tblGrid><w:gridCol/></w:tblGrid><w:tr>${cell(run("keep"))}</w:tr>` +
+          control(1, "", control(2, "", `<w:tr><w:trPr><w:ins w:id="9" w:author="A" w:date="2026-01-01T00:00:00Z"/></w:trPr>${cell(run("new"))}</w:tr>`)) +
+          `</w:tbl><w:p/>`,
+      ),
+    );
+    doc.rejectAllRevisions();
+    expect(doc.toString()).not.toContain("<w:sdt>");
+  });
+
   it("a control around two rows stays when one of them is deleted", async () => {
     const doc = await Docxtor.load(
       await createBodyDocx(

@@ -320,13 +320,15 @@ function processChildren(
 
     // --- Content controls around rows or cells --------------------------
     // Resolving a change can remove the only row or cell a control wraps.
-    // An empty control is not valid in a table or a row: it goes too.
-    if (tag === "w:sdt" && (parentTag === "w:tbl" || parentTag === "w:tr")) {
+    // An empty control is not valid in a table or a row: it goes too. The
+    // control is recognised by what it held, not by its parent, so one
+    // nested inside another control is cleaned up as well, and the outer
+    // one after it if that leaves it empty in turn.
+    if (tag === "w:sdt" && wrapsRowsOrCells(child)) {
       const content = findChild(child, "w:sdtContent");
-      const held = content ? getChildren(content).filter((c) => getTagName(c) !== undefined).length : 0;
       processChildren(getChildren(child), tag, ctx);
       const left = content ? getChildren(content).filter((c) => getTagName(c) !== undefined).length : 0;
-      if (held > 0 && left === 0) {
+      if (left === 0) {
         children.splice(i, 1);
         continue;
       }
@@ -339,6 +341,19 @@ function processChildren(
     if (grandChildren.length > 0) processChildren(grandChildren, tag, ctx);
     i++;
   }
+}
+
+/**
+ * True for a content control that wraps table rows or cells, directly or
+ * through further controls.
+ */
+function wrapsRowsOrCells(sdt: FXPNode): boolean {
+  const content = findChild(sdt, "w:sdtContent");
+  if (!content) return false;
+  return getChildren(content).some((c) => {
+    const t = getTagName(c);
+    return t === "w:tr" || t === "w:tc" || (t === "w:sdt" && wrapsRowsOrCells(c));
+  });
 }
 
 // =============================================================================
