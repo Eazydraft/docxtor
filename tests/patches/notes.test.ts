@@ -84,6 +84,26 @@ describe("note marks in the view", () => {
     });
   });
 
+  it("the JSON projection reports a reference in a single-paragraph table cell", async () => {
+    const json = (await Docxtor.load(await twoNotes())).project("json");
+    const table = json.body[1] as { rows: { text: string; paragraphs?: { id: string; noteRefs?: unknown }[] }[][] };
+    expect(table.rows[0]![0]).toMatchObject({
+      text: "Fees",
+      paragraphs: [{ id: "tbl0.r0.c0.p0", noteRefs: [{ note: "fn2", offset: 4 }] }],
+    });
+  });
+
+  it("a table inside a note shows formatting markers when asked for", async () => {
+    const doc = await Docxtor.load(await createNotesDocx({
+      body: `<w:p>${t("Text")}${fnRef(1)}</w:p>`,
+      footnotes:
+        `<w:footnote w:id="1"><w:p><w:r><w:footnoteRef/></w:r>${t(" Rates:")}</w:p>` +
+        `<w:tbl><w:tr><w:tc><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Base</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:footnote>`,
+    }));
+    expect(doc.project("markdown", { includeFormatting: true })).toContain("| [fn1.tbl0.r0.c0.p0] **Base** |");
+    expect(doc.project("markdown")).toContain("| [fn1.tbl0.r0.c0.p0] Base |");
+  });
+
   it("places the mark after formatting markers and inside revision marks", async () => {
     const doc = await Docxtor.load(await createNotesDocx({
       body:

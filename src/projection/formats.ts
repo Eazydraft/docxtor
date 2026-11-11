@@ -354,8 +354,11 @@ function projectTableToJson(
           cellResult.paraId = cell.paragraphs[0].paraId;
         }
         // Include individual paragraph details for multi-paragraph cells,
-        // or when filtering runs (so matching runs in cells are reported)
-        if (cell.paragraphs.length > 1 || runFilter !== undefined) {
+        // when filtering runs (so matching runs in cells are reported), and
+        // when a paragraph holds a footnote or endnote reference: the mark is
+        // not in the cell's text, so its `noteRefs` are the only trace of it
+        const hasNoteRefs = cell.paragraphs.some((p) => p.noteRefs !== undefined && p.noteRefs.length > 0);
+        if (cell.paragraphs.length > 1 || runFilter !== undefined || hasNoteRefs) {
           cellResult.paragraphs = cell.paragraphs.map((p) =>
             projectParagraphToJson(p, includeFormatting, includeRevisions, false, runFilter),
           );
@@ -610,7 +613,7 @@ export function projectToMarkdown(
         if (includeTables) {
           for (const table of note.tables) {
             lines.push("");
-            lines.push(...formatTableMarkdown(table, includeRevisions));
+            lines.push(...formatTableMarkdown(table, includeRevisions, includeFormatting));
             lines.push("");
           }
         }
