@@ -23,7 +23,7 @@ import {
   getTagName,
   getAttr,
 } from "../xml/helpers.js";
-import { normalizeHeadersFooters } from "../normalizer/document.js";
+import { findHeaderFooterRefs, normalizeHeadersFooters } from "../normalizer/document.js";
 import { buildFieldRuns } from "./field-codes.js";
 import type { RevisionContext } from "./revision.js";
 import { createInsElement } from "./revision.js";
@@ -208,17 +208,17 @@ function executeRemoveHeaderFooter(
   const target = findRelationshipTarget(doc, rId);
   const fullPath = target ? `word/${target}` : undefined;
 
-  // 4. Remove the relationship
-  removeRelationship(doc, rId);
+  // 4. Remove the relationship, unless another section still references it
+  const relationshipInUse = findHeaderFooterRefs(doc.xmlParts.document).some(
+    (ref) => ref.type === type && ref.rId === rId,
+  );
+  if (!relationshipInUse) removeRelationship(doc, rId);
 
-  // 5. Remove content type override
-  if (fullPath) {
+  // 5-6. Remove the part and its content type override, unless a remaining
+  // relationship still targets the part (a part can be shared by sections)
+  if (fullPath && target && !isRelationshipTargetInUse(doc, target)) {
     removeContentTypeOverride(doc, fullPath);
-  }
-
-  // 6. Remove from xmlParts
-  const parts = type === "header" ? doc.xmlParts.headers : doc.xmlParts.footers;
-  if (fullPath) {
+    const parts = type === "header" ? doc.xmlParts.headers : doc.xmlParts.footers;
     parts.delete(fullPath);
   }
 
@@ -333,6 +333,15 @@ function findRelationshipTarget(
     }
   }
   return undefined;
+}
+
+/**
+ * Whether any relationship in document.xml.rels targets the given file.
+ */
+function isRelationshipTargetInUse(doc: NormalizedDocument, target: string): boolean {
+  const relsNode = doc.xmlParts.documentRels?.find((n) => getTagName(n) === "Relationships");
+  if (!relsNode) return false;
+  return findChildren(relsNode, "Relationship").some((rel) => getAttr(rel, "Target") === target);
 }
 
 /**

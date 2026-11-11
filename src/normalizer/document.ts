@@ -218,6 +218,8 @@ export function normalizeHeadersFooters(doc: NormalizedDocument): void {
   const relMap = parseRelationshipsFxp(doc.xmlParts.documentRels);
   const resolved: { ref: HeaderFooterRef; fxp: FXPNode[] }[] = [];
   const seen = new Set<string>();
+  // Sections that reference a header or footer part, shared parts included
+  const sections = new Set<number>();
   for (const ref of findHeaderFooterRefs(doc.xmlParts.document)) {
     const target = relMap.get(ref.rId);
     if (!target) continue;
@@ -228,12 +230,16 @@ export function normalizeHeadersFooters(doc: NormalizedDocument): void {
     // section or under a second relationship id; it keeps its first reference,
     // so its paragraphs appear once and under one id.
     const key = `${ref.type}:${path}`;
-    if (!fxp || seen.has(key)) continue;
+    if (!fxp) continue;
+    sections.add(ref.sectionIndex);
+    if (seen.has(key)) continue;
     seen.add(key);
     resolved.push({ ref, fxp });
   }
 
-  const withSection = new Set(resolved.map((r) => r.ref.sectionIndex)).size > 1;
+  // Counted before the shared parts are dropped: a document whose two sections
+  // reference one and the same header still has headers in two sections.
+  const withSection = sections.size > 1;
   for (const { ref, fxp } of resolved) {
     const hf = normalizeHeaderFooter(fxp, ref.type, ref.variant, ref.rId, ref.sectionIndex, withSection);
     (ref.type === "header" ? doc.headers : doc.footers).set(ref.rId, hf);

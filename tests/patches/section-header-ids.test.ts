@@ -153,6 +153,78 @@ describe("a part referenced more than once", () => {
   });
 });
 
+describe("one header part shared by every section", () => {
+  /** Two sections whose only header is header1.xml: by one relationship id, or by two. */
+  async function onlySharedDocx(twoRelationships: boolean): Promise<Buffer> {
+    const zip = await JSZip.loadAsync(await createTwoSectionDocx());
+    const second = twoRelationships ? "rId3" : "rId1";
+    let doc = await zip.file("word/document.xml")!.async("string");
+    doc = doc
+      .replace(/<w:footerReference [^>]*\/>/g, "")
+      .replace('<w:headerReference w:type="default" r:id="rId5"/>', "")
+      .replace('<w:headerReference w:type="first" r:id="rId3"/>', `<w:headerReference w:type="first" r:id="${second}"/>`);
+    zip.file("word/document.xml", doc);
+    if (twoRelationships) {
+      const rels = await zip.file("word/_rels/document.xml.rels")!.async("string");
+      zip.file("word/_rels/document.xml.rels", rels.replace('Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header2.xml"', 'Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"'));
+    }
+    return zip.generateAsync({ type: "nodebuffer" }) as Promise<Buffer>;
+  }
+
+  it.each([
+    ["one relationship id", false],
+    ["two relationship ids", true],
+  ])("still gets section ids, because two sections reference it (%s)", async (_name, two) => {
+    const doc = await Docxtor.load(await onlySharedDocx(two));
+    const headers = [...doc.getHeaders().values()];
+    expect(headers).toHaveLength(1);
+    expect([headers[0]!.sectionIndex, headers[0]!.idPrefix, headers[0]!.paragraphs[0]!.id]).toEqual([1, "hdr.s1", "hdr.s1.first.p0"]);
+    expect(projectToMarkdown(doc.getAST())).toContain("--- Header (first, section 1) ---");
+  });
+
+  it.each([
+    ["one relationship id", false],
+    ["two relationship ids", true],
+  ])("remove_header on the last section keeps the part section 1 still uses (%s)", async (_name, two) => {
+    const doc = await Docxtor.load(await onlySharedDocx(two));
+    const results = doc.applyPatches([{ type: "remove_header", variant: "first" }]);
+    expect(results[0]!.success).toBe(true);
+
+    // Section 1 still has its header, now the only section with one
+    const headers = [...doc.getHeaders().values()];
+    expect(headers.map((h) => [h.rId, h.paragraphs[0]!.id, h.paragraphs[0]!.text])).toEqual([
+      ["rId1", "hdr.first.p0", "Section one first-page header"],
+    ]);
+
+    const output = await doc.toBuffer();
+    const zip = await JSZip.loadAsync(output);
+    expect(zip.file("word/header1.xml")).not.toBeNull();
+    expect(await part(output, "[Content_Types].xml")).toContain('PartName="/word/header1.xml"');
+    const rels = await part(output, "word/_rels/document.xml.rels");
+    expect(rels).toContain('Id="rId1"');
+    // The last section's own relationship to the part is gone; section 1's stays
+    expect(rels.match(/Target="header1\.xml"/g)).toHaveLength(1);
+    // Every header reference left in the document resolves to a relationship
+    const refs = [...(await part(output, "word/document.xml")).matchAll(/<w:headerReference [^>]*r:id="([^"]+)"/g)].map((m) => m[1]);
+    expect(refs).toEqual(["rId1"]);
+
+    const reloaded = await Docxtor.load(output);
+    expect([...reloaded.getHeaders().values()].map((h) => h.paragraphs[0]!.text)).toEqual(["Section one first-page header"]);
+  });
+
+  it("remove_header still deletes a part nothing else references", async () => {
+    const doc = await Docxtor.load(await createTwoSectionDocx());
+    const results = doc.applyPatches([{ type: "remove_header", variant: "first" }]);
+    expect(results[0]!.success).toBe(true);
+    const output = await doc.toBuffer();
+    const zip = await JSZip.loadAsync(output);
+    expect(zip.file("word/header2.xml")).toBeNull();
+    expect(zip.file("word/header1.xml")).not.toBeNull();
+    expect(await part(output, "[Content_Types].xml")).not.toContain("/word/header2.xml");
+    expect(await part(output, "word/_rels/document.xml.rels")).not.toContain("header2.xml");
+  });
+});
+
 describe("container with section", () => {
   const append = (section?: number): Patch => ({
     type: "append_text",
