@@ -175,19 +175,44 @@ export function executeDeleteTableRow(
 
 /**
  * Replace every content control under `node` by its content, in place.
- * Used on a cloned row: the clone must not repeat the source's control ids,
- * and a prompt is not something to copy.
+ * Used on a cloned row: the clone must not repeat the source's control ids.
+ * A control showing its prompt contributes structure only (its cell, its
+ * paragraphs): the prompt is not document text, so it is not copied.
  */
 function unwrapControls(node: FXPNode): void {
   const children = getChildren(node);
   for (let i = 0; i < children.length; i++) {
     const child = children[i]!;
     if ("w:sdt" in child) {
-      children.splice(i, 1, ...sdtContentChildren(child));
+      const content = sdtContentChildren(child);
+      const sdtPr = findChild(child, "w:sdtPr");
+      const flag = sdtPr ? findChild(sdtPr, "w:showingPlcHdr") : undefined;
+      const val = flag ? (flag[":@"] as Record<string, string> | undefined)?.["@_w:val"] : undefined;
+      if (flag && val !== "0" && val !== "false" && val !== "off") removeRuns(content);
+      children.splice(i, 1, ...content);
       i--; // re-examine what took its place (a nested control, say)
       continue;
     }
     if (!("#text" in child)) unwrapControls(child);
+  }
+}
+
+/** Tags that hold runs inside a paragraph. */
+const RUN_HOLDERS = new Set(["w:r", "w:ins", "w:del", "w:moveTo", "w:moveFrom", "w:hyperlink", "w:smartTag", "w:fldSimple"]);
+
+/** Remove every run under `children`, keeping paragraphs, cells and their properties. */
+function removeRuns(children: FXPNode[]): void {
+  for (let i = children.length - 1; i >= 0; i--) {
+    const child = children[i]!;
+    const tag = Object.keys(child).find((k) => k !== ":@");
+    if (tag === undefined || tag === "#text") continue;
+    if (RUN_HOLDERS.has(tag)) {
+      children.splice(i, 1);
+    } else if (tag === "w:sdt") {
+      removeRuns(sdtContentChildren(child));
+    } else if (!tag.endsWith("Pr")) {
+      removeRuns(getChildren(child));
+    }
   }
 }
 

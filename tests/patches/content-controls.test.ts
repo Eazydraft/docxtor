@@ -651,6 +651,35 @@ describe("locks seen through nesting, tables and rows", () => {
     expect(apply(doc, { type: "add_table_row", target: "tbl0", afterRow: 0, cells: ["p", "q"] }).success).toBe(true);
   });
 
+  it("add_table_row copies no prompt, whichever paragraph or cell of the row holds it", async () => {
+    const prompt = (text: string): string => `<w:r><w:rPr><w:rStyle w:val="PlaceholderText"/></w:rPr><w:t>${text}</w:t></w:r>`;
+    const shown = `<w:showingPlcHdr/>`;
+    const doc = await from(
+      table(
+        `<w:tr>` +
+          // a prompt in the second paragraph of a cell, next to a filled control
+          `<w:tc><w:p>${run("Label")}</w:p><w:p>${run("see ")}${control(1, shown, prompt("Insert note"))}${control(2, "", run("kept"))}</w:p></w:tc>` +
+          // a control around a cell whose prompt spans two paragraphs
+          control(3, shown, `<w:tc><w:p>${prompt("Enter")}</w:p><w:p>${prompt("details")}</w:p></w:tc>`) +
+          `</w:tr>`,
+      ),
+    );
+    expect(apply(doc, { type: "add_table_row", target: "tbl0", afterRow: 0, cells: ["A", "B"] }).success).toBe(true);
+    const rows = doc.findTableById("tbl0")!.rows;
+    expect(rows[1]!.cells.map((c) => c.paragraphs.map((p) => p.text))).toEqual([
+      ["A", "see kept"],
+      ["B", ""],
+    ]);
+    // The source row is untouched, and no control is repeated
+    expect(rows[0]!.cells.map((c) => c.paragraphs.map((p) => p.text))).toEqual([
+      ["Label", "see Insert notekept"],
+      ["Enter", "details"],
+    ]);
+    const xml = doc.toString();
+    expect(xml.match(/<w:sdt>/g)).toHaveLength(3);
+    expect(xml.match(/PlaceholderText/g)).toHaveLength(3);
+  });
+
   it("rows of a table inside a data-bound control cannot change", async () => {
     const doc = await from(
       control(1, `<w:alias w:val="Feed"/><w:dataBinding w:xpath="/a" w:storeItemID="{0}"/>`, table(`<w:tr>${cell(run("a"))}${cell(run("b"))}</w:tr>`)),
