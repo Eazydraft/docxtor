@@ -1188,12 +1188,29 @@ describe("live control objects and checkboxes around a paragraph", () => {
     expect(doc.findParagraphById("p0")!.text).toBe("☒ Yes");
   });
 
+  it("set_checkbox writes the glyph into a checkbox control that holds one empty paragraph", async () => {
+    const doc = await Docxtor.load(await ns(`<w:sdt><w:sdtPr><w:id w:val="1"/>${boxPr}</w:sdtPr><w:sdtContent><w:p/></w:sdtContent></w:sdt>`));
+    expect(apply(doc, { type: "set_checkbox", target: "p0", checked: true }).success).toBe(true);
+    expect(doc.findParagraphById("p0")!.text).toBe("☒");
+  });
+
+  it("set_checkbox is refused on an empty paragraph of a checkbox control that holds several", async () => {
+    const doc = await Docxtor.load(
+      await ns(`<w:sdt><w:sdtPr><w:id w:val="1"/>${boxPr}</w:sdtPr><w:sdtContent><w:p>${run("Note")}</w:p><w:p/></w:sdtContent></w:sdt>`),
+    );
+    const before = doc.toString();
+    for (const target of ["p0", "p1"]) {
+      expect(apply(doc, { type: "set_checkbox", target, checked: true }).error, target).toContain("cannot be set without changing other text");
+    }
+    expect(doc.toString()).toBe(before);
+  });
+
   it("set_checkbox is refused when a checkbox around a paragraph has no glyph run of its own", async () => {
     const doc = await Docxtor.load(
       await ns(`<w:sdt><w:sdtPr><w:id w:val="1"/>${boxPr}</w:sdtPr><w:sdtContent><w:p>${run("☐ Yes")}</w:p></w:sdtContent></w:sdt>`),
     );
     const before = doc.toString();
-    expect(apply(doc, { type: "set_checkbox", target: "p0", checked: true }).error).toContain("cannot be set without changing the paragraph's other text");
+    expect(apply(doc, { type: "set_checkbox", target: "p0", checked: true }).error).toContain("cannot be set without changing other text");
     expect(doc.toString()).toBe(before);
   });
 });

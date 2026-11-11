@@ -815,12 +815,18 @@ export function findCheckbox(
   const box = boxes[n - 1]!;
   assertOpen(para.id, "the checkbox", box.control);
   // Wrapped around a paragraph or cell, the checkbox must show its glyph in
-  // a run of its own, or hold nothing else, so that no other text is touched.
-  if (box.scope === "block" && !blockGlyphRun(para, box.control) && para.text.trim().length > 0) {
-    throw new ControlEditError(
-      `${para.id}: the checkbox content control wrapped around this paragraph shows no checkbox glyph in a run of its own; ` +
-        `it cannot be set without changing the paragraph's other text`,
-    );
+  // a run of its own, so that no other text is touched. The one exception is
+  // a control that holds a single paragraph with no text at all (an empty
+  // checkbox, as a rejected change can leave it): there the glyph is written
+  // into that paragraph, which is the whole of the control.
+  if (box.scope === "block" && !blockGlyphRun(para, box.control)) {
+    const emptySingle = para.text.length === 0 && countParagraphs(box.control) === 1;
+    if (!emptySingle) {
+      throw new ControlEditError(
+        `${para.id}: the checkbox content control wrapped around this paragraph shows no checkbox glyph in a run of its own; ` +
+          `it cannot be set without changing other text`,
+      );
+    }
   }
   return box;
 }

@@ -296,7 +296,7 @@ Check or uncheck a checkbox content control without knowing which glyph it shows
 }
 ```
 
-A checkbox control wrapped around a whole paragraph or cell changes only the run that shows its glyph; the other text there is left alone, and editing it is refused. If no run holds just the glyph, `set_checkbox` is refused rather than rewrite the paragraph.
+A checkbox control wrapped around a whole paragraph or cell changes only the run that shows its glyph; the other text there is left alone, and editing it is refused. If no run holds just the glyph, `set_checkbox` is refused rather than rewrite the paragraph. The one exception is a control that holds a single, completely empty paragraph (as rejecting a change can leave it): the glyph is written into that paragraph. In a control with several paragraphs, an empty one is refused like any other.
 
 The glyph, its font and `w14:checked` change together, using the control's own `w14:checkedState` / `w14:uncheckedState` (Word's defaults are `☒` and `☐` in MS Gothic). Setting the state the checkbox already has changes nothing. With `trackRevisions` the old glyph becomes a deletion and the new one an insertion; `w14:checked` is not itself revision-tracked, so after such a change is rejected it still says the new state while the glyph shows the old one.
 
