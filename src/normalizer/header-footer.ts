@@ -78,6 +78,7 @@ export function normalizeHeaderFooter(
     variant,
     rId,
     sectionIndex,
+    references: [{ sectionIndex, variant, rId }],
     idPrefix,
     paragraphs,
     tables,

@@ -631,7 +631,7 @@ function executeAppendTextToContainer(
         rootChildren.push(pNode);
         const normalized = normalizeParagraph(
           pNode,
-          `${prefix}.${container.variant}.p${nextPIdx++}`,
+          `${prefix}.${hf.variant}.p${nextPIdx++}`,
         );
         hf.paragraphs.push(normalized);
       }
@@ -646,7 +646,7 @@ function executeAppendTextToContainer(
 
       // Normalize and track
       const nextTblIdx = hf.tables.length;
-      const tblId = `${prefix}.${container.variant}.tbl${nextTblIdx}`;
+      const tblId = `${prefix}.${hf.variant}.tbl${nextTblIdx}`;
       const normalizedTbl = normalizeTable(tblNode, tblId);
       hf.tables.push(normalizedTbl);
     } else {
@@ -677,7 +677,7 @@ function executeAppendTextToContainer(
         rootChildren.push(pNode);
         const normalized = normalizeParagraph(
           pNode,
-          `${prefix}.${container.variant}.p${nextPIdx++}`,
+          `${prefix}.${hf.variant}.p${nextPIdx++}`,
         );
         if (doc.xmlParts.numbering) {
           enrichListType(normalized, doc.xmlParts.numbering);
@@ -711,7 +711,7 @@ function executeAddTableToContainer(
   // Normalize and track
   const prefix = hf.idPrefix;
   const nextTblIdx = hf.tables.length;
-  const id = `${prefix}.${container.variant}.tbl${nextTblIdx}`;
+  const id = `${prefix}.${hf.variant}.tbl${nextTblIdx}`;
   const normalized = normalizeTable(tableNode, id);
   hf.tables.push(normalized);
 }

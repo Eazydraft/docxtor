@@ -484,6 +484,7 @@ export type {
   SetListPropertiesPatch,
   HeaderFooterVariant,
   HeaderFooterContainer,
+  HeaderFooterReference,
   FormattingUpdate,
   StyleInfo,
   PatchResult,

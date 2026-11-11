@@ -92,13 +92,24 @@ export type BodyElement =
 
 /**
  * Names a header or footer as the target of a patch. `section` (1-based, in
- * document order) is required when more than one section has a header or
- * footer of this type and variant.
+ * document order) is required when sections have different headers or
+ * footers of this type and variant. Sections that share one part need no
+ * `section`: either names the same part.
  */
 export interface HeaderFooterContainer {
   type: "header" | "footer";
   variant: HeaderFooterVariant;
   section?: number;
+}
+
+/** One `w:headerReference` / `w:footerReference` to a header or footer part. */
+export interface HeaderFooterReference {
+  /** 1-based index of the referencing section, in document order. */
+  sectionIndex: number;
+  /** "default", "first" or "even". */
+  variant: string;
+  /** Relationship id used by the reference. */
+  rId: string;
 }
 
 /** Header or footer content. */
@@ -108,8 +119,14 @@ export interface HeaderFooter {
   variant: string;
   /** Relationship ID from sectPr. */
   rId: string;
-  /** 1-based index, in document order, of the section that references this part. */
+  /** 1-based index, in document order, of the first section that references this part. */
   sectionIndex: number;
+  /**
+   * Every reference to this part, in document order. Usually one. A part
+   * shared by sections, or used as two variants, has one entry per
+   * reference; the first is the one `variant`, `rId` and `sectionIndex` give.
+   */
+  references: HeaderFooterReference[];
   /**
    * What ids inside this part start with: `hdr` / `ftr`, or `hdr.s2` / `ftr.s2`
    * when more than one section of the document has headers or footers.

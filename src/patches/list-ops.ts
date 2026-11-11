@@ -105,7 +105,7 @@ export function executeAddList(
     for (const node of nodes) {
       const normalized = normalizeParagraph(
         node,
-        `${hf.idPrefix}.${patch.container.variant}.p${nextPIdx++}`,
+        `${hf.idPrefix}.${hf.variant}.p${nextPIdx++}`,
       );
       if (doc.xmlParts.numbering) enrichListType(normalized, doc.xmlParts.numbering);
       hf.paragraphs.push(normalized);

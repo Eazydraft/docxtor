@@ -225,6 +225,68 @@ describe("one header part shared by every section", () => {
   });
 });
 
+describe("container on a part shared by sections", () => {
+  /** Section 2's first-page header is header1.xml too, through its own relationship id. */
+  async function sharedFirstHeaderDocx(): Promise<Buffer> {
+    const zip = await JSZip.loadAsync(await createTwoSectionDocx());
+    const rels = await zip.file("word/_rels/document.xml.rels")!.async("string");
+    zip.file("word/_rels/document.xml.rels", rels.replace('Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header2.xml"', 'Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"'));
+    return zip.generateAsync({ type: "nodebuffer" }) as Promise<Buffer>;
+  }
+  const append = (section?: number): Patch => ({
+    type: "append_text",
+    text: "Draft",
+    container: { type: "header", variant: "first", ...(section ? { section } : {}) },
+  });
+
+  it("the part lists every reference to it", async () => {
+    const doc = await Docxtor.load(await sharedFirstHeaderDocx());
+    const shared = [...doc.getHeaders().values()].find((h) => h.variant === "first")!;
+    expect(shared.references).toEqual([
+      { sectionIndex: 1, variant: "first", rId: "rId1" },
+      { sectionIndex: 2, variant: "first", rId: "rId3" },
+    ]);
+    const own = [...doc.getHeaders().values()].find((h) => h.variant === "default")!;
+    expect(own.references).toEqual([{ sectionIndex: 2, variant: "default", rId: "rId5" }]);
+  });
+
+  it.each([[1], [2]])("section %i resolves to the shared part", async (section) => {
+    const doc = await Docxtor.load(await sharedFirstHeaderDocx());
+    expect(doc.validatePatches([append(section)])[0]).toEqual({ valid: true });
+    const results = doc.applyPatches([append(section)]);
+    expect(results[0]!.success).toBe(true);
+    // The new paragraph takes the part's own ids, whichever section named it
+    expect(doc.findParagraphById("hdr.s1.first.p1")!.text).toBe("Draft");
+    const out = await part(await doc.toBuffer(), "word/header1.xml");
+    expect(out.match(/Draft/g)).toHaveLength(1);
+  });
+
+  it("needs no section: both sections name the same part", async () => {
+    const doc = await Docxtor.load(await sharedFirstHeaderDocx());
+    const results = doc.applyPatches([append()]);
+    expect(results[0]!.success).toBe(true);
+    expect(doc.findParagraphById("hdr.s1.first.p1")!.text).toBe("Draft");
+  });
+
+  it("a section that does not reference the part is still refused, and the message lists both that do", async () => {
+    const doc = await Docxtor.load(await sharedFirstHeaderDocx());
+    expect(doc.validatePatches([append(3)])[0]).toEqual({
+      valid: false,
+      error: 'No header with variant "first" in section 3; it exists in sections 1 and 2',
+    });
+  });
+
+  it("a part used as two variants is found by either, and new paragraphs keep its ids", async () => {
+    const zip = await JSZip.loadAsync(await sharedFirstHeaderDocx());
+    const xml = await zip.file("word/document.xml")!.async("string");
+    zip.file("word/document.xml", xml.replace('<w:headerReference w:type="first" r:id="rId3"/>', '<w:headerReference w:type="even" r:id="rId3"/>'));
+    const doc = await Docxtor.load(await zip.generateAsync({ type: "nodebuffer" }) as Buffer);
+    const results = doc.applyPatches([{ type: "append_text", text: "Draft", container: { type: "header", variant: "even" } }]);
+    expect(results[0]!.success).toBe(true);
+    expect(doc.findParagraphById("hdr.s1.first.p1")!.text).toBe("Draft");
+  });
+});
+
 describe("container with section", () => {
   const append = (section?: number): Patch => ({
     type: "append_text",
