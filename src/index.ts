@@ -438,9 +438,19 @@ export class Docxtor {
   /**
    * Validate patches without applying them.
    * Returns validation results for each patch.
+   *
+   * @param options - Pass the options the patches will be applied with:
+   *   `inlineMarkers` decides how `find` and `anchor` are matched, which
+   *   matters for what a content control allows.
    */
-  validatePatches(patches: Patch[]): { valid: boolean; error?: string }[] {
-    return patches.map((patch) => _validatePatch(patch, this.doc));
+  validatePatches(
+    patches: Patch[],
+    options?: Pick<PatchOptions, "inlineMarkers">,
+  ): { valid: boolean; error?: string }[] {
+    return patches.map((patch) => {
+      const own = (patch as { markers?: boolean }).markers;
+      return _validatePatch(patch, this.doc, own ?? options?.inlineMarkers ?? true);
+    });
   }
 }
 

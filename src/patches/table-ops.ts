@@ -169,7 +169,27 @@ export function executeDeleteTableRow(
   } else {
     // Without revision tracking: remove the row from XML
     const holder = contentChildren(table.xmlRef).find((c) => c.node === row.xmlRef);
-    if (holder) holder.siblings.splice(holder.siblings.indexOf(row.xmlRef), 1);
+    if (holder) {
+      holder.siblings.splice(holder.siblings.indexOf(row.xmlRef), 1);
+      // A control that wrapped only this row would be left empty in the
+      // table: it goes with the row (validation refuses a locked one).
+      removeEmptyWrappers(getChildren(table.xmlRef), holder.sdts);
+    }
+  }
+}
+
+/**
+ * Remove the wrappers in `sdts` (outermost first) that no longer hold any
+ * element, innermost first, from the tree under `children`.
+ */
+function removeEmptyWrappers(children: FXPNode[], sdts: FXPNode[]): void {
+  for (let i = sdts.length - 1; i >= 0; i--) {
+    const sdt = sdts[i]!;
+    if (sdtContentChildren(sdt).some((c) => !("#text" in c))) return;
+    const parent = i === 0 ? children : sdtContentChildren(sdts[i - 1]!);
+    const at = parent.indexOf(sdt);
+    if (at === -1) return;
+    parent.splice(at, 1);
   }
 }
 

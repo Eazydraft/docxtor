@@ -8,7 +8,7 @@
 import { readFile } from "node:fs/promises";
 import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
 import { Docxtor, type NormalizedTable, type Patch, type PatchOptions, type PatchResult } from "../src/index.js";
-import { allParagraphs, matchStarts, occurrenceAt, patchTargets, planEdit, promptControl, quoteVariants, snippet } from "./paragraphs.js";
+import { allParagraphs, matchStarts, occurrenceAt, patchTargets, planEdit, promptRange, quoteVariants, snippet } from "./paragraphs.js";
 import { formatChanges, listChanges } from "./revisions.js";
 import { formatComments, listComments } from "./comments.js";
 import { getAttr, getChildren, getTagName, unescapeXmlText } from "../src/xml/helpers.js";
@@ -240,18 +240,30 @@ async function cmdReplace(argv: string[]): Promise<void> {
     const paras = every.filter((l) => inScope(l.para.id, l.para.paraId));
     // Every match. Try curly/straight quote variants if the literal text is absent.
     // `id` is the positional id shown to the user; `target` is what the patch names.
-    let hits: { id: string; target: string; text: string; start: number; prompt: boolean }[] = [];
+    // `fill` is set when the edit lands on the prompt of an empty content control: the find and the
+    // replacement for that control, whole.
+    let hits: { id: string; target: string; text: string; start: number; fill?: { find: string; replace: string; start: number } }[] = [];
     for (const variant of quoteVariants(find)) {
-      // A match on the prompt of an empty content control fills that control, whole. The prompt may
-      // hold the find more than once; the control still takes one replacement, so keep its first match.
+      // What changes is the part of the match where find and replace differ. When that part lies on a
+      // prompt, the edit fills the control. The match may reach outside the control ("Title: Insert
+      // name" -> "Title: Jane"): the text outside is the same on both sides, so the control gets the
+      // replacement without it. A prompt may hold the find more than once; the control still takes one
+      // replacement, so only its first match is kept.
+      const edit = planEdit(variant, replace);
+      const changed = edit.kind === "insert" ? edit.anchor : edit.find;
       const filled = new Set<unknown>();
       hits = paras.flatMap(({ para }) => matchStarts(para.text, variant, !!values["whole-word"]).flatMap((start) => {
-        const control = promptControl(para, start, start + variant.length);
-        if (control) {
-          if (filled.has(control.xmlRef)) return [];
-          filled.add(control.xmlRef);
-        }
-        return [{ id: para.id, target: targetOf(para), text: para.text, start, prompt: control !== undefined }];
+        const hit = { id: para.id, target: targetOf(para), text: para.text, start };
+        const end = start + variant.length;
+        const prompt = promptRange(para, start + edit.offset, start + edit.offset + changed.length);
+        if (!prompt) return [hit];
+        if (filled.has(prompt.control.xmlRef)) return [];
+        filled.add(prompt.control.xmlRef);
+        const before = para.text.slice(start, Math.max(start, prompt.startOffset));
+        const after = para.text.slice(Math.min(end, prompt.endOffset), end);
+        if (!replace.startsWith(before) || !replace.endsWith(after) || replace.length < before.length + after.length) return [hit];
+        const inside = Math.max(start, prompt.startOffset);
+        return [{ ...hit, fill: { find: para.text.slice(inside, Math.min(end, prompt.endOffset)), replace: replace.slice(before.length, replace.length - after.length), start: inside } }];
       }));
       if (hits.length) { find = variant; break; }
     }
@@ -270,7 +282,7 @@ async function cmdReplace(argv: string[]): Promise<void> {
     const m = planEdit(find, replace);
     const patches: Patch[] = [...hits].reverse().map((h): Patch => {
       // On the prompt of an empty content control the replacement fills the control, whole.
-      if (h.prompt) return { type: "replace_text", target: h.target, find, replace, occurrence: occurrenceAt(h.text, find, h.start) };
+      if (h.fill) return { type: "replace_text", target: h.target, find: h.fill.find, replace: h.fill.replace, occurrence: occurrenceAt(h.text, h.fill.find, h.fill.start) };
       const start = h.start + m.offset;
       if (m.kind === "insert") {
         return { type: "insert_text", target: h.target, position: m.position, anchor: m.anchor, text: m.text, occurrence: occurrenceAt(h.text, m.anchor, start) };

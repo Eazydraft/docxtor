@@ -18,6 +18,7 @@
 import type {
   NormalizedParagraph,
   NormalizedTable,
+  BodyElement,
   ControlInfo,
   RunMapping,
   ReplaceTextPatch,
@@ -90,200 +91,185 @@ function quote(items: string[]): string {
 // =============================================================================
 // Locks and bindings
 // =============================================================================
+//
+// Every patch that changes the document goes through one of two questions,
+// so no patch type needs its own idea of where a control might sit:
+//
+// 1. Is the place being changed inside a control that is closed to edits
+//    (content-locked or data-bound), at any level of nesting? Answered from
+//    the chain of controls around the paragraph, row or table: assertOpen.
+// 2. Does the thing being removed hold a locked control, at any depth?
+//    Answered from the XML of the node itself: assertNoLockedInside. It
+//    reads the XML rather than the normalized view, so a control around a
+//    nested row or in a nested table cannot be overlooked.
+
+const BOUND_REASON =
+  "bound to a custom XML part; Word overwrites its content from that part when the file is opened, so an edit here would be lost";
+
+/** True when the content of `c` itself may not be edited. */
+function contentLocked(c: ControlInfo): boolean {
+  return c.locked === "content" || c.locked === "both";
+}
 
 /**
- * Refuse an edit to the content of `control` when it, or a control around
- * it, is content-locked or data-bound.
+ * Refuse a change to something inside `control` when it, or a control
+ * around it, is content-locked or data-bound.
+ *
+ * @param where - what is being changed, for the message ("p7", "tbl0 row 1")
+ * @param subject - how to name it ("the text", "the paragraph", "the table")
+ * @param stopAt - controls that are outside the change and need no check
  */
-function assertEditable(paraId: string, control: ControlInfo | undefined): void {
+function assertOpen(
+  where: string,
+  subject: string,
+  control: ControlInfo | undefined,
+  stopAt?: Set<ControlInfo>,
+): void {
   for (const c of controlChain(control)) {
-    if (c.locked === "content" || c.locked === "both") {
+    if (stopAt?.has(c)) break;
+    if (contentLocked(c)) {
       throw new ControlEditError(
-        `${paraId}: the text is in a locked ${describe(c)}; its content cannot be edited`,
+        `${where}: ${subject} is in a locked ${describe(c)}; its content cannot be edited`,
       );
     }
     if (c.bound) {
-      throw new ControlEditError(
-        `${paraId}: the ${describe(c)} is bound to a custom XML part; Word overwrites its text ` +
-          `from that part when the file is opened, so an edit here would be lost`,
-      );
+      throw new ControlEditError(`${where}: ${subject} is in a ${describe(c)} ${BOUND_REASON}`);
     }
   }
+}
+
+/** The first locked content control at any depth under `node`, if any. */
+function findLockedInside(node: FXPNode): ControlInfo | undefined {
+  for (const child of getChildren(node)) {
+    const tag = getTagName(child);
+    if (!tag) continue;
+    if (tag === "w:sdt") {
+      const info = readControlInfo(child);
+      if (info.locked) return info;
+    }
+    const found = findLockedInside(child);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/**
+ * Refuse to remove `node` when it holds a locked control at any depth. A
+ * control locked against deletion would go with it; one locked against
+ * editing would lose its content, or have it marked deleted when tracked.
+ */
+function assertNoLockedInside(where: string, subject: string, node: FXPNode): void {
+  const locked = findLockedInside(node);
+  if (!locked) return;
+  if (locked.locked === "content") {
+    throw new ControlEditError(`${where}: ${subject} holds a locked ${describe(locked)}; it cannot be deleted`);
+  }
+  throw new ControlEditError(
+    `${where}: ${subject} holds a ${describe(locked)} that is locked against deletion`,
+  );
 }
 
 /**
  * Check a patch that changes the runs of a paragraph without changing its
- * text (formatting, a character style): refused inside a locked control.
+ * text (formatting, a character style): refused inside a closed control.
  * `runs` are the runs it touches; omit for the whole paragraph.
  */
 export function checkRunsEditable(para: NormalizedParagraph, runs?: RunMapping[]): void {
-  for (const c of controlChain(para.control)) {
-    if (c.locked === "content" || c.locked === "both") {
-      throw new ControlEditError(
-        `${para.id}: the paragraph is in a locked ${describe(c)}; its content cannot be edited`,
-      );
-    }
-  }
+  assertOpen(para.id, "the paragraph", para.control);
+  const outer = new Set(controlChain(para.control));
   const seen = new Set<ControlInfo>();
   for (const run of runs ?? para.runs) {
     if (!run.control || seen.has(run.control)) continue;
     seen.add(run.control);
-    for (const c of controlChain(run.control)) {
-      if (c.locked === "content" || c.locked === "both") {
-        throw new ControlEditError(
-          `${para.id}: "${run.text}" is in a locked ${describe(c)}; its content cannot be edited`,
-        );
-      }
-    }
+    assertOpen(para.id, `"${run.text}"`, run.control, outer);
   }
 }
 
 /**
- * Check that new block content (a paragraph, a list item, a table) may be
- * put next to `para`. It lands in the control that wraps `para`, so that
- * control must be an open, filled rich-text one.
+ * Check a patch that changes a paragraph's own properties (its style, its
+ * list membership or level): refused when the paragraph is inside a closed
+ * control.
  */
-export function checkBlockInsert(target: NormalizedParagraph | NormalizedTable): void {
+export function checkParagraphEditable(para: NormalizedParagraph): void {
+  assertOpen(para.id, "the paragraph", para.control);
+}
+
+/**
+ * Check that new block content (a paragraph, a list item, a table) may be
+ * put next to `target`. It lands in the control that wraps `target`, so
+ * that control must be an open, filled rich-text one.
+ */
+export function checkBlockInsert(target: BodyElement): void {
   const control = target.control;
   if (!control) return;
-  const what = target.kind === "table" ? "table" : "paragraph";
-  assertEditable(target.id, control);
+  const what = target.kind === "table" ? "the table" : target.kind === "page_break" ? "the page break" : "the paragraph";
+  assertOpen(target.id, what, control);
   if (control.placeholder) {
     throw new ControlEditError(
-      `${target.id}: the ${what} is the placeholder of an empty ${describe(control)}; ` +
+      `${target.id}: ${what} is the placeholder of an empty ${describe(control)}; ` +
         `fill the control with replace_text before adding content to it`,
     );
   }
   if (control.kind !== "richText" && control.kind !== "docPart" && control.kind !== "other") {
     throw new ControlEditError(
-      `${target.id}: the ${what} is in a ${describe(control)}, which holds a single value; ` +
+      `${target.id}: ${what} is in a ${describe(control)}, which holds a single value; ` +
         `content cannot be added to it`,
     );
   }
 }
 
 /**
- * Check that a paragraph may be deleted: not when a content-locked control
- * wraps it, and not when it holds a control that is locked against deletion.
+ * Check that a paragraph may be deleted: not when it is inside a closed
+ * control, and not when it holds a locked control at any depth.
  */
 export function checkParagraphDelete(para: NormalizedParagraph): void {
-  for (const c of controlChain(para.control)) {
-    if (c.locked === "content" || c.locked === "both") {
-      throw new ControlEditError(
-        `${para.id}: the paragraph is in a locked ${describe(c)}; its content cannot be deleted`,
-      );
-    }
-  }
-  // An inline control goes with the paragraph, and so does every control it
-  // is nested in, up to (not including) the one wrapped around the paragraph.
-  const kept = new Set(controlChain(para.control));
-  for (const range of para.controls ?? []) {
-    for (const c of controlChain(range.control)) {
-      if (kept.has(c)) break;
-      if (c.locked === "control" || c.locked === "both") {
-        throw new ControlEditError(
-          `${para.id}: the paragraph holds a ${describe(c)} that is locked against deletion`,
-        );
-      }
-    }
-  }
+  assertOpen(para.id, "the paragraph", para.control);
+  assertNoLockedInside(para.id, "the paragraph", para.xmlRef);
 }
 
 /**
  * Check that the rows of a table may change (a row added or deleted): not
- * when a content-locked or data-bound control wraps the table.
+ * when the table is inside a closed control.
  */
 export function checkTableEditable(table: NormalizedTable): void {
-  for (const c of controlChain(table.control)) {
-    if (c.locked === "content" || c.locked === "both") {
-      throw new ControlEditError(
-        `${table.id}: the table is in a locked ${describe(c)}; its content cannot be edited`,
-      );
-    }
-    if (c.bound) {
-      throw new ControlEditError(
-        `${table.id}: the table is in a ${describe(c)} bound to a custom XML part; Word overwrites ` +
-          `its content from that part when the file is opened, so an edit here would be lost`,
-      );
-    }
-  }
+  assertOpen(table.id, "the table", table.control);
 }
 
 /**
  * Check that a row may be added after `afterRow` (-1: before the first row).
  * The new row is put next to the row it copies, so when a control wraps
- * that row the new one lands inside it: the control must be open.
+ * that row the new one lands inside it: that control must be open too.
  */
 export function checkRowInsert(table: NormalizedTable, afterRow: number): void {
   checkTableEditable(table);
   const source = table.rows[afterRow >= 0 ? afterRow : 0];
-  const kept = new Set(controlChain(table.control));
-  for (const c of controlChain(source?.control)) {
-    if (kept.has(c)) break;
-    const where = `${table.id} row ${source!.index}`;
-    if (c.locked === "content" || c.locked === "both") {
-      throw new ControlEditError(
-        `${where}: the row is in a locked ${describe(c)}; a row cannot be added to it`,
-      );
-    }
-    if (c.bound) {
-      throw new ControlEditError(
-        `${where}: the row is in a ${describe(c)} bound to a custom XML part; Word overwrites ` +
-          `its content from that part when the file is opened, so an edit here would be lost`,
-      );
-    }
-  }
+  if (!source) return;
+  assertOpen(`${table.id} row ${source.index}`, "the row", source.control, new Set(controlChain(table.control)));
 }
 
 /**
- * Check that a table row may be deleted. The row takes with it every
- * control inside it (around a cell, around or inside a cell's paragraphs,
- * in a nested table), so none of them may be locked: neither against
- * deletion nor against editing its content.
+ * Check that a table row may be deleted: not when the table or the row is
+ * inside a closed control, not when a locked control wraps the row, and not
+ * when the row holds a locked control at any depth (around a cell, in a
+ * cell, around a nested row, in a nested table).
  */
 export function checkRowDelete(table: NormalizedTable, rowIndex: number): void {
   checkTableEditable(table);
   const row = table.rows[rowIndex];
   if (!row) return;
-
-  // Controls around the table stay; everything below them goes with the row
-  // or loses its content: a control around the row, around a cell, in a cell.
-  const kept = new Set(controlChain(table.control));
   const where = `${table.id} row ${rowIndex}`;
-  const check = (control: ControlInfo | undefined): void => {
-    for (const c of controlChain(control)) {
-      if (kept.has(c)) break;
-      if (c.locked) {
-        throw new ControlEditError(
-          `${where}: the row holds a locked ${describe(c)}; it cannot be deleted`,
-        );
-      }
-    }
-  };
-  check(row.control);
+
+  // Controls around the table stay. One wrapped around the row itself would
+  // be left empty, so it counts as held by the row.
+  const outer = new Set(controlChain(table.control));
   for (const c of controlChain(row.control)) {
-    if (kept.has(c)) break;
-    if (c.bound) {
-      throw new ControlEditError(
-        `${where}: the row is in a ${describe(c)} bound to a custom XML part; Word overwrites ` +
-          `its content from that part when the file is opened, so an edit here would be lost`,
-      );
+    if (outer.has(c)) break;
+    if (c.locked === "control") {
+      throw new ControlEditError(`${where}: the row holds a ${describe(c)} that is locked against deletion`);
     }
   }
-  const visit = (cells: NormalizedTable["rows"][number]["cells"]): void => {
-    for (const cell of cells) {
-      check(cell.control);
-      for (const para of cell.paragraphs) {
-        check(para.control);
-        for (const range of para.controls ?? []) check(range.control);
-      }
-      for (const nested of cell.nestedTables) {
-        check(nested.control);
-        for (const nestedRow of nested.rows) visit(nestedRow.cells);
-      }
-    }
-  };
-  visit(row.cells);
+  assertOpen(where, "the row", row.control, outer);
+  assertNoLockedInside(where, "the row", row.xmlRef);
 }
 
 // =============================================================================
@@ -346,7 +332,7 @@ export function planControlEdit(
   if (!control) return undefined;
   const scope: ControlScope = inline ? "inline" : "block";
 
-  assertEditable(para.id, control);
+  assertOpen(para.id, "the text", control);
   if (control.kind === "picture") {
     throw new ControlEditError(`${para.id}: a ${describe(control)} cannot be edited`);
   }
@@ -370,6 +356,9 @@ export function planControlEdit(
       );
     }
     // A prompt is not document text: the control gets the new text, whole.
+    // Everything it shows is replaced, so nothing in there may be locked.
+    const shown = scope === "block" ? para.xmlRef : findChild(control.xmlRef, "w:sdtContent");
+    if (shown) assertNoLockedInside(para.id, "the placeholder", shown);
     text = written;
   } else {
     text =
@@ -474,17 +463,55 @@ function replaceContent(
   revCtx: RevisionContext | undefined,
   trackOld: boolean,
 ): void {
+  // A run that only anchors a comment is not content: it stays where it is
+  // (after the comment's range), or the comment would be left without its
+  // reference.
+  const anchors: { node: FXPNode; index: number }[] = [];
+  for (let i = content.length - 1; i >= 0; i--) {
+    if (isCommentAnchor(content[i]!)) anchors.unshift({ node: content.splice(i, 1)[0]!, index: i });
+  }
+  const restore = (): void => {
+    // Each anchor goes back right after the range end it followed, else last
+    for (const { node } of anchors) {
+      const id = commentIdOf(node);
+      const end = content.findIndex((c) => getTagName(c) === "w:commentRangeEnd" && getAttr(c, "w:id") === id);
+      if (end === -1) content.push(node);
+      else content.splice(end + 1, 0, node);
+    }
+  };
+
   if (revCtx && trackOld) {
     markRunsDeleted(content, revCtx);
     content.push(createInsElement(revCtx, runs));
+    restore();
     return;
   }
   let at = content.findIndex((c) => RUN_BEARING.has(getTagName(c) ?? ""));
-  if (at === -1) at = content.length;
+  if (at === -1) {
+    // Nothing shown: the new text goes inside a comment's range if there is one
+    const rangeEnd = content.findIndex((c) => getTagName(c) === "w:commentRangeEnd");
+    at = rangeEnd === -1 ? content.length : rangeEnd;
+  }
   for (let i = content.length - 1; i >= 0; i--) {
     if (RUN_BEARING.has(getTagName(content[i]!) ?? "")) content.splice(i, 1);
   }
-  content.splice(at, 0, ...(revCtx ? [createInsElement(revCtx, runs)] : runs));
+  content.splice(Math.min(at, content.length), 0, ...(revCtx ? [createInsElement(revCtx, runs)] : runs));
+  restore();
+}
+
+/** True for a run that holds a comment reference and no text. */
+function isCommentAnchor(node: FXPNode): boolean {
+  if (getTagName(node) !== "w:r") return false;
+  const children = getChildren(node);
+  return (
+    children.some((c) => getTagName(c) === "w:commentReference") &&
+    !children.some((c) => getTagName(c) === "w:t" || getTagName(c) === "w:br")
+  );
+}
+
+function commentIdOf(anchor: FXPNode): string | undefined {
+  const ref = getChildren(anchor).find((c) => getTagName(c) === "w:commentReference");
+  return ref ? getAttr(ref, "w:id") : undefined;
 }
 
 /** The run properties a control gives to text typed into it (`w:sdtPr/w:rPr`). */
@@ -718,7 +745,7 @@ export function findCheckbox(
     );
   }
   const box = boxes[n - 1]!;
-  assertEditable(para.id, box.control);
+  assertOpen(para.id, "the checkbox", box.control);
   return box;
 }
 

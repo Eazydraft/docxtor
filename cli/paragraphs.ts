@@ -53,10 +53,19 @@ export function allParagraphs(doc: Docxtor): Located[] {
  * contains the find.
  */
 export function promptControl(para: NormalizedParagraph, start: number, end: number): ControlInfo | undefined {
+  return promptRange(para, start, end)?.control;
+}
+
+/** {@link promptControl}, with the range of paragraph text the prompt covers. */
+export function promptRange(
+  para: NormalizedParagraph,
+  start: number,
+  end: number,
+): { control: ControlInfo; startOffset: number; endOffset: number } | undefined {
   const inline = (para.controls ?? []).filter((r) => start >= r.startOffset && end <= r.endOffset && r.endOffset > r.startOffset);
   // Nested controls follow the one that holds them, so the last match is the innermost.
-  const innermost = inline[inline.length - 1]?.control ?? para.control;
-  return innermost?.placeholder === true ? innermost : undefined;
+  const innermost = inline[inline.length - 1] ?? (para.control ? { control: para.control, startOffset: 0, endOffset: para.text.length } : undefined);
+  return innermost?.control.placeholder === true ? innermost : undefined;
 }
 
 /**

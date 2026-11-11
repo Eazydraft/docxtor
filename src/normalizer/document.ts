@@ -161,6 +161,7 @@ function normalizeBody(documentFxp: FXPNode[]): BodyElement[] {
           id: `pb${pageBreakIdx}`,
           xmlRef: child,
         };
+        if (control) pb.control = control;
         elements.push(pb);
         pageBreakIdx++;
         // Don't increment paraIdx — this isn't a paragraph in the projection

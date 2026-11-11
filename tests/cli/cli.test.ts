@@ -299,6 +299,17 @@ describe("docxtor CLI", () => {
     expect(a.out).toContain("2 replacements in 1 paragraph (p0)");
     expect((await texts(all))[0]).toBe("TiDeedle: Deed ref ACME-42");
 
+    // A find that starts outside the control: the control gets the replacement minus the text outside,
+    // not just the words that differ.
+    const edge = join(dir, "edge.docx");
+    const e = await cli("replace", form, "-o", edge, "--find", "Title: Insert Title for Contract", "--replace", "Title: Insert Title for Widgets", "--untracked");
+    expect(e.err).toBe("");
+    expect((await texts(edge))[0]).toBe("Title: Insert Title for Widgets ref ACME-42");
+    const tail = join(dir, "tail.docx");
+    const tl = await cli("replace", form, "-o", tail, "--find", "for Contract ref", "--replace", "for Widgets ref", "--untracked");
+    expect(tl.err).toBe("");
+    expect((await texts(tail))[0]).toBe("Title: for Widgets ref ACME-42");
+
     const bad = await cli("replace", form, "-o", join(dir, "bad.docx"), "--find", "Choose an item.", "--replace", "Lease");
     expect(bad.code).toBe(1);
     expect(bad.err).toContain('"Lease" is not an option of the dropdown content control "Type of contract"');

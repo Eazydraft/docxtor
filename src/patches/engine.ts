@@ -563,7 +563,7 @@ function executeAddTablePatch(
       afterXmlRef = target.xmlRef;
       afterElementId = target.id;
       // Next to an element inside a block-level control, the table is inside it too
-      if (target.kind !== "page_break") afterControl = target.control;
+      afterControl = target.control;
     }
   }
 

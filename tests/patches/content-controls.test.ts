@@ -229,7 +229,7 @@ describe("edits a control refuses", () => {
     [
       "a data-bound control",
       { type: "replace_text", target: "p6", find: "Bound value", replace: "Acme Ltd" },
-      'p6: the content control "Company" is bound to a custom XML part; Word overwrites its text from that part when the file is opened, so an edit here would be lost',
+      'p6: the text is in a content control "Company" bound to a custom XML part; Word overwrites its content from that part when the file is opened, so an edit here would be lost',
     ],
     [
       "a drop-down value that is not in the list",
@@ -548,6 +548,8 @@ describe("locks seen through nesting, tables and rows", () => {
   const cell = (inner: string): string => `<w:tc><w:p>${inner}</w:p></w:tc>`;
   const table = (rows: string): string => `<w:tbl><w:tblPr/><w:tblGrid><w:gridCol/><w:gridCol/></w:tblGrid>${rows}</w:tbl>`;
   const from = async (body: string): Promise<Docxtor> => Docxtor.load(await createBodyDocx(body));
+  const AGAINST = 'tbl0 row 1: the row holds a content control "Amount" that is locked against deletion';
+  const CONTENT = 'tbl0 row 1: the row holds a locked content control "Amount"; it cannot be deleted';
 
   it("delete_paragraph is refused when a control around an inline control is locked against deletion", async () => {
     const doc = await from(
@@ -575,7 +577,7 @@ describe("locks seen through nesting, tables and rows", () => {
       control(1, `<w:alias w:val="Schedule"/><w:lock w:val="sdtContentLocked"/>`, table(`<w:tr>${cell(run("a"))}${cell(run("b"))}</w:tr>`)) +
         `<w:p>${run("After")}</w:p>`,
     );
-    const message = 'tbl0: the text is in a locked content control "Schedule"; its content cannot be edited';
+    const message = 'tbl0: the table is in a locked content control "Schedule"; its content cannot be edited';
     expect(apply(doc, { type: "add_table", afterId: "tbl0", rows: [["x", "y"]] }).error).toBe(message);
     expect(apply(doc, { type: "add_list", afterId: "tbl0", listType: "bullet", items: ["x"] }).error).toBe(message);
     // Rows of a table inside a content-locked control cannot change either
@@ -593,16 +595,27 @@ describe("locks seen through nesting, tables and rows", () => {
   });
 
   it.each([
-    ["a locked control around a cell", `<w:tr>${cell(run("k"))}${control(1, `<w:alias w:val="Amount"/><w:lock w:val="sdtLocked"/>`, cell(run("v")))}</w:tr>`],
-    ["a locked control inside a cell", `<w:tr>${cell(run("k"))}${cell(control(1, `<w:alias w:val="Amount"/><w:lock w:val="sdtLocked"/>`, run("v")))}</w:tr>`],
-    ["a content-locked control inside a cell", `<w:tr>${cell(run("k"))}${cell(control(1, `<w:alias w:val="Amount"/><w:lock w:val="contentLocked"/>`, run("v")))}</w:tr>`],
-    ["a locked control around a nested control", `<w:tr>${cell(run("k"))}${cell(control(1, `<w:alias w:val="Amount"/><w:lock w:val="sdtLocked"/>`, control(2, "", run("v"))))}</w:tr>`],
-  ])("delete_table_row is refused for a row holding %s", async (_name, lockedRow) => {
+    ["a locked control around a cell", AGAINST, `<w:tr>${cell(run("k"))}${control(1, `<w:alias w:val="Amount"/><w:lock w:val="sdtLocked"/>`, cell(run("v")))}</w:tr>`],
+    ["a locked control inside a cell", AGAINST, `<w:tr>${cell(run("k"))}${cell(control(1, `<w:alias w:val="Amount"/><w:lock w:val="sdtLocked"/>`, run("v")))}</w:tr>`],
+    ["a content-locked control inside a cell", CONTENT, `<w:tr>${cell(run("k"))}${cell(control(1, `<w:alias w:val="Amount"/><w:lock w:val="contentLocked"/>`, run("v")))}</w:tr>`],
+    ["a locked control around a nested control", AGAINST, `<w:tr>${cell(run("k"))}${cell(control(1, `<w:alias w:val="Amount"/><w:lock w:val="sdtLocked"/>`, control(2, "", run("v"))))}</w:tr>`],
+    ["a locked control nested in an open one", AGAINST, `<w:tr>${cell(run("k"))}${cell(control(2, "", control(1, `<w:alias w:val="Amount"/><w:lock w:val="sdtLocked"/>`, run("v"))))}</w:tr>`],
+    [
+      "a locked control around a row of a nested table",
+      AGAINST,
+      `<w:tr>${cell(run("k"))}<w:tc>${table(control(1, `<w:alias w:val="Amount"/><w:lock w:val="sdtLocked"/>`, `<w:tr>${cell(run("n1"))}${cell(run("n2"))}</w:tr>`))}<w:p/></w:tc></w:tr>`,
+    ],
+    [
+      "a locked control around a nested table",
+      AGAINST,
+      `<w:tr>${cell(run("k"))}<w:tc>${control(1, `<w:alias w:val="Amount"/><w:lock w:val="sdtLocked"/>`, table(`<w:tr>${cell(run("n1"))}${cell(run("n2"))}</w:tr>`))}<w:p/></w:tc></w:tr>`,
+    ],
+  ])("delete_table_row is refused for a row holding %s", async (_name, expected, lockedRow) => {
     const doc = await from(table(`<w:tr>${cell(run("h1"))}${cell(run("h2"))}</w:tr>${lockedRow}`));
     const before = doc.toString();
     for (const options of [undefined, TRACKED]) {
       const r = apply(doc, { type: "delete_table_row", target: "tbl0", row: 1 }, options);
-      expect(r.error).toBe('tbl0 row 1: the row holds a locked content control "Amount"; it cannot be deleted');
+      expect(r.error).toBe(expected);
     }
     expect(doc.toString()).toBe(before);
     // A row without the control is still deletable
@@ -610,12 +623,12 @@ describe("locks seen through nesting, tables and rows", () => {
   });
 
   it.each([
-    ["locked against deletion", `<w:lock w:val="sdtLocked"/>`, 'tbl0 row 1: the row holds a locked content control "Item"; it cannot be deleted', undefined],
+    ["locked against deletion", `<w:lock w:val="sdtLocked"/>`, 'tbl0 row 1: the row holds a content control "Item" that is locked against deletion', undefined],
     [
       "content-locked",
       `<w:lock w:val="contentLocked"/>`,
-      'tbl0 row 1: the row holds a locked content control "Item"; it cannot be deleted',
-      'tbl0 row 1: the row is in a locked content control "Item"; a row cannot be added to it',
+      'tbl0 row 1: the row is in a locked content control "Item"; its content cannot be edited',
+      'tbl0 row 1: the row is in a locked content control "Item"; its content cannot be edited',
     ],
     [
       "data-bound",
@@ -766,5 +779,176 @@ describe("controls left empty by rejecting a tracked fill", () => {
     expect(apply(doc, { type: "delete_text", target: "p3", find: "Deliverables follow." }).success).toBe(true);
     const md = doc.project("markdown");
     expect(md).toContain("[p2] Scope of work.\n[p3] \n[p4]");
+  });
+});
+
+describe("every patch type respects a closed control", () => {
+  const run = (text: string): string => `<w:r><w:t>${text}</w:t></w:r>`;
+  const control = (id: number, pr: string, content: string): string =>
+    `<w:sdt><w:sdtPr>${pr}<w:id w:val="${id}"/></w:sdtPr><w:sdtContent>${content}</w:sdtContent></w:sdt>`;
+  const LOCK = `<w:alias w:val="Terms"/><w:lock w:val="contentLocked"/>`;
+  const BOUND = `<w:alias w:val="Terms"/><w:dataBinding w:xpath="/a" w:storeItemID="{0}"/>`;
+  const numPr = `<w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>`;
+  // p0 and p1 (a list item) sit in the control; p2 is outside it
+  const body = (pr: string): string =>
+    control(1, pr, `<w:p>${run("First clause")}</w:p><w:p>${numPr}${run("Listed clause")}</w:p>`) + `<w:p>${run("Outside")}</w:p>`;
+
+  const patches: Patch[] = [
+    { type: "replace_text", target: "p0", find: "First", replace: "Second" },
+    { type: "insert_text", target: "p0", anchor: "First", position: "after", text: " and only" },
+    { type: "delete_text", target: "p0", find: "First " },
+    { type: "apply_formatting", target: "p0", formatting: { bold: true } },
+    { type: "apply_formatting", target: "p0", find: "First", formatting: { bold: true } },
+    { type: "insert_paragraph", target: "p0", position: "after", text: "New" },
+    { type: "delete_paragraph", target: "p0" },
+    { type: "add_table", afterId: "p0", rows: [["a"]] },
+    { type: "add_list", afterId: "p0", listType: "bullet", items: ["a"] },
+    { type: "convert_to_list", targets: ["p2", "p0"], listType: "bullet" },
+    { type: "add_list_item", target: "p1", position: "after", text: "Another" },
+    { type: "remove_list_item", target: "p1" },
+    { type: "remove_list", targets: ["p1"] },
+    { type: "set_list_properties", target: "p1", level: 1 },
+  ];
+
+  it.each([
+    ["content-locked", LOCK, 'is in a locked content control "Terms"; its content cannot be edited'],
+    ["data-bound", BOUND, 'is in a content control "Terms" bound to a custom XML part'],
+  ])("%s: each of them is refused and the document is unchanged", async (_name, pr, reason) => {
+    for (const options of [undefined, TRACKED]) {
+      for (const patch of patches) {
+        const doc = await Docxtor.load(await createBodyDocx(body(pr)));
+        const before = doc.toString();
+        const r = apply(doc, patch, options);
+        expect(r.success, patch.type).toBe(false);
+        expect(r.error, patch.type).toContain(reason);
+        expect(doc.toString(), patch.type).toBe(before);
+      }
+    }
+  });
+
+  it("the same patches apply when the control is open", async () => {
+    for (const patch of patches) {
+      const doc = await Docxtor.load(await createBodyDocx(body(`<w:alias w:val="Terms"/>`)));
+      expect(apply(doc, patch).error, patch.type).toBeUndefined();
+    }
+  });
+
+  it("a comment may still be put on text in a locked control: it changes no content", async () => {
+    const doc = await Docxtor.load(await createBodyDocx(body(LOCK)));
+    expect(apply(doc, { type: "add_comment", target: "p0", find: "First", text: "Why?" }).success).toBe(true);
+    expect(doc.findParagraphById("p0")!.text).toBe("First clause");
+  });
+
+  it("delete_paragraph is refused for a content-locked inline control, so a tracked delete cannot mark its text deleted", async () => {
+    const doc = await Docxtor.load(
+      await createBodyDocx(`<w:p>${run("Rate: ")}${control(1, `<w:alias w:val="Rate"/><w:lock w:val="contentLocked"/>`, run("5%"))}</w:p><w:p>${run("Next")}</w:p>`),
+    );
+    for (const options of [undefined, TRACKED]) {
+      expect(apply(doc, { type: "delete_paragraph", target: "p0" }, options).error).toBe(
+        'p0: the paragraph holds a locked content control "Rate"; it cannot be deleted',
+      );
+    }
+  });
+});
+
+describe("prompts and inline controls in structural edits", () => {
+  const run = (text: string): string => `<w:r><w:t>${text}</w:t></w:r>`;
+  const prompt = (text: string): string => `<w:r><w:rPr><w:rStyle w:val="PlaceholderText"/></w:rPr><w:t>${text}</w:t></w:r>`;
+  const control = (id: number, pr: string, content: string): string =>
+    `<w:sdt><w:sdtPr>${pr}<w:id w:val="${id}"/></w:sdtPr><w:sdtContent>${content}</w:sdtContent></w:sdt>`;
+
+  it("insert_paragraph does not give the new text the grey style of a prompt that ends the target", async () => {
+    const doc = await Docxtor.load(
+      await createBodyDocx(`<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Name: </w:t></w:r>${control(1, "<w:showingPlcHdr/>", prompt("Insert name"))}</w:p>`),
+    );
+    expect(apply(doc, { type: "insert_paragraph", target: "p0", position: "after", text: "Address: 1 High St" }).success).toBe(true);
+    const xml = doc.toString();
+    expect(xml.match(/PlaceholderText/g)).toHaveLength(1);
+    // It takes the formatting of the last typed run instead
+    expect(xml).toContain("<w:r><w:rPr><w:b/></w:rPr><w:t>Address: 1 High St</w:t></w:r>");
+  });
+
+  it("a tracked remove_list_item marks text in an inline control deleted too", async () => {
+    const numPr = `<w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>`;
+    const doc = await Docxtor.load(
+      await createBodyDocx(`<w:p>${numPr}${run("Supplier: ")}${control(1, "", run("Acme Ltd"))}</w:p><w:p>${numPr}${run("Second")}</w:p>`),
+    );
+    expect(apply(doc, { type: "remove_list_item", target: "p0" }, TRACKED).success).toBe(true);
+    expect(doc.findParagraphById("p0")!.text).toBe("");
+    expect(doc.toString()).toMatch(/<w:sdtContent><w:del [^>]*><w:r><w:delText>Acme Ltd<\/w:delText><\/w:r><\/w:del><\/w:sdtContent>/);
+    doc.rejectAllRevisions();
+    expect(doc.findParagraphById("p0")!.text).toBe("Supplier: Acme Ltd");
+  });
+
+  it("a page break inside a block control carries the control", async () => {
+    const doc = await Docxtor.load(
+      await createBodyDocx(control(1, `<w:alias w:val="Part"/>`, `<w:p>${run("Before")}</w:p><w:p><w:r><w:br w:type="page"/></w:r></w:p>`) + `<w:p>${run("After")}</w:p>`),
+    );
+    const pb = doc.getBody().find((e) => e.kind === "page_break")!;
+    expect(pb.control?.alias).toBe("Part");
+    expect(pb.control).toBe(doc.findParagraphById("p0")!.control);
+  });
+});
+
+describe("comments, validation options and emptied row controls", () => {
+  const run = (text: string): string => `<w:r><w:t>${text}</w:t></w:r>`;
+  const control = (id: number, pr: string, content: string): string =>
+    `<w:sdt><w:sdtPr>${pr}<w:id w:val="${id}"/></w:sdtPr><w:sdtContent>${content}</w:sdtContent></w:sdt>`;
+  const cell = (inner: string): string => `<w:tc><w:p>${inner}</w:p></w:tc>`;
+
+  it.each([[undefined], [TRACKED]])("filling a commented prompt keeps the comment's reference (%#)", async (options) => {
+    const doc = await load();
+    expect(apply(doc, { type: "add_comment", target: "p0", find: "Insert Title for Contract", text: "Confirm the title" }).success).toBe(true);
+    expect(apply(doc, { type: "replace_text", target: "p0", find: "Insert Title", replace: "Supply of Widgets" }, options).success).toBe(true);
+    const content = sdtContent(doc.toString(), "101");
+    expect(content).toMatch(/^<w:sdtContent><w:commentRangeStart w:id="0"\/>(<w:ins [^>]*>)?<w:r>.*Supply of Widgets<\/w:t><\/w:r>(<\/w:ins>)?<w:commentRangeEnd w:id="0"\/><w:r>.*<w:commentReference w:id="0"\/><\/w:r><\/w:sdtContent>$/);
+  });
+
+  it("ticking a commented checkbox keeps the comment's reference", async () => {
+    const doc = await load();
+    expect(apply(doc, { type: "add_comment", target: "p4", find: "☐", text: "Tick this" }).success).toBe(true);
+    expect(apply(doc, { type: "set_checkbox", target: "p4", checked: true }).success).toBe(true);
+    const content = sdtContent(doc.toString(), "110");
+    expect(content).toContain("☒");
+    expect(content).toMatch(/<w:commentRangeEnd w:id="0"\/><w:r>.*<w:commentReference w:id="0"\/><\/w:r><\/w:sdtContent>$/);
+  });
+
+  it("validatePatches matches text the way the patches will be applied", async () => {
+    const doc = await Docxtor.load(
+      await createBodyDocx(`<w:p>${run("Code: ")}${control(1, `<w:alias w:val="Code"/><w:lock w:val="contentLocked"/>`, run("**A**"))}</w:p>`),
+    );
+    const patch: Patch = { type: "replace_text", target: "p0", find: "**A**", replace: "B" };
+    // With markers the find reads as "A" in bold, which is in the locked control as well
+    expect(doc.validatePatches([patch])[0]!.valid).toBe(false);
+    expect(doc.validatePatches([patch], { inlineMarkers: false })[0]!.error).toContain('locked content control "Code"');
+    const outside: Patch = { type: "replace_text", target: "p0", find: "Code", replace: "**Ref**" };
+    expect(doc.validatePatches([outside], { inlineMarkers: false })).toEqual([{ valid: true }]);
+  });
+
+  it.each([["untracked"], ["tracked, then accepted"]])("a control around a deleted row goes with it, leaving no empty control in the table (%s)", async (mode) => {
+    const doc = await Docxtor.load(
+      await createBodyDocx(
+        `<w:tbl><w:tblPr/><w:tblGrid><w:gridCol/></w:tblGrid><w:tr>${cell(run("keep"))}</w:tr>` +
+          control(1, "", `<w:tr>${cell(run("go"))}</w:tr>`) +
+          `</w:tbl><w:p/>`,
+      ),
+    );
+    expect(apply(doc, { type: "delete_table_row", target: "tbl0", row: 1 }, mode === "untracked" ? undefined : TRACKED).success).toBe(true);
+    if (mode !== "untracked") doc.acceptAllRevisions();
+    const xml = doc.toString();
+    expect(xml).not.toContain("<w:sdt>");
+    expect(doc.findTableById("tbl0")!.rows.map((r) => r.cells[0]!.paragraphs[0]!.text)).toEqual(["keep"]);
+  });
+
+  it("a control around two rows stays when one of them is deleted", async () => {
+    const doc = await Docxtor.load(
+      await createBodyDocx(
+        `<w:tbl><w:tblPr/><w:tblGrid><w:gridCol/></w:tblGrid>` +
+          control(1, "", `<w:tr>${cell(run("a"))}</w:tr><w:tr>${cell(run("b"))}</w:tr>`) +
+          `</w:tbl><w:p/>`,
+      ),
+    );
+    expect(apply(doc, { type: "delete_table_row", target: "tbl0", row: 0 }).success).toBe(true);
+    expect(doc.toString()).toMatch(/<w:sdtContent><w:tr>.*b.*<\/w:tr><\/w:sdtContent>/);
   });
 });

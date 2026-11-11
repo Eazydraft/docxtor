@@ -17,6 +17,7 @@ import {
   planControlEdit,
   checkRunsEditable,
   checkBlockInsert,
+  checkParagraphEditable,
   checkParagraphDelete,
   checkRowInsert,
   checkRowDelete,
@@ -80,7 +81,7 @@ function checkControls(patch: Patch, doc: NormalizedDocument, markers: boolean):
       const para = findParagraphById(patch.target, doc)!;
       // A paragraph style changes no run, so only a control around the
       // paragraph matters; anything else is checked run by run.
-      if (patch.type === "apply_style" && patch.find === undefined) checkRunsEditable(para, []);
+      if (patch.type === "apply_style" && patch.find === undefined) checkParagraphEditable(para);
       else checkRunsEditable(para, matchedRuns(para, patch.find, patch.occurrence));
       return;
     }
@@ -96,9 +97,16 @@ function checkControls(patch: Patch, doc: NormalizedDocument, markers: boolean):
     case "add_list": {
       // The new block lands next to the element, inside the control that wraps it
       const after = patch.afterId && !patch.container ? findElementById(patch.afterId, doc) : undefined;
-      if (after && after.kind !== "page_break") checkBlockInsert(after);
+      if (after) checkBlockInsert(after);
       return;
     }
+    case "set_list_properties":
+      checkParagraphEditable(findParagraphById(patch.target, doc)!);
+      return;
+    case "convert_to_list":
+    case "remove_list":
+      for (const target of patch.targets) checkParagraphEditable(findParagraphById(target, doc)!);
+      return;
     case "add_table_row":
       checkRowInsert(findTableById(patch.target, doc)!, patch.afterRow);
       return;

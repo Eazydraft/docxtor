@@ -26,7 +26,9 @@ import {
   getTagName,
   setAttr,
   cloneNode,
+  sdtContentChildren,
 } from "../xml/helpers.js";
+import { markRunsDeleted } from "./paragraph-ops.js";
 import { buildFieldRuns } from "./field-codes.js";
 import { findParagraphById, findElementById } from "./validator.js";
 import { createInsElement, createPPrChange, convertRunToDeleted, createDelElement, type RevisionContext } from "./revision.js";
@@ -124,7 +126,7 @@ export function executeAddList(
       afterXmlRef = target.xmlRef;
       afterElementId = target.id;
       // Next to an element inside a block-level control, the list is inside it too
-      if (target.kind !== "page_break") afterControl = target.control;
+      afterControl = target.control;
     }
   }
 
@@ -225,6 +227,10 @@ export function executeRemoveListItem(
         // correct OOXML semantics (the content was never part of the accepted
         // document, so wrapping it in w:del would corrupt the file).
         children.splice(i, 1);
+      } else if (tag === "w:sdt") {
+        // Text in an inline content control is part of the item: mark it
+        // deleted inside the control, which stays in place.
+        markRunsDeleted(sdtContentChildren(child), revCtx);
       }
     }
     reNormalize(doc, targetPara);

@@ -91,6 +91,7 @@ Filling an empty control:
 - A prompt is not document text, so every run of it is removed even when `find` matches only part of it: replacing `Insert` with `Supply` gives `Supply`, not `Supply Title for Contract`. `insert_text` anchored on a prompt fills the control with its `text` in the same way.
 - The new text is one run. It takes the control's own run properties (`w:sdtPr/w:rPr`) when the control has them and the paragraph's defaults otherwise, never the grey prompt style.
 - `w:showingPlcHdr` is removed and `w:placeholder` is kept, so Word can show the prompt again if the field is emptied.
+- From the command line, `replace` may name text around the field as well (`--find "Title: Insert name" --replace "Title: Jane Roe"`): the field gets the replacement without the unchanged text outside it.
 - With `trackRevisions` the fill is one `w:ins` and no `w:del`. Rejecting it leaves the control empty rather than bringing the prompt back: the prompt text lives in the glossary part, which docxtor does not read. Word shows an empty field and restores the prompt on the next edit.
 
 `insert_text` next to a control lands on the anchor's side of its edge: text inserted before a word that follows a control, or after a word that precedes one, stays outside the control; text inserted before the control's first word or after its last goes inside.
@@ -99,13 +100,23 @@ Refused, with a message that says why:
 
 - an edit that would leave a control empty ("clearing a content control is not supported"), and deleting a prompt;
 - a match that starts inside a control and ends outside it, or the reverse: edit the two parts separately;
-- anything inside a control locked against editing (`w:lock` `contentLocked` or `sdtContentLocked`), including formatting and style patches;
-- a data-bound control (`w:dataBinding`): Word overwrites its text from a custom XML part when the file is opened, so the edit would be lost;
 - a picture control;
-- `delete_paragraph` on a paragraph that holds a control locked against deletion (`sdtLocked`), or holds a control nested in one;
-- `delete_table_row` on a row that holds a locked control, whether it wraps the row, wraps a cell or sits inside one, and `add_table_row` next to a row wrapped by a control that is locked against editing or data-bound (the new row would land inside it);
-- `add_table_row` and `delete_table_row` on a table inside a control that is locked against editing or data-bound;
-- `insert_paragraph`, `add_list_item`, `add_table` and `add_list` next to a paragraph or table wrapped by an empty control or by one that holds a single value (plain text, date, drop-down list). Inside a filled rich-text control they work, and the new content lands inside the same control.
+- **any change inside a closed control.** A control is closed when it is locked against editing (`w:lock` `contentLocked` or `sdtContentLocked`) or data-bound (`w:dataBinding`: Word overwrites its content from a custom XML part when the file is opened, so the edit would be lost). The control may sit anywhere around the target: in the paragraph, around it, around its cell, its row or its table, at any depth of nesting. This covers the text patches, `set_checkbox`, `apply_formatting`, `apply_style`, `insert_paragraph`, `delete_paragraph`, the list patches (`add_list_item`, `remove_list_item`, `convert_to_list`, `remove_list`, `set_list_properties`), `add_table` and `add_list` with `afterId`, `add_table_row` and `delete_table_row`;
+- **removing something that holds a locked control.** `delete_paragraph`, `remove_list_item` and `delete_table_row` are refused when the paragraph or row holds a control with any `w:lock`, at any depth: one locked against deletion (`sdtLocked`) would go with it, and one locked against editing would lose its content. A control wrapped around the paragraph is not removed with it, so a lock against deletion there does not stop the patch;
+- `insert_paragraph`, `add_list_item`, `add_table` and `add_list` next to a paragraph or table wrapped by an empty control or by one that holds a single value (plain text, date, drop-down list). Inside a filled rich-text control they work, and the new content lands inside the same control. `add_table_row` puts the new row next to the row it copies, so inside a control wrapped around that row.
+
+What these rules leave alone:
+
+- `add_comment` is allowed on text in a closed control: a comment changes no content. Filling a control or ticking a checkbox keeps a comment anchored on it.
+- A data-bound control may be removed whole, with the paragraph or row that holds it. Only edits to its content are refused.
+- `acceptAllRevisions` and `rejectAllRevisions` resolve tracked changes wherever they are, inside a locked control too: they settle edits already in the file.
+- `add_header`, `add_footer`, `remove_header` and `remove_footer` write or drop a whole header or footer part and do not look at the controls in it.
+- Deleting the only row a control wraps removes that control with it, since an empty control is not valid in a table.
+
+Limits to know:
+
+- A control with no text at all (`{field:}` in the view) has nothing for a text patch to match, so docxtor cannot fill it. This is the state a rejected tracked fill leaves; Word restores the prompt on the next edit there.
+- The values a typed control stores next to its text (`w:lastValue`, `w:fullDate`, `w14:checked`) are not revision-tracked. After a tracked change to such a control is rejected, the text is back to the old value and the stored value still says the new one.
 
 Repeating sections are shown as their content; adding or removing an item is not supported. docxtor does not create content controls.
 

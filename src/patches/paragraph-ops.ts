@@ -95,7 +95,10 @@ function buildInheritedPPr(targetP: FXPNode): FXPNode | undefined {
  * would give you if you pressed Enter at the end of the paragraph and typed).
  */
 function buildInheritedRunRPr(target: NormalizedParagraph): FXPNode | undefined {
-  const lastRun = target.runs[target.runs.length - 1];
+  // The prompt of an empty content control is not typed text: its grey
+  // style must not carry over, so the last run outside a prompt is used.
+  const typed = target.runs.filter((r) => !isPrompt(r, target));
+  const lastRun = typed[typed.length - 1];
   if (!lastRun) return undefined;
   const rPr = findChild(lastRun.xmlRef, "w:rPr");
   if (!rPr) return undefined;
@@ -104,6 +107,11 @@ function buildInheritedRunRPr(target: NormalizedParagraph): FXPNode | undefined 
     .map(cloneNode);
   if (kept.length === 0) return undefined;
   return createElement("w:rPr", kept);
+}
+
+/** True when a run is prompt text of an empty content control. */
+function isPrompt(run: NormalizedParagraph["runs"][number], para: NormalizedParagraph): boolean {
+  return (run.control ?? para.control)?.placeholder === true;
 }
 
 // =============================================================================

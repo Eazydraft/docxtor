@@ -271,7 +271,7 @@ doc.scrubMetadata();
 // leaves title, created and modified untouched
 ```
 
-## `doc.validatePatches(patches)`
+## `doc.validatePatches(patches, options?)`
 
 Validate patches without applying them.
 
@@ -279,6 +279,8 @@ Validate patches without applying them.
 const validations = doc.validatePatches(patches);
 // [{ valid: true }, { valid: false, error: "Paragraph 'p99' not found" }]
 ```
+
+Validation covers what a content control allows, which depends on where `find` and `anchor` match. If the patches will be applied with `inlineMarkers: false`, pass the same option here: `doc.validatePatches(patches, { inlineMarkers: false })`.
 
 ## `doc.toBuffer()` / `doc.toFile(path)`
 

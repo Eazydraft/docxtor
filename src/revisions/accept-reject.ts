@@ -318,6 +318,22 @@ function processChildren(
       continue;
     }
 
+    // --- Content controls around rows or cells --------------------------
+    // Resolving a change can remove the only row or cell a control wraps.
+    // An empty control is not valid in a table or a row: it goes too.
+    if (tag === "w:sdt" && (parentTag === "w:tbl" || parentTag === "w:tr")) {
+      const content = findChild(child, "w:sdtContent");
+      const held = content ? getChildren(content).filter((c) => getTagName(c) !== undefined).length : 0;
+      processChildren(getChildren(child), tag, ctx);
+      const left = content ? getChildren(content).filter((c) => getTagName(c) !== undefined).length : 0;
+      if (held > 0 && left === 0) {
+        children.splice(i, 1);
+        continue;
+      }
+      i++;
+      continue;
+    }
+
     // --- Everything else: recurse ---------------------------------------
     const grandChildren = getChildren(child);
     if (grandChildren.length > 0) processChildren(grandChildren, tag, ctx);

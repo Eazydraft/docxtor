@@ -160,6 +160,8 @@ export interface NormalizedPageBreak {
   id: string;
   /** Direct reference to the w:p FXP node containing the page break. */
   xmlRef: FXPNode;
+  /** The innermost content control wrapped around the page-break paragraph, if any. */
+  control?: ControlInfo;
 }
 
 // =============================================================================
