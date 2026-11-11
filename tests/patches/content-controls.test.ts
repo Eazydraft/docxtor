@@ -609,6 +609,48 @@ describe("locks seen through nesting, tables and rows", () => {
     expect(apply(doc, { type: "delete_table_row", target: "tbl0", row: 0 }).success).toBe(true);
   });
 
+  it.each([
+    ["locked against deletion", `<w:lock w:val="sdtLocked"/>`, 'tbl0 row 1: the row holds a locked content control "Item"; it cannot be deleted', undefined],
+    [
+      "content-locked",
+      `<w:lock w:val="contentLocked"/>`,
+      'tbl0 row 1: the row holds a locked content control "Item"; it cannot be deleted',
+      'tbl0 row 1: the row is in a locked content control "Item"; a row cannot be added to it',
+    ],
+    [
+      "data-bound",
+      `<w:dataBinding w:xpath="/a" w:storeItemID="{0}"/>`,
+      'tbl0 row 1: the row is in a content control "Item" bound to a custom XML part; Word overwrites its content from that part when the file is opened, so an edit here would be lost',
+      'tbl0 row 1: the row is in a content control "Item" bound to a custom XML part; Word overwrites its content from that part when the file is opened, so an edit here would be lost',
+    ],
+  ])("a control wrapped around a row is kept on the row and checked: %s", async (_name, pr, deleteError, insertError) => {
+    const doc = await from(
+      table(
+        `<w:tr>${cell(run("h1"))}${cell(run("h2"))}</w:tr>` +
+          control(1, `<w:alias w:val="Item"/>${pr}`, `<w:tr>${cell(run("a"))}${cell(run("b"))}</w:tr>`),
+      ),
+    );
+    const t = doc.findTableById("tbl0")!;
+    expect(t.rows.map((r) => r.control?.alias)).toEqual([undefined, "Item"]);
+    expect(t.rows[1]!.cells.map((c) => c.control)).toEqual([undefined, undefined]);
+
+    const before = doc.toString();
+    for (const options of [undefined, TRACKED]) {
+      expect(apply(doc, { type: "delete_table_row", target: "tbl0", row: 1 }, options).error).toBe(deleteError);
+    }
+    const added = apply(doc, { type: "add_table_row", target: "tbl0", afterRow: 1, cells: ["x", "y"] });
+    if (insertError) {
+      expect(added.error).toBe(insertError);
+      expect(doc.toString()).toBe(before);
+    } else {
+      // Locked against deletion only: its content may grow, and the new row lands inside it
+      expect(added.success).toBe(true);
+      expect(doc.toString()).toMatch(/<w:sdtContent><w:tr>.*<\/w:tr><w:tr>.*x.*<\/w:tr><\/w:sdtContent>/);
+    }
+    // The row outside the control is unaffected
+    expect(apply(doc, { type: "add_table_row", target: "tbl0", afterRow: 0, cells: ["p", "q"] }).success).toBe(true);
+  });
+
   it("rows of a table inside a data-bound control cannot change", async () => {
     const doc = await from(
       control(1, `<w:alias w:val="Feed"/><w:dataBinding w:xpath="/a" w:storeItemID="{0}"/>`, table(`<w:tr>${cell(run("a"))}${cell(run("b"))}</w:tr>`)),

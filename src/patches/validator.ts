@@ -18,7 +18,7 @@ import {
   checkRunsEditable,
   checkBlockInsert,
   checkParagraphDelete,
-  checkTableEditable,
+  checkRowInsert,
   checkRowDelete,
   findCheckbox,
 } from "./control-ops.js";
@@ -100,7 +100,7 @@ function checkControls(patch: Patch, doc: NormalizedDocument, markers: boolean):
       return;
     }
     case "add_table_row":
-      checkTableEditable(findTableById(patch.target, doc)!);
+      checkRowInsert(findTableById(patch.target, doc)!, patch.afterRow);
       return;
     case "delete_table_row":
       checkRowDelete(findTableById(patch.target, doc)!, patch.row);

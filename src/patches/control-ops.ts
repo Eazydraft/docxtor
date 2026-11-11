@@ -210,6 +210,32 @@ export function checkTableEditable(table: NormalizedTable): void {
 }
 
 /**
+ * Check that a row may be added after `afterRow` (-1: before the first row).
+ * The new row is put next to the row it copies, so when a control wraps
+ * that row the new one lands inside it: the control must be open.
+ */
+export function checkRowInsert(table: NormalizedTable, afterRow: number): void {
+  checkTableEditable(table);
+  const source = table.rows[afterRow >= 0 ? afterRow : 0];
+  const kept = new Set(controlChain(table.control));
+  for (const c of controlChain(source?.control)) {
+    if (kept.has(c)) break;
+    const where = `${table.id} row ${source!.index}`;
+    if (c.locked === "content" || c.locked === "both") {
+      throw new ControlEditError(
+        `${where}: the row is in a locked ${describe(c)}; a row cannot be added to it`,
+      );
+    }
+    if (c.bound) {
+      throw new ControlEditError(
+        `${where}: the row is in a ${describe(c)} bound to a custom XML part; Word overwrites ` +
+          `its content from that part when the file is opened, so an edit here would be lost`,
+      );
+    }
+  }
+}
+
+/**
  * Check that a table row may be deleted. The row takes with it every
  * control inside it (around a cell, around or inside a cell's paragraphs,
  * in a nested table), so none of them may be locked: neither against
@@ -220,7 +246,8 @@ export function checkRowDelete(table: NormalizedTable, rowIndex: number): void {
   const row = table.rows[rowIndex];
   if (!row) return;
 
-  // Controls around the table stay; everything below them goes with the row.
+  // Controls around the table stay; everything below them goes with the row
+  // or loses its content: a control around the row, around a cell, in a cell.
   const kept = new Set(controlChain(table.control));
   const where = `${table.id} row ${rowIndex}`;
   const check = (control: ControlInfo | undefined): void => {
@@ -233,6 +260,16 @@ export function checkRowDelete(table: NormalizedTable, rowIndex: number): void {
       }
     }
   };
+  check(row.control);
+  for (const c of controlChain(row.control)) {
+    if (kept.has(c)) break;
+    if (c.bound) {
+      throw new ControlEditError(
+        `${where}: the row is in a ${describe(c)} bound to a custom XML part; Word overwrites ` +
+          `its content from that part when the file is opened, so an edit here would be lost`,
+      );
+    }
+  }
   const visit = (cells: NormalizedTable["rows"][number]["cells"]): void => {
     for (const cell of cells) {
       check(cell.control);

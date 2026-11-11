@@ -385,6 +385,8 @@ export interface NormalizedTableRow {
   cells: NormalizedTableCell[];
   /** Direct reference to the w:tr FXP node. */
   xmlRef: FXPNode;
+  /** The content control wrapped around this row, if any. */
+  control?: ControlInfo;
 }
 
 export interface NormalizedTableCell {

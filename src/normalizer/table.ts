@@ -91,11 +91,13 @@ export function normalizeTable(
       cells.push(cell);
     }
 
-    rows.push({
+    const row: NormalizedTableRow = {
       index: rowIdx,
       cells,
       xmlRef: tr.node,
-    });
+    };
+    if (tr.sdts.length > 0 && rowControl) row.control = rowControl;
+    rows.push(row);
   }
 
   // Extract table style

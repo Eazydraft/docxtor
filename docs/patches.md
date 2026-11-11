@@ -103,7 +103,7 @@ Refused, with a message that says why:
 - a data-bound control (`w:dataBinding`): Word overwrites its text from a custom XML part when the file is opened, so the edit would be lost;
 - a picture control;
 - `delete_paragraph` on a paragraph that holds a control locked against deletion (`sdtLocked`), or holds a control nested in one;
-- `delete_table_row` on a row that holds a locked control, whether it wraps a cell or sits inside one;
+- `delete_table_row` on a row that holds a locked control, whether it wraps the row, wraps a cell or sits inside one, and `add_table_row` next to a row wrapped by a control that is locked against editing or data-bound (the new row would land inside it);
 - `add_table_row` and `delete_table_row` on a table inside a control that is locked against editing or data-bound;
 - `insert_paragraph`, `add_list_item`, `add_table` and `add_list` next to a paragraph or table wrapped by an empty control or by one that holds a single value (plain text, date, drop-down list). Inside a filled rich-text control they work, and the new content lands inside the same control.
 
