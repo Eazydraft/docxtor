@@ -8,7 +8,7 @@
 import { readFile } from "node:fs/promises";
 import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
 import { Docxtor, type NormalizedTable, type Patch, type PatchOptions, type PatchResult } from "../src/index.js";
-import { allParagraphs, matchStarts, occurrenceAt, patchTargets, planEdit, quoteVariants, snippet } from "./paragraphs.js";
+import { alignReplacement, allParagraphs, findHits, occurrenceAt, patchTargets, planEdit, snippet } from "./paragraphs.js";
 import { formatChanges, listChanges } from "./revisions.js";
 import { formatComments, listComments } from "./comments.js";
 import { getAttr, getChildren, getTagName, unescapeXmlText } from "../src/xml/helpers.js";
@@ -17,8 +17,9 @@ const USAGE = `docxtor <command> [options]
 
 Read
   view FILE [--grep REGEX [--context N]] [--formatting] [--no-revisions] [--styles] [--json]
-      Paragraphs with their ids ([p12], [tbl0.r1.c0.p0], [hdr.default.p0]).
-      Tracked changes show inline as {+inserted+} and {-deleted-}.
+      Paragraphs with their ids ([p12], [tbl0.r1.c0.p0], [hdr.default.p0],
+      [fn1.p0]). Tracked changes show inline as {+inserted+} and {-deleted-};
+      a footnote reference shows as [^1], with the notes listed at the end.
   revisions FILE [--json]
       Every tracked change, numbered, with its w:ids, author and context.
   comments FILE [--json]
@@ -29,9 +30,9 @@ Read
 Write (tracked changes by default; -o may equal FILE to update in place)
   replace FILE -o OUT --find TEXT --replace TEXT [--find .. --replace ..]
           [--all] [--in ID] [--occurrence N] [--whole-word]
-      Find text anywhere (body, tables, headers, footers) and replace it.
-      Refuses a find that matches more than once unless --all, --in or
-      --occurrence says which.
+      Find text anywhere (body, tables, headers, footers, footnotes) and
+      replace it. A space in --find also matches a tab. Refuses a find that
+      matches more than once unless --all, --in or --occurrence says which.
   comment FILE -o OUT --text TEXT (--find TEXT | --in ID) [--in ID]
       Add a Word comment anchored to TEXT (or to the whole paragraph ID).
   edit FILE -o OUT [PATCHES.json | -] [--dry-run]
@@ -132,7 +133,7 @@ function explain(doc: Docxtor, error: string): string {
     const p = doc.findParagraphById(inPara[1]!) ?? doc.findParagraphByParaId(inPara[1]!.replace(/^para:/, ""));
     if (p) return `${error}\n       ${inPara[1]} currently reads: "${p.text.length > 300 ? `${p.text.slice(0, 300)}…` : p.text}"`;
   }
-  if (/not found/i.test(error) && /["'](p\d|tbl\d|hdr\.|ftr\.|para:)/.test(error)) {
+  if (/not found/i.test(error) && /["'](p\d|tbl\d|hdr\.|ftr\.|fn\d|en\d|para:)/.test(error)) {
     return `${error}\n       (ids come from \`view FILE\`; ids are positional, so re-run view after edits that add or remove paragraphs)`;
   }
   return error;
@@ -232,32 +233,36 @@ async function cmdReplace(argv: string[]): Promise<void> {
   // Pair by pair, each against the current text, so a later --find sees earlier replacements.
   // Nothing is written unless every pair applies.
   for (let k = 0; k < finds.length; k++) {
-    let find = finds[k]!;
+    const typed = finds[k]!;
     const replace = repls[k]!;
     const every = allParagraphs(doc);
     const targetOf = patchTargets(every);
     const paras = every.filter((l) => inScope(l.para.id, l.para.paraId));
-    // Every match. Try curly/straight quote variants if the literal text is absent.
-    // `id` is the positional id shown to the user; `target` is what the patch names.
-    let hits: { id: string; target: string; text: string; start: number }[] = [];
-    for (const variant of quoteVariants(find)) {
-      hits = paras.flatMap(({ para }) => matchStarts(para.text, variant, !!values["whole-word"]).map((start) => ({ id: para.id, target: targetOf(para), text: para.text, start })));
-      if (hits.length) { find = variant; break; }
-    }
+    // Every match. If the literal text is absent, curly/straight quote variants are tried, then a space
+    // for a tab. `id` is the positional id shown to the user; `target` is what the patch names; `find` is
+    // the text that matched.
+    let hits = findHits(paras, typed, !!values["whole-word"]).map((h) => ({ id: h.para.id, target: targetOf(h.para), text: h.para.text, start: h.start, find: h.matched }));
     if (hits.length === 0) {
-      fail(`"${finds[k]}" not found${values.in ? ` in ${values.in}` : ""}; nothing was written. Text in a docx may differ from what you expect (quotes, dashes, non-breaking spaces, a tracked deletion); check with: view FILE --grep '<a distinctive word>'`);
+      fail(`"${typed}" not found${values.in ? ` in ${values.in}` : ""}; nothing was written. Text in a docx may differ from what you expect (quotes, dashes, non-breaking spaces, a tracked deletion); check with: view FILE --grep '<a distinctive word>'`);
     }
     if (values.occurrence) {
       const n = Number(values.occurrence);
       if (!Number.isInteger(n) || n < 1 || n > hits.length) fail(`--occurrence ${values.occurrence}: there are ${hits.length} matches`);
       hits = [hits[n - 1]!];
     } else if (hits.length > 1 && !values.all) {
-      const list = hits.slice(0, 20).map((h, i) => `  ${i + 1}. [${h.id}] ${snippet(h.text, h.start, h.start + find.length, 40)}`);
-      fail(`"${find}" matches ${hits.length} times; nothing was written. Use --all, --in ID or --occurrence N (counted in this list):\n${list.join("\n")}${hits.length > 20 ? "\n  …" : ""}`);
+      const list = hits.slice(0, 20).map((h, i) => `  ${i + 1}. [${h.id}] ${snippet(h.text, h.start, h.start + h.find.length, 40)}`);
+      fail(`"${hits[0]!.find}" matches ${hits.length} times; nothing was written. Use --all, --in ID or --occurrence N (counted in this list):\n${list.join("\n")}${hits.length > 20 ? "\n  …" : ""}`);
     }
-    // Right to left within each paragraph so earlier occurrence numbers stay valid.
-    const m = planEdit(find, replace);
+    // Right to left within each paragraph so earlier occurrence numbers stay valid. Each hit is planned
+    // against its own matched text: one may hold a tab where another holds a space.
+    const plans = new Map<string, ReturnType<typeof planEdit>>();
+    const planFor = (matched: string): ReturnType<typeof planEdit> => {
+      let m = plans.get(matched);
+      if (!m) plans.set(matched, (m = planEdit(matched, alignReplacement(typed, matched, replace))));
+      return m;
+    };
     const patches: Patch[] = [...hits].reverse().map((h): Patch => {
+      const m = planFor(h.find);
       const start = h.start + m.offset;
       if (m.kind === "insert") {
         return { type: "insert_text", target: h.target, position: m.position, anchor: m.anchor, text: m.text, occurrence: occurrenceAt(h.text, m.anchor, start) };
@@ -267,12 +272,15 @@ async function cmdReplace(argv: string[]): Promise<void> {
         ? { type: "delete_text", target: h.target, find: m.find, occurrence }
         : { type: "replace_text", target: h.target, find: m.find, replace: m.replace, occurrence };
     });
+    const find = hits[0]!.find;
     const failed = doc.applyPatches(patches, opts).filter((r) => !r.success);
     if (failed.length) fail(`${failed.length} replacements of "${find}" failed; nothing was written.\n${failed.map((r) => `  ${JSON.stringify(r.patch)} -> ${r.error}`).join("\n")}`);
     const ids = [...new Set(hits.map((h) => h.id))];
+    const m = planFor(find);
+    const shown = alignReplacement(typed, find, replace);
     const marked = m.kind === "insert" ? `inserted "${m.text}"` : m.kind === "delete" ? `deleted "${m.find}"` : `"${m.find}" -> "${m.replace}"`;
-    const tracked = m.kind !== "replace" || m.find !== find || m.replace !== replace ? ` (marked: ${marked})` : "";
-    report.push(`"${find}" -> "${replace}"${tracked}: ${hits.length} replacement${hits.length === 1 ? "" : "s"} in ${ids.length} paragraph${ids.length === 1 ? "" : "s"} (${ids.slice(0, 12).join(", ")}${ids.length > 12 ? ", …" : ""})`);
+    const tracked = m.kind !== "replace" || m.find !== find || m.replace !== shown ? ` (marked: ${marked})` : "";
+    report.push(`"${find}" -> "${shown}"${tracked}: ${hits.length} replacement${hits.length === 1 ? "" : "s"} in ${ids.length} paragraph${ids.length === 1 ? "" : "s"} (${ids.slice(0, 12).join(", ")}${ids.length > 12 ? ", …" : ""})`);
   }
   await doc.toFile(out);
   process.stdout.write(`${report.join("\n")}\nwrote ${out}${values.untracked ? "" : ` (tracked, author "${values.author ?? "docxtor"}")`}\n`);
@@ -292,22 +300,19 @@ async function cmdComment(argv: string[]): Promise<void> {
     const every = allParagraphs(doc);
     const targetOf = patchTargets(every);
     const paras = every.filter((l) => !values.in || l.para.id === values.in || l.para.paraId === values.in.replace(/^para:/, ""));
-    let hits: { id: string; target: string; text: string; start: number }[] = [];
-    for (const variant of quoteVariants(find)) {
-      hits = paras.flatMap(({ para }) => matchStarts(para.text, variant, false).map((start) => ({ id: para.id, target: targetOf(para), text: para.text, start })));
-      if (hits.length) { find = variant; break; }
-    }
+    let hits = findHits(paras, find, false).map((h) => ({ id: h.para.id, target: targetOf(h.para), text: h.para.text, start: h.start, find: h.matched }));
     if (hits.length === 0) fail(`"${values.find}" not found; check with: view FILE --grep '<a distinctive word>'`);
     if (values.occurrence) {
       const n = Number(values.occurrence);
       if (!Number.isInteger(n) || n < 1 || n > hits.length) fail(`--occurrence ${values.occurrence}: there are ${hits.length} matches`);
       hits = [hits[n - 1]!];
     } else if (hits.length > 1) {
-      const list = hits.slice(0, 20).map((h, i) => `  ${i + 1}. [${h.id}] ${snippet(h.text, h.start, h.start + find!.length, 40)}`);
-      fail(`"${find}" matches ${hits.length} times; give a longer --find, --in ID or --occurrence N:\n${list.join("\n")}`);
+      const list = hits.slice(0, 20).map((h, i) => `  ${i + 1}. [${h.id}] ${snippet(h.text, h.start, h.start + h.find.length, 40)}`);
+      fail(`"${hits[0]!.find}" matches ${hits.length} times; give a longer --find, --in ID or --occurrence N:\n${list.join("\n")}`);
     }
     target = hits[0]!.target;
     shown = hits[0]!.id;
+    find = hits[0]!.find;
     occurrence = occurrenceAt(hits[0]!.text, find, hits[0]!.start);
   }
   const author = values.author ?? "docxtor";

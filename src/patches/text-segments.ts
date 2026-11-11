@@ -107,8 +107,8 @@ const ORDERED_RE = /^(\s*)\d+\.\s(.*)$/;
 function parseListLine(
   line: string,
 ): { listType: "bullet" | "ordered"; text: string; level: number } | undefined {
-  // Normalize tabs to 2 spaces
-  const normalized = line.replace(/\t/g, "  ");
+  // A tab in the indentation counts as 2 spaces; a tab in the item text is text
+  const normalized = line.replace(/^\s+/, (indent) => indent.replace(/\t/g, "  "));
   let m = BULLET_RE.exec(normalized);
   if (m) {
     const indent = m[1]!.length;

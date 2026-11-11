@@ -13,7 +13,7 @@ export interface CommentInfo {
   initials: string;
   date: string;
   text: string;
-  /** Id of the paragraph where the anchored passage starts ("" when the anchor isn't in the body, headers or footers). */
+  /** Id of the paragraph where the anchored passage starts ("" when the anchor isn't in the body, headers, footers or notes). */
   paragraph: string;
   /** The commented passage (empty for a point comment). */
   anchor: string;
@@ -24,7 +24,7 @@ function textOf(nodes: FXPNode[]): string {
   for (const n of nodes) {
     const tag = getTagName(n);
     if (tag === "w:t") for (const t of getChildren(n)) { if (t["#text"] !== undefined) s += unescapeXmlText(String(t["#text"])); }
-    else if (tag === "w:tab") s += "\t";
+    else if (tag === "w:tab" || tag === "w:ptab") s += "\t";
     else if (tag === "w:br" || tag === "w:cr") s += "\n";
     else if (tag && tag !== "w:delText" && tag !== "w:instrText") s += textOf(getChildren(n));
   }

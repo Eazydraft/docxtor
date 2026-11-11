@@ -13,7 +13,7 @@
 import { describe, it, expect } from "vitest";
 import JSZip from "jszip";
 import { Docxtor } from "../../src/index.js";
-import { createLeaseDocx, createBodyDocx, createTwoSectionDocx } from "../fixtures/create-docx.js";
+import { createLeaseDocx, createBodyDocx, createNotesDocx, createTwoSectionDocx } from "../fixtures/create-docx.js";
 
 /** Every file in a .docx (directory entries left out), as path → bytes. */
 async function parts(buffer: Buffer): Promise<Map<string, Buffer>> {
@@ -51,12 +51,26 @@ function wordStyleDocx(): Promise<Buffer> {
   });
 }
 
+/** Typed clause numbers followed by tabs, a positional tab, a w:cr, and footnote and endnote references. */
+function tabsAndNotesDocx(): Promise<Buffer> {
+  return createNotesDocx({
+    body:
+      `<w:p><w:pPr><w:tabs><w:tab w:val="left" w:pos="720"/></w:tabs></w:pPr><w:r><w:t>17.2</w:t></w:r><w:r><w:tab/></w:r>` +
+      `<w:r><w:t xml:space="preserve">For goods </w:t></w:r><w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteReference w:id="2"/></w:r></w:p>` +
+      `<w:p><w:r><w:t>By:</w:t><w:tab/><w:t>____</w:t><w:cr/><w:t>Left</w:t><w:ptab w:relativeTo="margin" w:alignment="right" w:leader="none"/><w:t>Right</w:t></w:r>` +
+      `<w:r><w:endnoteReference w:id="1"/></w:r></w:p>`,
+    footnotes: `<w:footnote w:id="2"><w:p><w:r><w:footnoteRef/></w:r><w:r><w:tab/><w:t>A note.</w:t></w:r></w:p></w:footnote>`,
+    endnotes: `<w:endnote w:id="1"><w:p><w:r><w:endnoteRef/></w:r><w:r><w:t xml:space="preserve"> An endnote.</w:t></w:r></w:p></w:endnote>`,
+  });
+}
+
 describe("a save with no patches", () => {
   it.each([
     ["lease (numbering, table, header, footer, footnotes, tracked changes, properties)", () => createLeaseDocx()],
     ["Word-style single-line XML with CRLF", () => wordStyleDocx()],
     ["two sections, empty docProps properties as open-close pairs, an apostrophe in an attribute", () => createTwoSectionDocx()],
     ["two sections with native paragraph ids", () => createTwoSectionDocx({ withParaIds: true })],
+    ["tabs, a positional tab, footnotes and endnotes", () => tabsAndNotesDocx()],
   ])("returns every part byte for byte: %s", async (_name, make) => {
     const input = await make();
     const output = await (await Docxtor.load(input)).toBuffer();
@@ -137,5 +151,33 @@ describe("a save after one edit", () => {
       { trackRevisions: true, revisionDate: "2026-11-10T00:00:00Z" },
     );
     expect(await changedParts(input, await doc.toBuffer())).toEqual(["word/document.xml"]);
+  });
+});
+
+describe("a save after an edit beside a tab or in a note", () => {
+  it("an edit beside a tab changes document.xml only and keeps every tab", async () => {
+    const input = await tabsAndNotesDocx();
+    const doc = await Docxtor.load(input);
+    const results = doc.applyPatches(
+      [{ type: "replace_text", target: "p0", find: "17.2\tFor goods", replace: "17.2\tFor Goods" }],
+      { trackRevisions: true, revisionDate: "2026-11-11T00:00:00Z" },
+    );
+    expect(results[0]!.success).toBe(true);
+    const output = await doc.toBuffer();
+    expect(await changedParts(input, output)).toEqual(["word/document.xml"]);
+    const count = (xml: string): number => (xml.match(/<w:tab\/>/g) ?? []).length;
+    const before = (await parts(input)).get("word/document.xml")!.toString();
+    doc.acceptAllRevisions();
+    const after = (await parts(await doc.toBuffer())).get("word/document.xml")!.toString();
+    expect(count(after)).toBe(count(before));
+    expect(after).toContain(`<w:tabs><w:tab w:val="left" w:pos="720"/></w:tabs>`);
+  });
+
+  it("an edit to a footnote leaves document.xml and endnotes.xml untouched", async () => {
+    const input = await tabsAndNotesDocx();
+    const doc = await Docxtor.load(input);
+    const results = doc.applyPatches([{ type: "replace_text", target: "fn1.p0", find: "A note", replace: "The note" }]);
+    expect(results[0]!.success).toBe(true);
+    expect(await changedParts(input, await doc.toBuffer())).toEqual(["word/footnotes.xml"]);
   });
 });

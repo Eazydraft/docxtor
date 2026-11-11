@@ -13,11 +13,9 @@ import {
   getChildren,
   getTagName,
   getAttr,
-  setAttr,
   createElement,
   cloneNode,
-  escapeXmlText,
-  needsSpacePreserve,
+  createRun,
 } from "../xml/helpers.js";
 
 // =============================================================================
@@ -284,47 +282,13 @@ export function convertRunToDeleted(runNode: FXPNode): void {
 
 /**
  * Create a new w:r run node with the given text and optional formatting,
- * suitable for use inside w:ins. Handles newlines via w:br.
+ * suitable for use inside w:ins. `\t` becomes `w:tab` and `\n` `w:br`;
+ * `reuse` is passed to `textToRunChildren`.
  */
 export function createRevisionRun(
   text: string,
   rPrNode: FXPNode | undefined,
+  reuse?: FXPNode[],
 ): FXPNode {
-  const children: FXPNode[] = [];
-
-  // Clone formatting if present
-  if (rPrNode) {
-    children.push(cloneNode(rPrNode));
-  }
-
-  if (text.includes("\n")) {
-    // Multi-line: interleave w:t and w:br
-    const segments = text.split("\n");
-    for (let i = 0; i < segments.length; i++) {
-      const seg = segments[i]!;
-      if (seg.length > 0 || i === 0) {
-        const wt: FXPNode = {
-          "w:t": [{ "#text": escapeXmlText(seg) } as unknown as FXPNode],
-        };
-        if (needsSpacePreserve(seg)) {
-          setAttr(wt, "xml:space", "preserve");
-        }
-        children.push(wt);
-      }
-      if (i < segments.length - 1) {
-        children.push({ "w:br": [] as FXPNode[] });
-      }
-    }
-  } else {
-    // Single line
-    const wt: FXPNode = {
-      "w:t": [{ "#text": escapeXmlText(text) } as unknown as FXPNode],
-    };
-    if (needsSpacePreserve(text)) {
-      setAttr(wt, "xml:space", "preserve");
-    }
-    children.push(wt);
-  }
-
-  return { "w:r": children };
+  return createRun(text, rPrNode, reuse);
 }

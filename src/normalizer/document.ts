@@ -32,6 +32,7 @@ import { normalizeTable } from "./table.js";
 import { normalizeHeaderFooter } from "./header-footer.js";
 import { resolveListType } from "../patches/numbering.js";
 import { assignParaIdsToDocument } from "./para-id.js";
+import { normalizeNotes, allNotes } from "./notes.js";
 
 /**
  * Normalize a full DOCX document from zip entries.
@@ -90,6 +91,8 @@ export function normalizeDocument(
     body: [],
     headers: new Map(),
     footers: new Map(),
+    footnotes: new Map(),
+    endnotes: new Map(),
     xmlParts,
     styles,
     loadOptions: options,
@@ -101,7 +104,7 @@ export function normalizeDocument(
 }
 
 /**
- * Rebuild the normalized view (body, headers, footers, list types) of a
+ * Rebuild the normalized view (body, headers, footers, notes, list types) of a
  * document from its current XML parts, in place.
  *
  * Call this after a structural change that invalidates positional ids
@@ -118,6 +121,9 @@ export function reNormalizeDocument(doc: NormalizedDocument): void {
   if (includeHeadersFooters) {
     normalizeHeadersFooters(doc);
   }
+
+  // Footnotes and endnotes, numbered by the references in the body
+  normalizeNotes(doc);
 
   // Post-pass: enrich listType on all paragraphs with listInfo
   enrichAllListTypes(doc);
@@ -380,6 +386,12 @@ function enrichAllListTypes(doc: NormalizedDocument): void {
 
   for (const ftr of doc.footers.values()) {
     for (const para of ftr.paragraphs) {
+      enrichListType(para, numberingFxp);
+    }
+  }
+
+  for (const note of allNotes(doc)) {
+    for (const para of note.paragraphs) {
       enrichListType(para, numberingFxp);
     }
   }

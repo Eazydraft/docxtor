@@ -40,6 +40,13 @@ export interface NormalizedDocument {
   /** Footers keyed by relationship ID. */
   footers: Map<string, HeaderFooter>;
   /**
+   * Footnotes keyed by their `w:id`, in the order of their numbers. The
+   * separator entries of the part are left out.
+   */
+  footnotes: Map<string, NormalizedNote>;
+  /** Endnotes keyed by their `w:id`, in the order of their numbers. */
+  endnotes: Map<string, NormalizedNote>;
+  /**
    * The raw FXP objects for each XML part.
    * These are the mutable structures that patches operate on.
    */
@@ -70,9 +77,9 @@ export interface DocxXmlParts {
   [key: string]: FXPNode[] | Map<string, FXPNode[]> | undefined;
   /** Parsed word/numbering.xml for list management. */
   numbering?: FXPNode[];
-  /** Parsed word/footnotes.xml (if present). Walked by accept/reject revisions. */
+  /** Parsed word/footnotes.xml (if present). Normalized into `doc.footnotes`. */
   footnotes?: FXPNode[];
-  /** Parsed word/endnotes.xml (if present). Walked by accept/reject revisions. */
+  /** Parsed word/endnotes.xml (if present). Normalized into `doc.endnotes`. */
   endnotes?: FXPNode[];
   /** Parsed word/comments.xml (if present, or created on demand by add_comment). */
   comments?: FXPNode[];
@@ -142,6 +149,56 @@ export interface HeaderFooter {
 }
 
 // =============================================================================
+// Footnotes and endnotes
+// =============================================================================
+
+export type NoteKind = "footnote" | "endnote";
+
+/**
+ * A footnote or endnote reference (`w:footnoteReference` /
+ * `w:endnoteReference`) in a paragraph. It adds no character to the
+ * paragraph's text; the markdown view draws it as `[^1]` / `[^e1]`.
+ */
+export interface NoteReference {
+  kind: NoteKind;
+  /** The `w:id` of the note it points at (not the displayed number). */
+  noteId: string;
+  /** Character offset in the paragraph's `.text` where the mark sits. */
+  offset: number;
+  /**
+   * The reference has its own mark (`w:customMarkFollows`): the text that
+   * follows it is the mark, and Word generates no number for it.
+   */
+  customMark?: boolean;
+}
+
+/** A footnote or endnote. */
+export interface NormalizedNote {
+  kind: NoteKind;
+  /** The note's `w:id` in its part. */
+  noteId: string;
+  /**
+   * The note's number, from 1, per kind. For a note with an automatic mark
+   * this is the number Word displays: the position of its first reference
+   * in the text. Notes with a custom mark and notes nothing refers to are
+   * numbered after those.
+   */
+  number: number;
+  /** What ids inside this note start with: `fn1`, `en2`. A paragraph id is `${idPrefix}.p${n}`. */
+  idPrefix: string;
+  /** False when no reference in the text points at this note. */
+  referenced: boolean;
+  /** True when the note's reference carries its own mark instead of a number. */
+  customMark?: boolean;
+  /** Paragraphs inside this note. */
+  paragraphs: NormalizedParagraph[];
+  /** Tables inside this note. */
+  tables: NormalizedTable[];
+  /** The `w:footnote` / `w:endnote` FXP node. */
+  xmlRef: FXPNode;
+}
+
+// =============================================================================
 // Page Break
 // =============================================================================
 
@@ -168,7 +225,7 @@ export interface NormalizedPageBreak {
 
 export interface NormalizedParagraph {
   kind: "paragraph";
-  /** Stable ID, e.g., "p0", "tbl0.r1.c0.p0", "hdr.default.p0" */
+  /** Stable ID, e.g., "p0", "tbl0.r1.c0.p0", "hdr.default.p0", "fn1.p0" */
   id: string;
   /**
    * Native Word paragraph identity from `w14:paraId` (8 uppercase hex chars).
@@ -177,7 +234,10 @@ export interface NormalizedParagraph {
    * `assignParaIds: true`. Addressable in patches as `para:XXXXXXXX`.
    */
   paraId?: string;
-  /** Concatenated text from all runs. */
+  /**
+   * Concatenated text from all runs. A tab (`w:tab`, `w:ptab`) is one `\t`
+   * and a soft line break (`w:br`, `w:cr`) one `\n`.
+   */
   text: string;
   /** Ordered run mappings with character offsets and XML refs. */
   runs: RunMapping[];
@@ -189,6 +249,8 @@ export interface NormalizedParagraph {
   listInfo?: ListInfo;
   /** Revision marks captured from w:ins / w:del elements (for projection use). */
   revisions?: RevisionMark[];
+  /** Footnote and endnote references in this paragraph, in order. Not part of `.text`. */
+  noteRefs?: NoteReference[];
   /**
    * True if this paragraph contains a page break.
    * Detects `w:br w:type="page"`, `w:lastRenderedPageBreak`, and
@@ -752,6 +814,12 @@ export interface ProjectionOptions {
   includeRevisions?: boolean;
   /** Include page break elements and hints in the projection. Default: false. */
   includePageBreaks?: boolean;
+  /**
+   * Include the text of footnotes and endnotes (the `--- Footnotes ---` and
+   * `--- Endnotes ---` sections in markdown, `footnotes` and `endnotes` in
+   * JSON). The `[^1]` marks in the text are printed either way. Default: true.
+   */
+  includeNotes?: boolean;
   /**
    * JSON projection only. When set, every paragraph's `formatting` array
    * contains exactly the runs matching the filter (with their offsets), and

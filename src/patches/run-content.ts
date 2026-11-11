@@ -2,21 +2,23 @@
  * Run content: a run's text plus the zero-width children that sit between
  * its characters.
  *
- * A `w:r` holds `w:rPr`, text (`w:t`, and `w:br` soft breaks that read as
- * `\n`) and children that contribute nothing to the paragraph text: page and
- * column breaks, `w:lastRenderedPageBreak`, tabs, drawings, symbols, field
- * characters. Every text edit that rebuilds a run must carry those children
- * across at the character position they occupied, or a page break vanishes
- * because a word next to it was replaced.
+ * A `w:r` holds `w:rPr`, text (`w:t`, tabs that read as `\t`, and `w:br`
+ * soft breaks that read as `\n`) and children that contribute nothing to the
+ * paragraph text: page and column breaks, `w:lastRenderedPageBreak`,
+ * drawings, symbols, field characters, footnote references. Every text edit
+ * that rebuilds a run must carry those children across at the character
+ * position they occupied, or a page break vanishes because a word next to it
+ * was replaced.
  */
 
 import type { FXPNode } from "../types.js";
 import {
   getChildren,
-  getAttr,
   cloneNode,
   createWt,
-  unescapeXmlText,
+  runChildChar,
+  takeCharNode,
+  textElementContent,
 } from "../xml/helpers.js";
 
 /** A non-text child of a run, anchored before the character at `offset`. */
@@ -31,40 +33,40 @@ export interface RunContent {
   rPr?: FXPNode;
   text: string;
   anchored: AnchoredChild[];
+  /**
+   * The node behind each `\t` and `\n` of `text`, by character offset. A run
+   * rebuilt from this content writes that node back, so a `w:ptab` stays a
+   * `w:ptab` and a `w:cr` a `w:cr`. A character with no entry is written as
+   * a new `w:tab` or `w:br`.
+   */
+  charNodes?: Map<number, FXPNode>;
 }
 
-/** True for children that are part of the run's text: `w:t` and soft breaks. */
+/** True for children that are part of the run's text: `w:t`, tabs and soft breaks. */
 export function isTextChild(child: FXPNode): boolean {
-  if ("w:t" in child) return true;
-  if ("w:br" in child) {
-    const brType = getAttr(child, "w:type");
-    return !brType || brType === "textWrapping";
-  }
-  return false;
+  return "w:t" in child || runChildChar(child) !== undefined;
 }
 
 /**
  * Read a run as text plus anchored children. Mirrors `getRunText`: `w:t`
- * contributes its characters, a soft `w:br` one `\n`, everything else none.
+ * contributes its characters, a tab one `\t`, a soft break one `\n`,
+ * everything else none.
  */
 export function readRunContent(runNode: FXPNode): RunContent {
-  const content: RunContent = { text: "", anchored: [] };
+  const content: RunContent = { text: "", anchored: [], charNodes: new Map() };
   for (const child of getChildren(runNode)) {
     if ("w:rPr" in child) {
       content.rPr = child;
     } else if ("w:t" in child) {
-      const tChildren = child["w:t"];
-      if (Array.isArray(tChildren)) {
-        for (const tChild of tChildren) {
-          if ("#text" in tChild) {
-            content.text += unescapeXmlText(String(tChild["#text"]));
-          }
-        }
-      }
-    } else if (isTextChild(child)) {
-      content.text += "\n";
+      content.text += textElementContent(child);
     } else {
-      content.anchored.push({ node: child, offset: content.text.length });
+      const ch = runChildChar(child);
+      if (ch !== undefined) {
+        content.charNodes!.set(content.text.length, child);
+        content.text += ch;
+      } else {
+        content.anchored.push({ node: child, offset: content.text.length });
+      }
     }
   }
   return content;
@@ -72,9 +74,9 @@ export function readRunContent(runNode: FXPNode): RunContent {
 
 /**
  * Rebuild a run's children from content: `w:rPr` first, then the text as
- * `w:t` / `w:br` pairs with each anchored child placed before the character
- * at its offset (offsets past the end go last). Anchored nodes are moved,
- * not cloned.
+ * `w:t`, `w:tab` and `w:br` nodes with each anchored child placed before the
+ * character at its offset (offsets past the end go last). Anchored nodes and
+ * the nodes in `charNodes` are moved, not cloned.
  */
 export function writeRunContent(runNode: FXPNode, content: RunContent): void {
   const children = getChildren(runNode);
@@ -96,9 +98,10 @@ export function writeRunContent(runNode: FXPNode, content: RunContent): void {
       next++;
     }
     const ch = text[i]!;
-    if (ch === "\n") {
+    if (ch === "\n" || ch === "\t") {
       flush();
-      children.push({ "w:br": [] as FXPNode[] });
+      const own = content.charNodes?.get(i);
+      children.push(own && runChildChar(own) === ch ? own : takeCharNode(ch));
     } else {
       buf += ch;
     }
@@ -115,6 +118,46 @@ export function writeRunContent(runNode: FXPNode, content: RunContent): void {
   }
 }
 
+/**
+ * Where the tab and soft-break nodes of `oldText` belong in `newText`.
+ *
+ * Characters in the part the two texts share at the start and at the end
+ * keep their own node. In the part that changed, each `\t` or `\n` of the
+ * new text takes the next old node that reads as that character, first from
+ * the changed part of the old text and then from `extra` (the nodes of other
+ * runs the edit removed), so a tab that a replacement keeps is the original
+ * element.
+ */
+export function carryCharNodes(
+  oldText: string,
+  oldNodes: Map<number, FXPNode> | undefined,
+  newText: string,
+  extra: FXPNode[] = [],
+): Map<number, FXPNode> {
+  const result = new Map<number, FXPNode>();
+  const old = oldNodes ?? new Map<number, FXPNode>();
+  const max = Math.min(oldText.length, newText.length);
+  let pre = 0;
+  while (pre < max && oldText[pre] === newText[pre]) pre++;
+  let suf = 0;
+  while (suf < max - pre && oldText[oldText.length - 1 - suf] === newText[newText.length - 1 - suf]) suf++;
+
+  const pool: FXPNode[] = [];
+  for (const [offset, node] of [...old].sort((a, b) => a[0] - b[0])) {
+    if (offset < pre) result.set(offset, node);
+    else if (offset >= oldText.length - suf) result.set(offset - oldText.length + newText.length, node);
+    else pool.push(node);
+  }
+  pool.push(...extra);
+  for (let i = pre; i < newText.length - suf && pool.length > 0; i++) {
+    const ch = newText[i]!;
+    if (ch !== "\t" && ch !== "\n") continue;
+    const idx = pool.findIndex((n) => runChildChar(n) === ch);
+    if (idx !== -1) result.set(i, pool.splice(idx, 1)[0]!);
+  }
+  return result;
+}
+
 /** Build a fresh `w:r` from content, cloning the run properties. */
 export function createRunFromContent(content: RunContent): FXPNode {
   const run: FXPNode = { "w:r": [] as FXPNode[] };
@@ -122,6 +165,7 @@ export function createRunFromContent(content: RunContent): FXPNode {
     rPr: content.rPr ? cloneNode(content.rPr) : undefined,
     text: content.text,
     anchored: content.anchored,
+    charNodes: content.charNodes,
   });
   return run;
 }
@@ -141,6 +185,11 @@ export function partitionContent(
   const before: RunContent = { rPr: content.rPr, text: content.text.slice(0, start), anchored: [] };
   const matched: RunContent = { rPr: content.rPr, text: content.text.slice(start, end), anchored: [] };
   const after: RunContent = { rPr: content.rPr, text: content.text.slice(end), anchored: [] };
+  for (const [offset, node] of content.charNodes ?? []) {
+    if (offset < start) (before.charNodes ??= new Map()).set(offset, node);
+    else if (offset >= end) (after.charNodes ??= new Map()).set(offset - end, node);
+    else (matched.charNodes ??= new Map()).set(offset - start, node);
+  }
   for (const a of content.anchored) {
     const leading = atStart === "before" ? a.offset <= start : a.offset < start;
     if (leading) before.anchored.push(a);
