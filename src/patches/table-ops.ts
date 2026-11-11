@@ -24,7 +24,10 @@ import {
   sdtContentChildren,
   createElement,
   createRun,
+  getTagName,
+  RUN_CONTAINER_TAGS,
 } from "../xml/helpers.js";
+import { readControlInfo } from "../normalizer/control.js";
 import { executeReplaceText } from "./text-ops.js";
 import type { RevisionContext } from "./revision.js";
 import { createTrPrIns, createTrPrDel } from "./revision.js";
@@ -194,10 +197,7 @@ function unwrapControls(node: FXPNode): void {
     const child = children[i]!;
     if ("w:sdt" in child) {
       const content = sdtContentChildren(child);
-      const sdtPr = findChild(child, "w:sdtPr");
-      const flag = sdtPr ? findChild(sdtPr, "w:showingPlcHdr") : undefined;
-      const val = flag ? (flag[":@"] as Record<string, string> | undefined)?.["@_w:val"] : undefined;
-      if (flag && val !== "0" && val !== "false" && val !== "off") removeRuns(content);
+      if (readControlInfo(child).placeholder) removeRuns(content);
       children.splice(i, 1, ...content);
       i--; // re-examine what took its place (a nested control, say)
       continue;
@@ -206,16 +206,13 @@ function unwrapControls(node: FXPNode): void {
   }
 }
 
-/** Tags that hold runs inside a paragraph. */
-const RUN_HOLDERS = new Set(["w:r", "w:ins", "w:del", "w:moveTo", "w:moveFrom", "w:hyperlink", "w:smartTag", "w:fldSimple"]);
-
 /** Remove every run under `children`, keeping paragraphs, cells and their properties. */
 function removeRuns(children: FXPNode[]): void {
   for (let i = children.length - 1; i >= 0; i--) {
     const child = children[i]!;
-    const tag = Object.keys(child).find((k) => k !== ":@");
-    if (tag === undefined || tag === "#text") continue;
-    if (RUN_HOLDERS.has(tag)) {
+    const tag = getTagName(child);
+    if (tag === undefined) continue;
+    if (RUN_CONTAINER_TAGS.has(tag)) {
       children.splice(i, 1);
     } else if (tag === "w:sdt") {
       removeRuns(sdtContentChildren(child));

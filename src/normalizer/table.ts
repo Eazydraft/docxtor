@@ -87,7 +87,7 @@ export function normalizeTable(
         nestedTables,
         xmlRef: tc.node,
       };
-      if (tc.sdts.length > 0 && cellControl) cell.control = cellControl;
+      if (cellControl) cell.control = cellControl;
       cells.push(cell);
     }
 
@@ -96,7 +96,7 @@ export function normalizeTable(
       cells,
       xmlRef: tr.node,
     };
-    if (tr.sdts.length > 0 && rowControl) row.control = rowControl;
+    if (rowControl) row.control = rowControl;
     rows.push(row);
   }
 

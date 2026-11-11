@@ -124,7 +124,7 @@ Filling an empty control:
 Refused, with a message that says why:
 
 - an edit that would leave a control empty ("clearing a content control is not supported"), and deleting a prompt;
-- a match that starts inside a control and ends outside it, or the reverse: edit the two parts separately;
+- a match that starts inside a control and ends outside it, or the reverse, including the edge of a control nested in another: edit the two parts separately. The message names the innermost control whose edge is crossed;
 - a picture control;
 - **any change inside a closed control.** A control is closed when it is locked against editing (`w:lock` `contentLocked` or `sdtContentLocked`) or data-bound (`w:dataBinding`: Word overwrites its content from a custom XML part when the file is opened, so the edit would be lost). The control may sit anywhere around the target: in the paragraph, around it, around its cell, its row or its table, at any depth of nesting. This covers the text patches, `set_checkbox`, `apply_formatting`, `apply_style`, `insert_paragraph`, `delete_paragraph`, the list patches (`add_list_item`, `remove_list_item`, `convert_to_list`, `remove_list`, `set_list_properties`), `add_table` and `add_list` with `afterId`, `add_table_row` and `delete_table_row`;
 - **removing something that holds a locked control.** `delete_paragraph`, `remove_list_item` and `delete_table_row` are refused when the paragraph or row holds a control with any `w:lock`, at any depth: one locked against deletion (`sdtLocked`) would go with it, and one locked against editing would lose its content. A control wrapped around the paragraph is not removed with it, so a lock against deletion there does not stop the patch;
@@ -315,7 +315,7 @@ Replace text in a table cell paragraph (same as `replace_text` but uses the cell
 
 ## `add_table_row`
 
-Add a row to a table. The new row copies the structure (cell properties, widths) from the last existing row. Content controls in that row are not copied: the new row gets plain cells, so no control appears twice.
+Add a row to a table. The new row copies the structure (cell properties, widths) of the row it is inserted after (the first row for `afterRow: -1`). Content controls in that row are not copied: the new row gets plain cells, so no control appears twice.
 
 ```ts
 {

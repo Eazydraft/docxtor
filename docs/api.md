@@ -195,7 +195,9 @@ A paragraph that holds content controls, or sits inside one, has a `controls` ar
 | `locked` | `content` (the content cannot be edited), `control` (the control cannot be deleted) or `both` |
 | `bound` | `true` when the control mirrors a value in a custom XML part |
 
-In the AST the same information is on `RunMapping.control` (the innermost control holding a run), `NormalizedParagraph.controls` (the ranges), `NormalizedParagraph.control`, `NormalizedTableCell.control`, `NormalizedTableRow.control` and `NormalizedTable.control` (a control wrapped around the paragraph, the cell, the row or the table). A table cell's JSON entry carries its `paragraphs` whenever one of them has controls.
+In the AST the same information is on `RunMapping.control` (the innermost inline control holding a run) and `NormalizedParagraph.controls` (the inline controls and their ranges). `NormalizedParagraph.control`, `NormalizedTable.control`, `NormalizedTableRow.control` and `NormalizedTableCell.control` all mean the same thing: the innermost control around that node, whether it wraps the node itself or something further out (a cell's control may be the one around its row or table). A table cell's JSON entry carries its `paragraphs` whenever one of them has controls.
+
+`ControlInfo` objects are live: there is one per control, shared by every node inside it, and a patch that changes the control updates it in place. `kind` may gain values in later versions; treat an unknown kind like `"other"`.
 
 When `includePageBreaks` is enabled, docxtor detects all three OOXML page break mechanisms:
 

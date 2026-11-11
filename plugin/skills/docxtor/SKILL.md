@@ -228,5 +228,5 @@ Cite section numbers as `view` prints them. For long documents, grep for heading
 | `Paragraph "p99" not found` | Ids shifted or are wrong: run `view` again |
 | `no tracked change has w:id ...` | Take the ids from `revisions` on the same file |
 | `"X" is not an option of the dropdown content control` | Use one of the items the message lists, spelled exactly |
-| `crosses the edge of a content control` | The find starts inside a form field and ends outside it: edit the field's text and the text around it separately |
+| `crosses the edge of a content control` | The find starts inside a form field and ends outside it (or crosses into a field nested in another): edit the field's text and the text around it separately |
 | `locked content control` / `bound to a custom XML part` | The field can't be edited here; tell the user |

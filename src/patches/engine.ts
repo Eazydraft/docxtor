@@ -218,6 +218,9 @@ function applySinglePatch(
         const para = findParagraphById(patch.target, doc)!;
         // A match in a content control may fill it, flip a checkbox, or be
         // an ordinary edit after which the control's stored value follows.
+        // validatePatch has already planned this edit once to refuse what a
+        // control does not allow; planControlEdit must stay free of side
+        // effects so planning it again here is safe.
         const plan = planControlEdit(para, patch, markers);
         if (plan && plan.mode !== "edit") {
           applyControlPlan(para, plan, revCtx, markers);

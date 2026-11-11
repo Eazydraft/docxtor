@@ -43,6 +43,8 @@ import {
   getTagName,
   removeAttr,
   setAttr,
+  isAnchorRun,
+  RUN_CONTAINER_TAGS,
 } from "../xml/helpers.js";
 
 export type TextPatch = ReplaceTextPatch | InsertTextPatch | DeleteTextPatch | ReplaceCellTextPatch;
@@ -320,7 +322,7 @@ export function planControlEdit(
   if (runs.length === 0) return undefined;
 
   if (!sameControl(runs)) {
-    const edge = runs.find((r) => r.control)!.control!;
+    const edge = crossedControl(runs);
     throw new ControlEditError(
       `${para.id}: "${needle}" crosses the edge of a ${describe(edge)}; ` +
         `edit the text inside the control and the text around it separately`,
@@ -394,6 +396,19 @@ export function planControlEdit(
     : { mode: "edit", control, text };
 }
 
+/**
+ * The innermost control whose edge a match crosses: one that holds some of
+ * the matched runs but not all of them.
+ */
+function crossedControl(runs: RunMapping[]): ControlInfo {
+  for (const run of runs) {
+    for (const c of controlChain(run.control)) {
+      if (!runs.every((r) => controlChain(r.control).includes(c))) return c;
+    }
+  }
+  return runs.find((r) => r.control)!.control!;
+}
+
 /** True when every run sits in the same inline control (or all in none). */
 function sameControl(runs: RunMapping[]): boolean {
   return runs.every((r) => r.control === runs[0]!.control);
@@ -424,18 +439,11 @@ function countParagraphs(control: ControlInfo): number {
 // Carrying out a plan
 // =============================================================================
 
-/** Children of a control's content that hold runs: what a fill replaces. */
-const RUN_BEARING = new Set([
-  "w:r",
-  "w:ins",
-  "w:del",
-  "w:moveTo",
-  "w:moveFrom",
-  "w:hyperlink",
-  "w:smartTag",
-  "w:fldSimple",
-  "w:sdt",
-]);
+/** Children of a control's content that a fill replaces: runs and what holds them. */
+function isRunBearing(node: FXPNode): boolean {
+  const tag = getTagName(node);
+  return tag !== undefined && (RUN_CONTAINER_TAGS.has(tag) || tag === "w:sdt");
+}
 
 /**
  * The array holding the control's runs in this paragraph: the control's
@@ -454,8 +462,15 @@ function contentArray(para: NormalizedParagraph, control: ControlInfo, scope: Co
 
 /**
  * Replace everything the control shows in this paragraph by `runs`.
- * `track` marks the old content deleted instead of removing it; the new
- * runs are wrapped in `w:ins` whenever a revision context is given.
+ *
+ * The new runs go right after where the last old run was. With `trackOld`
+ * the old runs are marked deleted in place and the new ones follow them, so
+ * accepting gives exactly the untracked result, and markers between the old
+ * runs (a bookmark, a comment's range) keep their order around the new text. A run that only anchors a
+ * comment, a footnote or an endnote is not content and is kept: one that
+ * stood before the old text stays before the new, any other follows it (a
+ * comment's anchor after the end of its range). The new runs are wrapped in
+ * `w:ins` whenever a revision context is given.
  */
 function replaceContent(
   content: FXPNode[],
@@ -463,50 +478,57 @@ function replaceContent(
   revCtx: RevisionContext | undefined,
   trackOld: boolean,
 ): void {
-  // A run that only anchors a comment is not content: it stays where it is
-  // (after the comment's range), or the comment would be left without its
-  // reference.
-  const anchors: { node: FXPNode; index: number }[] = [];
+  const firstText = content.findIndex((c) => isRunBearing(c) && !isAnchorRun(c));
+  const anchors: { node: FXPNode; leading: boolean }[] = [];
   for (let i = content.length - 1; i >= 0; i--) {
-    if (isCommentAnchor(content[i]!)) anchors.unshift({ node: content.splice(i, 1)[0]!, index: i });
-  }
-  const restore = (): void => {
-    // Each anchor goes back right after the range end it followed, else last
-    for (const { node } of anchors) {
-      const id = commentIdOf(node);
-      const end = content.findIndex((c) => getTagName(c) === "w:commentRangeEnd" && getAttr(c, "w:id") === id);
-      if (end === -1) content.push(node);
-      else content.splice(end + 1, 0, node);
+    if (isAnchorRun(content[i]!)) {
+      anchors.unshift({ node: content.splice(i, 1)[0]!, leading: firstText !== -1 && i < firstText });
     }
-  };
+  }
+
+  // Where the new content goes: right after the last old run, tracked or
+  // not; with nothing shown, inside a comment's range.
+  const marker: FXPNode = { "docxtor:here": [] };
+  let lastRun = -1;
+  content.forEach((c, i) => {
+    if (isRunBearing(c)) lastRun = i;
+  });
+  let at: number;
+  if (lastRun === -1) {
+    const rangeEnd = content.findIndex((c) => getTagName(c) === "w:commentRangeEnd");
+    at = rangeEnd === -1 ? content.length : rangeEnd;
+  } else {
+    at = lastRun + 1;
+  }
+  content.splice(at, 0, marker);
 
   if (revCtx && trackOld) {
     markRunsDeleted(content, revCtx);
-    content.push(createInsElement(revCtx, runs));
-    restore();
-    return;
+  } else {
+    for (let i = content.length - 1; i >= 0; i--) {
+      if (isRunBearing(content[i]!)) content.splice(i, 1);
+    }
   }
-  let at = content.findIndex((c) => RUN_BEARING.has(getTagName(c) ?? ""));
-  if (at === -1) {
-    // Nothing shown: the new text goes inside a comment's range if there is one
-    const rangeEnd = content.findIndex((c) => getTagName(c) === "w:commentRangeEnd");
-    at = rangeEnd === -1 ? content.length : rangeEnd;
-  }
-  for (let i = content.length - 1; i >= 0; i--) {
-    if (RUN_BEARING.has(getTagName(content[i]!) ?? "")) content.splice(i, 1);
-  }
-  content.splice(Math.min(at, content.length), 0, ...(revCtx ? [createInsElement(revCtx, runs)] : runs));
-  restore();
-}
+  const added = revCtx ? [createInsElement(revCtx, runs)] : runs;
+  content.splice(content.indexOf(marker), 1, ...added);
 
-/** True for a run that holds a comment reference and no text. */
-function isCommentAnchor(node: FXPNode): boolean {
-  if (getTagName(node) !== "w:r") return false;
-  const children = getChildren(node);
-  return (
-    children.some((c) => getTagName(c) === "w:commentReference") &&
-    !children.some((c) => ["w:t", "w:br", "w:tab", "w:cr"].includes(getTagName(c) ?? ""))
-  );
+  // Put the anchors back
+  const start = content.indexOf(added[0]!);
+  const leading = anchors.filter((a) => a.leading).map((a) => a.node);
+  content.splice(start, 0, ...leading);
+  let after = start + leading.length + added.length;
+  for (const { node, leading: isLeading } of anchors) {
+    if (isLeading) continue;
+    const id = commentIdOf(node);
+    const end = id === undefined ? -1 : content.findIndex((c) => getTagName(c) === "w:commentRangeEnd" && getAttr(c, "w:id") === id);
+    if (end !== -1) {
+      content.splice(end + 1, 0, node);
+      if (end < after) after++;
+    } else {
+      content.splice(after, 0, node);
+      after++;
+    }
+  }
 }
 
 function commentIdOf(anchor: FXPNode): string | undefined {

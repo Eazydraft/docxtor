@@ -22,6 +22,7 @@ import type {
   FXPNode,
 } from "../types.js";
 import { idsCarrySection } from "../normalizer/header-footer.js";
+import { getChildren, getTagName, runHasContent } from "../xml/helpers.js";
 import { getLevelInfo } from "../patches/numbering.js";
 
 // =============================================================================
@@ -38,25 +39,12 @@ export interface JsonProjectionRunFormatting extends RunFormatting {
 }
 
 /** A content control in a paragraph: its properties and the text range it covers. */
-export interface JsonProjectionControl {
-  /** `w:id` of the control. */
-  id: string;
-  kind: ControlInfo["kind"];
-  alias?: string;
-  tag?: string;
-  /** True while the control shows its prompt: the text in the range is not an answer. */
-  placeholder: boolean;
-  /** Display texts of a drop-down list or combo box. */
-  options?: string[];
-  /** State of a checkbox. */
-  checked?: boolean;
-  locked?: "content" | "control" | "both";
-  bound?: boolean;
+export type JsonProjectionControl = Omit<ControlInfo, "xmlRef" | "parent"> & {
   /** Start character offset in paragraph text (inclusive). */
   startOffset: number;
   /** End character offset in paragraph text (exclusive). */
   endOffset: number;
-}
+};
 
 interface JsonProjectionParagraph {
   id: string;
@@ -869,32 +857,16 @@ function controlMarker(
   return undefined;
 }
 
-/** Elements that are content of a run even though they carry no text. */
-const RUN_OBJECTS = new Set([
-  "w:drawing", "w:pict", "w:object", "w:sym", "w:fldChar", "w:instrText",
-  // text that is not in a w:t
-  "w:tab", "w:br", "w:cr", "w:footnoteReference", "w:endnoteReference",
-]);
-
 /** True if a control holds any current text or object (deleted text does not count). */
 function controlHasContent(control: ControlInfo): boolean {
-  const visit = (nodes: FXPNode[]): boolean => {
-    for (const node of nodes) {
-      const tag = Object.keys(node).find((k) => k !== ":@");
-      if (tag === undefined || tag === "w:del" || tag === "w:moveFrom" || tag === "w:sdtPr") continue;
-      if (tag === "#text") continue;
-      if (RUN_OBJECTS.has(tag)) return true;
-      const children = node[tag];
-      if (!Array.isArray(children)) continue;
-      if (tag === "w:t") {
-        if (children.some((c) => "#text" in c && String(c["#text"]).length > 0)) return true;
-        continue;
-      }
-      if (visit(children)) return true;
-    }
-    return false;
-  };
-  return visit([control.xmlRef]);
+  const visit = (nodes: FXPNode[]): boolean =>
+    nodes.some((node) => {
+      const tag = getTagName(node);
+      if (tag === undefined || tag === "w:del" || tag === "w:moveFrom" || tag === "w:sdtPr") return false;
+      if (tag === "w:r") return runHasContent(node);
+      return visit(getChildren(node));
+    });
+  return visit(getChildren(control.xmlRef));
 }
 
 /**

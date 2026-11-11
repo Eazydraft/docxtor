@@ -299,6 +299,57 @@ export function getRunText(runNode: FXPNode): string {
 }
 
 /**
+ * Elements of a paragraph that are runs or hold runs: what a paragraph's
+ * text is made of. Content controls (`w:sdt`) are not listed: callers that
+ * read through them say so.
+ */
+export const RUN_CONTAINER_TAGS: ReadonlySet<string> = new Set([
+  "w:r",
+  "w:ins",
+  "w:del",
+  "w:moveTo",
+  "w:moveFrom",
+  "w:hyperlink",
+  "w:smartTag",
+  "w:fldSimple",
+  "w:customXml",
+]);
+
+/** Run children that are content although they add no characters to the text. */
+const RUN_OBJECT_TAGS: ReadonlySet<string> = new Set([
+  "w:drawing",
+  "w:pict",
+  "w:object",
+  "w:sym",
+  "w:fldChar",
+  "w:instrText",
+  "w:footnoteReference",
+  "w:endnoteReference",
+]);
+
+/** Run children that anchor a comment or a note to its place in the text. */
+const ANCHOR_TAGS: ReadonlySet<string> = new Set([
+  "w:commentReference",
+  "w:footnoteReference",
+  "w:endnoteReference",
+]);
+
+/** True if a run shows anything: text (tabs and soft breaks included) or an object. */
+export function runHasContent(runNode: FXPNode): boolean {
+  if (getRunText(runNode).length > 0) return true;
+  return getChildren(runNode).some((c) => RUN_OBJECT_TAGS.has(getTagName(c) ?? ""));
+}
+
+/**
+ * True for a run that only anchors a comment, footnote or endnote reference:
+ * it holds such a reference and no text.
+ */
+export function isAnchorRun(node: FXPNode): boolean {
+  if (getTagName(node) !== "w:r" || getRunText(node).length > 0) return false;
+  return getChildren(node).some((c) => ANCHOR_TAGS.has(getTagName(c) ?? ""));
+}
+
+/**
  * Find the w:t node inside a w:r run node.
  * Returns the first w:t element found.
  */

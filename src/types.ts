@@ -291,8 +291,16 @@ export interface NormalizedParagraph {
 // =============================================================================
 
 /**
- * A Word content control: a fillable field wrapped around runs, paragraphs
- * or a table cell. The text it holds is part of the paragraph text.
+ * A Word content control: a fillable field wrapped around runs, paragraphs,
+ * a table, a row or a cell. The text it holds is part of the paragraph text.
+ *
+ * One object stands for one `w:sdt` while the document is open: every node
+ * inside the control refers to the same object, and a patch that changes the
+ * control (a fill, a new drop-down value, a ticked checkbox) updates it in
+ * place, so it always describes the document as it is now.
+ *
+ * `kind` may gain values in later versions. Treat an unknown kind like
+ * `"other"`: a switch over it should have a default branch.
  */
 export interface ControlInfo {
   /** `w:id` of the control ("" when it has none). */
@@ -449,7 +457,10 @@ export interface NormalizedTableRow {
   cells: NormalizedTableCell[];
   /** Direct reference to the w:tr FXP node. */
   xmlRef: FXPNode;
-  /** The content control wrapped around this row, if any. */
+  /**
+   * The innermost content control around this row: one wrapped around the
+   * row itself, else one around the table, if any.
+   */
   control?: ControlInfo;
 }
 
@@ -464,7 +475,10 @@ export interface NormalizedTableCell {
   nestedTables: NormalizedTable[];
   /** Direct reference to the w:tc FXP node. */
   xmlRef: FXPNode;
-  /** The content control wrapped around this cell, if any. */
+  /**
+   * The innermost content control around this cell: one wrapped around the
+   * cell itself, else one around its row or table, if any.
+   */
   control?: ControlInfo;
 }
 

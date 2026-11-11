@@ -645,7 +645,9 @@ describe("locks seen through nesting, tables and rows", () => {
     );
     const t = doc.findTableById("tbl0")!;
     expect(t.rows.map((r) => r.control?.alias)).toEqual([undefined, "Item"]);
-    expect(t.rows[1]!.cells.map((c) => c.control)).toEqual([undefined, undefined]);
+    // A cell's control is the innermost one around it: here the row's
+    expect(t.rows[1]!.cells.map((c) => c.control)).toEqual([t.rows[1]!.control, t.rows[1]!.control]);
+    expect(t.rows[0]!.cells.map((c) => c.control)).toEqual([undefined, undefined]);
 
     const before = doc.toString();
     for (const options of [undefined, TRACKED]) {
@@ -1018,5 +1020,110 @@ describe("comments, validation options and emptied row controls", () => {
     );
     expect(apply(doc, { type: "delete_table_row", target: "tbl0", row: 0 }).success).toBe(true);
     expect(doc.toString()).toMatch(/<w:sdtContent><w:tr>.*b.*<\/w:tr><\/w:sdtContent>/);
+  });
+});
+
+describe("review fixes: tracked = untracked, anchors kept, shells removed", () => {
+  const run = (text: string): string => `<w:r><w:t xml:space="preserve">${text}</w:t></w:r>`;
+  const control = (id: number, pr: string, content: string): string =>
+    `<w:sdt><w:sdtPr>${pr}<w:id w:val="${id}"/></w:sdtPr><w:sdtContent>${content}</w:sdtContent></w:sdt>`;
+  const box = (id: number, glyph: string, around: (r: string) => string = (r) => r): string =>
+    control(
+      id,
+      `<w14:checkbox><w14:checked w14:val="0"/><w14:checkedState w14:val="2612" w14:font="MS Gothic"/><w14:uncheckedState w14:val="2610" w14:font="MS Gothic"/></w14:checkbox>`,
+      around(`<w:r><w:t>${glyph}</w:t></w:r>`),
+    );
+  const ns = (body: string): Promise<Buffer> =>
+    createBodyDocx(body).then(async (b) => {
+      const JSZipMod = (await import("jszip")).default;
+      const zip = await JSZipMod.loadAsync(b);
+      const xml = await zip.file("word/document.xml")!.async("string");
+      zip.file("word/document.xml", xml.replace("<w:document ", '<w:document xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" '));
+      return zip.generateAsync({ type: "nodebuffer" }) as Promise<Buffer>;
+    });
+
+  /** Apply patches untracked, and tracked then accept-all; return both XML strings. */
+  const both = async (make: () => Promise<Buffer>, patches: Patch[]): Promise<[string, string]> => {
+    const direct = await Docxtor.load(await make());
+    expect(direct.applyPatches(patches).map((r) => r.error)).toEqual(patches.map(() => undefined));
+    const tracked = await Docxtor.load(await make());
+    expect(tracked.applyPatches(patches, TRACKED).map((r) => r.error)).toEqual(patches.map(() => undefined));
+    tracked.acceptAllRevisions();
+    return [direct.toString(), tracked.toString()];
+  };
+
+  it.each([
+    ["a comment on the box", (r: string) => `<w:commentRangeStart w:id="0"/>${r}<w:commentRangeEnd w:id="0"/>`],
+    ["a bookmark around the box", (r: string) => `<w:bookmarkStart w:id="5" w:name="b"/>${r}<w:bookmarkEnd w:id="5"/>`],
+  ])("set_checkbox tracked then accepted equals untracked, with %s", async (_name, around) => {
+    const make = (): Promise<Buffer> => ns(`<w:p>${box(1, "☐", around)}${run(" Agree")}</w:p>`);
+    const [direct, tracked] = await both(make, [{ type: "set_checkbox", target: "p0", checked: true }]);
+    expect(tracked).toBe(direct);
+    expect(direct).toMatch(/Start w:id="\d"[^>]*\/><w:r>.*☒<\/w:t><\/w:r><w:(commentRangeEnd|bookmarkEnd)/);
+  });
+
+  it("set_checkbox on a checkbox wrapped around a cell: tracked then accepted equals untracked", async () => {
+    const make = (): Promise<Buffer> =>
+      ns(`<w:tbl><w:tblPr/><w:tblGrid><w:gridCol/></w:tblGrid><w:tr>${box(1, "", () => `<w:tc><w:p><w:r><w:t>☐</w:t></w:r><w:bookmarkEnd w:id="3"/></w:p></w:tc>`)}</w:tr></w:tbl><w:p/>`);
+    const [direct, tracked] = await both(make, [{ type: "set_checkbox", target: "tbl0.r0.c0.p0", checked: true }]);
+    expect(tracked).toBe(direct);
+    expect(direct).toContain("☒</w:t></w:r><w:bookmarkEnd");
+  });
+
+  it.each([[undefined], [TRACKED]])("filling a prompt keeps a footnote reference in it (%#)", async (options) => {
+    const doc = await Docxtor.load(
+      await createBodyDocx(
+        control(1, "<w:showingPlcHdr/>", `<w:p>${run("Enter clause")}<w:r><w:footnoteReference w:id="1"/></w:r></w:p>`) + `<w:p>${run("Tail")}</w:p>`,
+      ),
+    );
+    expect(apply(doc, { type: "replace_text", target: "p0", find: "Enter clause", replace: "Clause 1" }, options).success).toBe(true);
+    const xml = doc.toString();
+    expect(xml).toMatch(/Clause 1<\/w:t><\/w:r>(<\/w:ins>)?<w:r><w:footnoteReference w:id="1"\/><\/w:r>/);
+  });
+
+  it("a note reference before a prompt stays before the new text", async () => {
+    const doc = await Docxtor.load(
+      await createBodyDocx(`<w:p>${control(1, "<w:showingPlcHdr/>", `<w:r><w:endnoteReference w:id="2"/></w:r>${run("Enter")}`)}</w:p>`),
+    );
+    expect(apply(doc, { type: "replace_text", target: "p0", find: "Enter", replace: "Done" }).success).toBe(true);
+    expect(doc.toString()).toContain('<w:sdtContent><w:r><w:endnoteReference w:id="2"/></w:r><w:r><w:t>Done</w:t></w:r></w:sdtContent>');
+  });
+
+  it.each([["p4", "a checkbox"], ["p8", "a drop-down"]])(
+    "delete_paragraph %s (%s) tracked then accepted equals untracked: no empty control is left",
+    async (target) => {
+      const [direct, tracked] = await both(() => createContentControlDocx(), [{ type: "delete_paragraph", target } as Patch]);
+      expect(tracked).toBe(direct);
+    },
+  );
+
+  it("delete_paragraph of a paragraph with nested controls, tracked then accepted, removes the controls", async () => {
+    // p1 is followed by a table, so accepting cannot merge it into a next
+    // paragraph and leaves it empty (general accept behaviour, as without
+    // controls); what matters here is that no empty control is left in it.
+    const [direct, tracked] = await both(() => createContentControlDocx(), [{ type: "delete_paragraph", target: "p1" }]);
+    for (const id of ["103", "104", "105"]) expect(tracked).not.toContain(`<w:id w:val="${id}"/>`);
+    expect(tracked.replace("</w:p><w:p/><w:tbl>", "</w:p><w:tbl>")).toBe(direct);
+  });
+
+  it("rejecting a fill still leaves the emptied control in place: the paragraph stays", async () => {
+    const doc = await load();
+    apply(doc, { type: "replace_text", target: "p0", find: "Insert Title for Contract", replace: "X" }, TRACKED);
+    doc.rejectAllRevisions();
+    expect(doc.toString()).toContain('<w:id w:val="101"/>');
+  });
+
+  it("the error for a match into a nested control names that control", async () => {
+    const doc = await Docxtor.load(
+      await createBodyDocx(`<w:p>${control(1, `<w:alias w:val="Outer"/>`, run("Dept ") + control(2, `<w:alias w:val="Inner"/>`, run("Legal")))}</w:p>`),
+    );
+    expect(apply(doc, { type: "replace_text", target: "p0", find: "Dept Legal", replace: "X" }).error).toBe(
+      'p0: "Dept Legal" crosses the edge of a content control "Inner"; edit the text inside the control and the text around it separately',
+    );
+  });
+
+  it("a control holding only a positional tab is not shown as empty", async () => {
+    const doc = await Docxtor.load(await createBodyDocx(control(1, "", `<w:p><w:r><w:ptab w:relativeTo="margin" w:alignment="right" w:leader="none"/></w:r></w:p>`)));
+    expect(doc.project("markdown")).not.toContain("{field:}");
   });
 });

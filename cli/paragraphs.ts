@@ -55,16 +55,11 @@ export function allParagraphs(doc: Docxtor): Located[] {
 
 /**
  * The empty content control whose prompt holds the text at `[start, end)`,
- * if there is one. An edit there fills the control with the whole
- * replacement, so the find and replace must not be trimmed to the words
- * that differ, and one control takes one edit however often the prompt
- * contains the find.
+ * if there is one, with the range of paragraph text the prompt covers. An
+ * edit there fills the control with the whole replacement, so the find and
+ * replace must not be trimmed to the words that differ, and one control
+ * takes one edit however often the prompt contains the find.
  */
-export function promptControl(para: NormalizedParagraph, start: number, end: number): ControlInfo | undefined {
-  return promptRange(para, start, end)?.control;
-}
-
-/** {@link promptControl}, with the range of paragraph text the prompt covers. */
 export function promptRange(
   para: NormalizedParagraph,
   start: number,

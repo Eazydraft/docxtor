@@ -477,7 +477,34 @@ function handleParagraphMark(
   }
 
   if (!removeParagraph) return false;
+  // The paragraph goes. A content control in it whose content went with the
+  // resolved change goes too, as it does when the paragraph is deleted
+  // untracked; otherwise it would be merged into the next paragraph as an
+  // empty field.
+  pruneEmptyControls(getChildren(pNode));
   return mergeIntoNextParagraph(siblings, index, pNode);
+}
+
+/**
+ * Remove every inline content control under `children` that holds no
+ * element any more, innermost first, so a control left holding only empty
+ * controls goes as well.
+ */
+function pruneEmptyControls(children: FXPNode[]): void {
+  for (let i = children.length - 1; i >= 0; i--) {
+    const child = children[i]!;
+    const tag = getTagName(child);
+    if (tag === undefined || tag === "w:pPr") continue;
+    if (tag === "w:sdt") {
+      const content = findChild(child, "w:sdtContent");
+      if (content) pruneEmptyControls(getChildren(content));
+      if (!content || !getChildren(content).some((c) => getTagName(c) !== undefined)) {
+        children.splice(i, 1);
+      }
+      continue;
+    }
+    if (tag !== "w:r") pruneEmptyControls(getChildren(child));
+  }
 }
 
 /**
