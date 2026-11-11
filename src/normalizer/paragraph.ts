@@ -43,7 +43,7 @@ import {
   getRunPageBreakOffset,
   sdtContentChildren,
 } from "../xml/helpers.js";
-import { readControlInfo } from "./control.js";
+import { controlInfoFor } from "./control.js";
 
 /** One step of a paragraph's content, in document order. */
 type ContentStep =
@@ -80,7 +80,7 @@ function collectContent(
     } else if (tag === "w:sdt") {
       // An inline control sits in the one around it, or else in the control
       // wrapped around the paragraph.
-      const inner = readControlInfo(child, control ?? outer);
+      const inner = controlInfoFor(child, control ?? outer);
       steps.push({ kind: "open", control: inner });
       collectContent(sdtContentChildren(child), steps, outer, inner);
       steps.push({ kind: "close", control: inner });

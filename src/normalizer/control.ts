@@ -82,10 +82,32 @@ export function readControlInfo(sdtNode: FXPNode, parent?: ControlInfo): Control
   return info;
 }
 
+/** The one ControlInfo of each `w:sdt` node, for as long as the node exists. */
+const live = new WeakMap<FXPNode, ControlInfo>();
+
+/**
+ * The ControlInfo of a `w:sdt` node, read afresh from the XML. There is one
+ * object per node: the first call creates it, later calls (a re-normalization
+ * after a patch, say) update that same object in place, so a reference held
+ * by a caller keeps describing the control as it now is.
+ */
+export function controlInfoFor(sdtNode: FXPNode, parent?: ControlInfo): ControlInfo {
+  const fresh = readControlInfo(sdtNode, parent);
+  const existing = live.get(sdtNode);
+  if (!existing) {
+    live.set(sdtNode, fresh);
+    return fresh;
+  }
+  const target = existing as unknown as Record<string, unknown>;
+  for (const key of Object.keys(target)) delete target[key];
+  Object.assign(existing, fresh);
+  return existing;
+}
+
 /**
  * Turns the `w:sdt` wrappers a walker crossed into ControlInfo objects, one
  * per `w:sdt` node, so every paragraph and cell inside the same control
- * shares the same object.
+ * shares the same object. Each node is read once per resolver.
  */
 export class ControlResolver {
   private readonly seen = new Map<FXPNode, ControlInfo>();
@@ -99,7 +121,7 @@ export class ControlResolver {
     for (const sdt of sdts) {
       let info = this.seen.get(sdt);
       if (!info) {
-        info = readControlInfo(sdt, current);
+        info = controlInfoFor(sdt, current);
         this.seen.set(sdt, info);
       }
       current = info;

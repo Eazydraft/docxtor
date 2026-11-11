@@ -295,9 +295,11 @@ export interface NormalizedParagraph {
  * a table, a row or a cell. The text it holds is part of the paragraph text.
  *
  * One object stands for one `w:sdt` while the document is open: every node
- * inside the control refers to the same object, and a patch that changes the
- * control (a fill, a new drop-down value, a ticked checkbox) updates it in
- * place, so it always describes the document as it is now.
+ * inside the control refers to the same object, and it is kept across
+ * patches, accept and reject. A patch that changes the control (a fill, a
+ * new drop-down value, a ticked checkbox) updates it in place, so it always
+ * describes the document as it is now. An atomic batch is the exception: it
+ * swaps in a copy of the document, with new objects.
  *
  * `kind` may gain values in later versions. Treat an unknown kind like
  * `"other"`: a switch over it should have a default branch.

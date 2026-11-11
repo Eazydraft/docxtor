@@ -31,9 +31,10 @@ import type {
 import { findOccurrence, resolveRunRanges } from "../mapping/text-to-runs.js";
 import { stripFormattingMarkers, parseFormattedText } from "./markdown-parser.js";
 import { createFormattedRuns, findInsertTargetRun } from "./text-ops.js";
+import { findRunParentChildren } from "./run-splitter.js";
 import { markRunsDeleted } from "./paragraph-ops.js";
 import { createInsElement, type RevisionContext } from "./revision.js";
-import { controlChain, readControlInfo } from "../normalizer/control.js";
+import { controlChain, controlInfoFor, readControlInfo } from "../normalizer/control.js";
 import {
   cloneNode,
   createElement,
@@ -339,9 +340,18 @@ export function planControlEdit(
     throw new ControlEditError(`${para.id}: a ${describe(control)} cannot be edited`);
   }
 
+  // A checkbox wrapped around a paragraph or cell is its glyph's run, not the
+  // paragraph's other text
+  const glyph = !inline && control.kind === "checkbox" ? blockGlyphRun(para, control) : undefined;
+  if (glyph && (editStart < glyph.startOffset || editEnd > glyph.endOffset)) {
+    throw new ControlEditError(
+      `${para.id}: the text is in a ${describe(control)} beside its glyph; only the glyph can be changed ` +
+        `(replace it, or use set_checkbox)`,
+    );
+  }
   const range = inline
     ? para.controls!.find((r) => r.control === inline)!
-    : { startOffset: 0, endOffset: para.text.length };
+    : glyph ?? { startOffset: 0, endOffset: para.text.length };
   const current = para.text.slice(range.startOffset, range.endOffset);
   const single = scope === "inline" || countParagraphs(control) === 1;
 
@@ -553,9 +563,7 @@ function clearPlaceholderFlag(control: ControlInfo): void {
 
 /** Re-read a control's properties into the shared ControlInfo after an edit. */
 function refresh(control: ControlInfo): void {
-  const fresh = readControlInfo(control.xmlRef, control.parent);
-  for (const key of ["options", "checked", "locked", "bound", "alias", "tag"] as const) delete control[key];
-  Object.assign(control, fresh);
+  controlInfoFor(control.xmlRef, control.parent);
 }
 
 /**
@@ -703,8 +711,12 @@ function writeCheckbox(
 ): void {
   const state = checkboxStates(control)[checked ? "checked" : "unchecked"];
 
+  // A checkbox wrapped around a paragraph or cell changes only the run of
+  // its glyph: other text there is not the checkbox's.
+  const glyphRun = scope === "block" ? blockGlyphRun(para, control) : undefined;
+
   // The glyph keeps the formatting of the one it replaces, in the state's font.
-  const oldRun = scope === "inline" ? para.runs.find((r) => r.control === control) : para.runs[0];
+  const oldRun = scope === "inline" ? para.runs.find((r) => r.control === control) : glyphRun;
   const oldRPr = oldRun ? findChild(oldRun.xmlRef, "w:rPr") : controlRunProperties(control);
   const rPrChildren = oldRPr
     ? getChildren(oldRPr).filter((c) => getTagName(c) !== "w:rPrChange").map(cloneNode)
@@ -722,7 +734,11 @@ function writeCheckbox(
   const rPr = rPrChildren.length > 0 ? createElement("w:rPr", rPrChildren) : undefined;
   const run = createFormattedRuns([{ text: state.glyph }], rPr);
 
-  replaceContent(contentArray(para, control, scope), run, revCtx, !control.placeholder);
+  if (glyphRun) {
+    replaceRun(para, glyphRun.xmlRef, run, revCtx, !control.placeholder);
+  } else {
+    replaceContent(contentArray(para, control, scope), run, revCtx, !control.placeholder);
+  }
   clearPlaceholderFlag(control);
 
   const sdtPr = findChild(control.xmlRef, "w:sdtPr");
@@ -736,6 +752,36 @@ function writeCheckbox(
     setAttr(flag, "w14:val", checked ? "1" : "0");
   }
   refresh(control);
+}
+
+/**
+ * The run that shows the glyph of a checkbox wrapped around a paragraph or
+ * cell: the first run outside any inline control whose text is the checked
+ * or the unchecked glyph.
+ */
+function blockGlyphRun(para: NormalizedParagraph, control: ControlInfo): RunMapping | undefined {
+  const { checked, unchecked } = checkboxStates(control);
+  return para.runs.find((r) => !r.control && (r.text === checked.glyph || r.text === unchecked.glyph));
+}
+
+/**
+ * Replace one run by `runs`, in whichever parent holds it. With `trackOld`
+ * the old run is marked deleted and the new ones follow it; the new runs are
+ * wrapped in `w:ins` whenever a revision context is given.
+ */
+function replaceRun(
+  para: NormalizedParagraph,
+  runNode: FXPNode,
+  runs: FXPNode[],
+  revCtx: RevisionContext | undefined,
+  trackOld: boolean,
+): void {
+  const parent = findRunParentChildren(para.xmlRef, runNode);
+  if (!parent) throw new Error(`The checkbox glyph was not found in paragraph "${para.id}"`);
+  const old = [runNode];
+  if (revCtx && trackOld) markRunsDeleted(old, revCtx);
+  else old.length = 0;
+  parent.splice(parent.indexOf(runNode), 1, ...old, ...(revCtx ? [createInsElement(revCtx, runs)] : runs));
 }
 
 /**
@@ -768,6 +814,14 @@ export function findCheckbox(
   }
   const box = boxes[n - 1]!;
   assertOpen(para.id, "the checkbox", box.control);
+  // Wrapped around a paragraph or cell, the checkbox must show its glyph in
+  // a run of its own, or hold nothing else, so that no other text is touched.
+  if (box.scope === "block" && !blockGlyphRun(para, box.control) && para.text.trim().length > 0) {
+    throw new ControlEditError(
+      `${para.id}: the checkbox content control wrapped around this paragraph shows no checkbox glyph in a run of its own; ` +
+        `it cannot be set without changing the paragraph's other text`,
+    );
+  }
   return box;
 }
 

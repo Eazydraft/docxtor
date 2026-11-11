@@ -197,7 +197,7 @@ A paragraph that holds content controls, or sits inside one, has a `controls` ar
 
 In the AST the same information is on `RunMapping.control` (the innermost inline control holding a run) and `NormalizedParagraph.controls` (the inline controls and their ranges). `NormalizedParagraph.control`, `NormalizedTable.control`, `NormalizedTableRow.control` and `NormalizedTableCell.control` all mean the same thing: the innermost control around that node, whether it wraps the node itself or something further out (a cell's control may be the one around its row or table). A table cell's JSON entry carries its `paragraphs` whenever one of them has controls.
 
-`ControlInfo` objects are live: there is one per control, shared by every node inside it, and a patch that changes the control updates it in place. `kind` may gain values in later versions; treat an unknown kind like `"other"`.
+`ControlInfo` objects are live: there is one per control, shared by every node inside it, and it is kept across patches. A patch that changes the control, or re-reads the paragraph or table around it, updates that object in place. `acceptAllRevisions` and `rejectAllRevisions` keep them as well. An atomic batch (`atomic: true`) is the exception: it works on a copy of the document and, when it succeeds, swaps the copy in, so read the controls again after one. `kind` may gain values in later versions; treat an unknown kind like `"other"`.
 
 When `includePageBreaks` is enabled, docxtor detects all three OOXML page break mechanisms:
 

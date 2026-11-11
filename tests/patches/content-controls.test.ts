@@ -1127,3 +1127,73 @@ describe("review fixes: tracked = untracked, anchors kept, shells removed", () =
     expect(doc.project("markdown")).not.toContain("{field:}");
   });
 });
+
+describe("live control objects and checkboxes around a paragraph", () => {
+  const run = (text: string): string => `<w:r><w:t xml:space="preserve">${text}</w:t></w:r>`;
+  const boxPr = `<w14:checkbox><w14:checked w14:val="0"/><w14:checkedState w14:val="2612" w14:font="MS Gothic"/><w14:uncheckedState w14:val="2610" w14:font="MS Gothic"/></w14:checkbox>`;
+  const ns = (body: string): Promise<Buffer> =>
+    createBodyDocx(body).then(async (b) => {
+      const JSZipMod = (await import("jszip")).default;
+      const zip = await JSZipMod.loadAsync(b);
+      const xml = await zip.file("word/document.xml")!.async("string");
+      zip.file("word/document.xml", xml.replace("<w:document ", '<w:document xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" '));
+      return zip.generateAsync({ type: "nodebuffer" }) as Promise<Buffer>;
+    });
+
+  it("an inline control keeps its object across a patch, and the object follows the change", async () => {
+    const doc = await load();
+    const p0 = doc.findParagraphById("p0")!;
+    const held = p0.controls![0]!.control;
+    const heldRun = p0.runs.find((r) => r.control)!.control;
+    expect(heldRun).toBe(held);
+    expect(apply(doc, { type: "add_comment", target: "p0", find: "ref", text: "?" }).success).toBe(true);
+    expect(doc.findParagraphById("p0")!.controls![0]!.control).toBe(held);
+    expect(apply(doc, { type: "replace_text", target: "p0", find: "Insert Title for Contract", replace: "Widgets" }).success).toBe(true);
+    const after = doc.findParagraphById("p0")!;
+    expect(after.controls![0]!.control).toBe(held);
+    expect(after.runs.find((r) => r.control)!.control).toBe(held);
+    expect(held.placeholder).toBe(false);
+  });
+
+  it("row and cell controls keep their objects across add_table_row and delete_table_row", async () => {
+    const doc = await load();
+    const table = doc.findTableById("tbl0")!;
+    const held = table.rows[1]!.cells[1]!.control!;
+    const heldPara = table.rows[1]!.cells[1]!.paragraphs[0]!.control;
+    expect(heldPara).toBe(held);
+    expect(apply(doc, { type: "add_table_row", target: "tbl0", afterRow: 2, cells: ["a", "b"] }).success).toBe(true);
+    expect(doc.findTableById("tbl0")!.rows[1]!.cells[1]!.control).toBe(held);
+    expect(apply(doc, { type: "delete_table_row", target: "tbl0", row: 3 }).success).toBe(true);
+    expect(doc.findTableById("tbl0")!.rows[1]!.cells[1]!.control).toBe(held);
+    expect(apply(doc, { type: "replace_text", target: "tbl0.r1.c1.p0", find: "Choose an item.", replace: "Ongoing supply" }).success).toBe(true);
+    expect(held.placeholder).toBe(false);
+  });
+
+  it.each([[undefined], [TRACKED]])("set_checkbox on a checkbox around a paragraph changes only the glyph (%#)", async (options) => {
+    const doc = await Docxtor.load(
+      await ns(`<w:sdt><w:sdtPr><w:id w:val="1"/>${boxPr}</w:sdtPr><w:sdtContent><w:p><w:r><w:t>☐</w:t></w:r>${run(" Yes, and more")}</w:p></w:sdtContent></w:sdt>`),
+    );
+    expect(apply(doc, { type: "set_checkbox", target: "p0", checked: true }, options).success).toBe(true);
+    if (options) doc.acceptAllRevisions();
+    expect(doc.findParagraphById("p0")!.text).toBe("☒ Yes, and more");
+    expect(doc.toString()).toContain('<w14:checked w14:val="1"/>');
+  });
+
+  it("replacing the glyph of a checkbox around a paragraph works; editing the text beside it is refused", async () => {
+    const doc = await Docxtor.load(
+      await ns(`<w:sdt><w:sdtPr><w:id w:val="1"/>${boxPr}</w:sdtPr><w:sdtContent><w:p><w:r><w:t>☐</w:t></w:r>${run(" Yes")}</w:p></w:sdtContent></w:sdt>`),
+    );
+    expect(apply(doc, { type: "replace_text", target: "p0", find: "Yes", replace: "No" }).error).toContain("only the glyph can be changed");
+    expect(apply(doc, { type: "replace_text", target: "p0", find: "☐", replace: "☒" }).success).toBe(true);
+    expect(doc.findParagraphById("p0")!.text).toBe("☒ Yes");
+  });
+
+  it("set_checkbox is refused when a checkbox around a paragraph has no glyph run of its own", async () => {
+    const doc = await Docxtor.load(
+      await ns(`<w:sdt><w:sdtPr><w:id w:val="1"/>${boxPr}</w:sdtPr><w:sdtContent><w:p>${run("☐ Yes")}</w:p></w:sdtContent></w:sdt>`),
+    );
+    const before = doc.toString();
+    expect(apply(doc, { type: "set_checkbox", target: "p0", checked: true }).error).toContain("cannot be set without changing the paragraph's other text");
+    expect(doc.toString()).toBe(before);
+  });
+});
