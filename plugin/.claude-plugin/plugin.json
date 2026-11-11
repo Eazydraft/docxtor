@@ -1,6 +1,6 @@
 {
   "name": "docxtor",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Redline Word documents: tracked changes, comments, and accepting or rejecting a counterparty's changes, leaving the rest of the .docx untouched.",
   "author": {
     "name": "Lucio AI"
