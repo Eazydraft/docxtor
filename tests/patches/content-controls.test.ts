@@ -669,3 +669,31 @@ describe("insert_text at the edge of a control", () => {
     expect(doc.findParagraphById("p1")!.text).toBe("Contact: Ms Jane Roe Dept Legal");
   });
 });
+
+describe("controls left empty by rejecting a tracked fill", () => {
+  const fillThenReject = async (target: string, find: string, replace: string): Promise<string> => {
+    const doc = await load();
+    expect(apply(doc, { type: "replace_text", target, find, replace }, TRACKED).success).toBe(true);
+    doc.rejectAllRevisions();
+    return doc.project("markdown");
+  };
+
+  it("a typed control shows as an empty field, not as a field with an empty value", async () => {
+    expect(await fillThenReject("tbl0.r0.c1.p0", "Select date", "1 May 2026")).toContain("[tbl0.r0.c1.p0] {field date:} |");
+    expect(await fillThenReject("tbl0.r1.c1.p0", "Choose an item.", "Ongoing supply")).toContain(
+      '[tbl0.r1.c1.p0] {field dropdown "One-off purchase" OR "Ongoing supply":} |',
+    );
+    expect(await fillThenReject("p9", "Pick or type", "Teal")).toContain('[p9] Colour: {field combo "Red" OR "Blue":}');
+  });
+
+  it("a block-level control with nothing in it still shows as a field", async () => {
+    expect(await fillThenReject("p7", "Click here to enter text.", "Background.")).toContain("[p7] {field:}");
+  });
+
+  it("an empty paragraph in a block control that holds text elsewhere is just an empty paragraph", async () => {
+    const doc = await load();
+    expect(apply(doc, { type: "delete_text", target: "p3", find: "Deliverables follow." }).success).toBe(true);
+    const md = doc.project("markdown");
+    expect(md).toContain("[p2] Scope of work.\n[p3] \n[p4]");
+  });
+});

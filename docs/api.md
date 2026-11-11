@@ -92,7 +92,7 @@ Every element has a stable ID (`p0`, `tbl0.r1.c0.p0`, `hdr.default.p0`, etc.) th
 | `{field: prompt}` | An empty control. The text is its prompt, not an answer. |
 | `{field date: prompt}`, `{field dropdown "A" OR "B": prompt}`, `{field combo "A" OR "B": prompt}` | An empty date picker, drop-down list or combo box, with the list items. |
 | `{field date= value}`, `{field dropdown "A" OR "B"= value}` | A filled date picker, drop-down list or combo box. |
-| `{field:}` | A control with no text at all. |
+| `{field:}`, `{field date:}`, `{field dropdown "A" OR "B":}` | A control with no text at all, not even a prompt. |
 | `{field picture}` | A picture control. |
 
 A filled rich-text or plain-text control prints as ordinary text, a checkbox prints its glyph (`☐`, `☒`), and a building-block gallery such as a table of contents prints as its content. The markers are annotations, not document text: `find` matches the text inside them. [Text patches inside a content control](patches.md#text-patches-inside-a-content-control) says what an edit there does.

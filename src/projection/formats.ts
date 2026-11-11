@@ -17,6 +17,7 @@ import type {
   ProjectionOptions,
   ControlInfo,
   ControlRange,
+  FXPNode,
 } from "../types.js";
 import { idsCarrySection } from "../normalizer/header-footer.js";
 import { getLevelInfo } from "../patches/numbering.js";
@@ -698,7 +699,8 @@ const CONTROL_WORD: Partial<Record<ControlInfo["kind"], string>> = {
  *   `{field dropdown "One-off" OR "Ongoing": Choose an item.}`.
  * - A filled drop-down list, combo box or date: `{field date= 1 May 2026}`,
  *   so the kind and the options stay visible.
- * - A control with no text at all: `{field:}`; a picture: `{field picture}`.
+ * - A control with no text at all: `{field:}`, or `{field date:}` and the
+ *   like for a typed one; a picture: `{field picture}`.
  * - A filled rich-text or plain-text control, a checkbox (its glyph reads
  *   by itself) and a building-block gallery: no marker; they are content.
  *
@@ -724,14 +726,44 @@ function controlMarker(
     return { open: empty ? `{field${word}${options}:` : `{field${word}${options}: `, close: "}" };
   }
   if (control.kind === "dropDownList" || control.kind === "comboBox" || control.kind === "date") {
-    return { open: empty ? `{field${word}${options}=` : `{field${word}${options}= `, close: "}" };
+    // With no text there is no value to show, whatever the prompt flag says
+    return { open: empty ? `{field${word}${options}:` : `{field${word}${options}= `, close: "}" };
   }
-  // An inline text control with nothing in it is still a field to see. An
-  // empty paragraph inside a filled block control is just an empty paragraph.
-  if (empty && !whole && (control.kind === "richText" || control.kind === "text")) {
+  // A text control with nothing in it is still a field to see. An empty
+  // paragraph inside a block control that holds something elsewhere is just
+  // an empty paragraph.
+  if (
+    empty &&
+    (control.kind === "richText" || control.kind === "text") &&
+    (!whole || !controlHasContent(control))
+  ) {
     return { open: "{field:", close: "}" };
   }
   return undefined;
+}
+
+/** Elements that are content of a run even though they carry no text. */
+const RUN_OBJECTS = new Set(["w:drawing", "w:pict", "w:object", "w:sym", "w:fldChar", "w:instrText"]);
+
+/** True if a control holds any current text or object (deleted text does not count). */
+function controlHasContent(control: ControlInfo): boolean {
+  const visit = (nodes: FXPNode[]): boolean => {
+    for (const node of nodes) {
+      const tag = Object.keys(node).find((k) => k !== ":@");
+      if (tag === undefined || tag === "w:del" || tag === "w:moveFrom" || tag === "w:sdtPr") continue;
+      if (tag === "#text") continue;
+      if (RUN_OBJECTS.has(tag)) return true;
+      const children = node[tag];
+      if (!Array.isArray(children)) continue;
+      if (tag === "w:t") {
+        if (children.some((c) => "#text" in c && String(c["#text"]).length > 0)) return true;
+        continue;
+      }
+      if (visit(children)) return true;
+    }
+    return false;
+  };
+  return visit([control.xmlRef]);
 }
 
 /**
