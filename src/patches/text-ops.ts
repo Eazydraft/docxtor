@@ -28,7 +28,14 @@ import {
   splitRunAtOffset,
   findRunParentChildren,
 } from "./run-splitter.js";
-import { readRunContent, writeRunContent, carryCharNodes } from "./run-content.js";
+import {
+  readRunContent,
+  writeRunContent,
+  carryCharNodes,
+  createRunFromContent,
+  hasContent,
+  type RunContent,
+} from "./run-content.js";
 import {
   getChildren,
   setTextContent,
@@ -265,6 +272,7 @@ function executeReplaceTextRevision(
   }
   // Mark the matched runs deleted (or drop them, where they were an
   // unaccepted insertion) and put the replacement where the match began.
+  matchedRuns = splitAtNoteReferences(paragraph.xmlRef, matchedRuns);
   const place = detachMatchedRuns(paragraph.xmlRef, matchedRuns, revCtx);
   if (newRuns.length === 0) return;
 
@@ -275,6 +283,62 @@ function executeReplaceTextRevision(
   } else {
     place.parentChildren.splice(place.index, 0, createInsElement(revCtx, newRuns));
   }
+}
+
+/**
+ * Split matched runs at the footnote and endnote references they hold, so
+ * each reference is in a run of its own, between the pieces of text, and
+ * return the runs that hold the matched text.
+ *
+ * A reference that sits between two `w:t` nodes of a matched run would
+ * otherwise be copied into the `w:del` of a tracked edit and vanish when the
+ * change is accepted, while the same edit made untracked keeps it. The
+ * reference is not text: left outside the deletion and where it was, it
+ * survives accepting the change and is back in place when it is rejected.
+ */
+function splitAtNoteReferences(paragraphNode: FXPNode, matchedRuns: FXPNode[]): FXPNode[] {
+  const isNoteRef = (n: FXPNode): boolean => "w:footnoteReference" in n || "w:endnoteReference" in n;
+  const result: FXPNode[] = [];
+
+  for (const run of matchedRuns) {
+    const content = readRunContent(run);
+    const refs = content.anchored.filter((a) => isNoteRef(a.node));
+    const parent = refs.length > 0 ? findRunParentChildren(paragraphNode, run) : undefined;
+    if (!parent) {
+      result.push(run);
+      continue;
+    }
+
+    const others = content.anchored.filter((a) => !isNoteRef(a.node));
+    const cuts = [...new Set(refs.map((r) => r.offset))].sort((x, y) => x - y);
+    const pieces: FXPNode[] = [];
+    // The text and other children from `start` up to `end`; the last piece
+    // also takes whatever sits at the very end of the run
+    const textPiece = (start: number, end: number, last: boolean): void => {
+      const piece: RunContent = { rPr: content.rPr, text: content.text.slice(start, end), anchored: [], charNodes: new Map() };
+      for (const a of others) {
+        if (a.offset >= start && (a.offset < end || last)) piece.anchored.push({ node: a.node, offset: a.offset - start });
+      }
+      for (const [offset, node] of content.charNodes ?? []) {
+        if (offset >= start && offset < end) piece.charNodes!.set(offset - start, node);
+      }
+      if (!hasContent(piece)) return;
+      const pieceRun = createRunFromContent(piece);
+      pieces.push(pieceRun);
+      if (piece.text.length > 0) result.push(pieceRun);
+    };
+
+    let start = 0;
+    for (const cut of cuts) {
+      textPiece(start, cut, false);
+      const refNodes = refs.filter((r) => r.offset === cut).map((r) => r.node);
+      pieces.push({ "w:r": [...(content.rPr ? [cloneNode(content.rPr)] : []), ...refNodes] });
+      start = cut;
+    }
+    textPiece(start, content.text.length, true);
+    parent.splice(parent.indexOf(run), 1, ...pieces);
+  }
+  return result;
 }
 
 /**
@@ -697,7 +761,9 @@ function executeDeleteTextRevision(
   }
 
   // Mark each matched run deleted in its own parent; runs that were an
-  // unaccepted insertion are simply removed.
+  // unaccepted insertion are simply removed. A note reference inside the
+  // match stays, as it does when the same text is deleted untracked.
+  matchedRuns = splitAtNoteReferences(paragraph.xmlRef, matchedRuns);
   detachMatchedRuns(paragraph.xmlRef, matchedRuns, revCtx);
 }
 

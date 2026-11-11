@@ -57,14 +57,25 @@ export function runNoteReferences(runNode: FXPNode): NoteReference[] {
   return refs;
 }
 
-/** Every note reference in the body, in document order (table cells included). */
+/**
+ * Every note reference in the body, in document order. Inside a table cell
+ * the paragraphs and nested tables are taken in the order of the XML, so a
+ * reference in a nested table is counted where it sits, between the
+ * paragraphs around that table.
+ */
 function bodyNoteReferences(doc: NormalizedDocument): NoteReference[] {
   const refs: NoteReference[] = [];
   const fromTable = (table: NormalizedTable): void => {
     for (const row of table.rows) {
       for (const cell of row.cells) {
-        for (const para of cell.paragraphs) refs.push(...(para.noteRefs ?? []));
-        for (const nested of cell.nestedTables) fromTable(nested);
+        const paragraphs = new Map(cell.paragraphs.map((p) => [p.xmlRef, p]));
+        const nested = new Map(cell.nestedTables.map((t) => [t.xmlRef, t]));
+        for (const child of getChildren(cell.xmlRef)) {
+          const para = paragraphs.get(child);
+          if (para) refs.push(...(para.noteRefs ?? []));
+          const inner = nested.get(child);
+          if (inner) fromTable(inner);
+        }
       }
     }
   };

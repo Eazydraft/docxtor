@@ -129,6 +129,50 @@ describe("note marks in the view", () => {
   });
 });
 
+describe("a reference inside the edited text", () => {
+  // The reference sits between two w:t nodes of one run
+  const inline = (): Promise<Buffer> =>
+    createNotesDocx({
+      body: `<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>The Bank</w:t><w:footnoteReference w:id="1"/><w:t xml:space="preserve"> lends money.</w:t></w:r></w:p>`,
+      footnotes: note("footnote", 1, " One."),
+    });
+
+  it.each([
+    ["replace_text", { type: "replace_text", target: "p0", find: "Bank lends", replace: "Lender gives" }, "[p0] The Lender gives[^1] money."],
+    ["delete_text", { type: "delete_text", target: "p0", find: "Bank lends " }, "[p0] The [^1]money."],
+  ] as const)("a tracked %s that spans it keeps the reference when accepted, as the untracked edit does", async (_name, patch, expected) => {
+    const untracked = await Docxtor.load(await inline());
+    expect(untracked.applyPatches([patch])[0]).toMatchObject({ success: true });
+    expect(untracked.project("markdown", { includeNotes: false })).toBe(expected);
+
+    const tracked = await Docxtor.load(await inline());
+    expect(tracked.applyPatches([patch], TRACK)[0]).toMatchObject({ success: true });
+    // The reference is outside the deletion, where it was, in a run that keeps the formatting
+    expect(tracked.toString()).not.toMatch(/<w:del [^>]*>(?:(?!<\/w:del>).)*footnoteReference/);
+    expect(tracked.toString()).toContain(`<w:r><w:rPr><w:b/></w:rPr><w:footnoteReference w:id="1"/></w:r>`);
+    tracked.acceptAllRevisions();
+    expect(tracked.project("markdown", { includeNotes: false })).toBe(expected);
+
+    const rejected = await Docxtor.load(await inline());
+    rejected.applyPatches([patch], TRACK);
+    rejected.rejectAllRevisions();
+    expect(rejected.project("markdown", { includeNotes: false })).toBe("[p0] The Bank[^1] lends money.");
+  });
+
+  it("numbers a reference in a nested table where it sits between the cell's paragraphs", async () => {
+    const doc = await Docxtor.load(await createNotesDocx({
+      body:
+        `<w:tbl><w:tr><w:tc><w:p>${t("First")}${fnRef(1)}</w:p>` +
+        `<w:tbl><w:tr><w:tc><w:p>${t("Nested")}${fnRef(2)}</w:p></w:tc></w:tr></w:tbl>` +
+        `<w:p>${t("Last")}${fnRef(3)}</w:p></w:tc></w:tr></w:tbl>`,
+      footnotes: note("footnote", 1, " A.") + note("footnote", 2, " B.") + note("footnote", 3, " C."),
+    }));
+    expect([...doc.getFootnotes().values()].map((n) => [n.idPrefix, n.noteId])).toEqual([["fn1", "1"], ["fn2", "2"], ["fn3", "3"]]);
+    expect(doc.findParagraphById("tbl0.r0.c0.tbl0.r0.c0.p0")!.noteRefs).toMatchObject([{ noteId: "2" }]);
+    expect(doc.findParagraphById("fn2.p0")!.text).toBe(" B.");
+  });
+});
+
 describe("the notes section", () => {
   it("lists each note once, without the separator entries or the note's own mark", async () => {
     const doc = await Docxtor.load(await twoNotes());
