@@ -9,7 +9,7 @@ import JSZip from "jszip";
 import { Docxtor, type NormalizedTable, type Patch, type PatchOptions } from "../../src/index.js";
 import { getChildren, getTagName } from "../../src/xml/helpers.js";
 import { parseDate } from "../../src/patches/control-ops.js";
-import { createContentControlDocx, createTableDocx } from "../fixtures/create-docx.js";
+import { createContentControlDocx, createTableDocx, createBodyDocx } from "../fixtures/create-docx.js";
 
 const load = async (): Promise<Docxtor> => Docxtor.load(await createContentControlDocx());
 
@@ -534,5 +534,88 @@ describe("checkboxes", () => {
     expect(apply(doc, { type: "set_checkbox", target: "p4", checked: true, occurrence: 2 }).error).toBe(
       "p4: occurrence 2 asked for, but the paragraph has 1 checkbox control",
     );
+  });
+});
+
+// =============================================================================
+// Locks on controls that a structural edit would remove or change
+// =============================================================================
+
+describe("locks seen through nesting, tables and rows", () => {
+  const run = (text: string): string => `<w:r><w:t>${text}</w:t></w:r>`;
+  const control = (id: number, pr: string, content: string): string =>
+    `<w:sdt><w:sdtPr>${pr}<w:id w:val="${id}"/></w:sdtPr><w:sdtContent>${content}</w:sdtContent></w:sdt>`;
+  const cell = (inner: string): string => `<w:tc><w:p>${inner}</w:p></w:tc>`;
+  const table = (rows: string): string => `<w:tbl><w:tblPr/><w:tblGrid><w:gridCol/><w:gridCol/></w:tblGrid>${rows}</w:tbl>`;
+  const from = async (body: string): Promise<Docxtor> => Docxtor.load(await createBodyDocx(body));
+
+  it("delete_paragraph is refused when a control around an inline control is locked against deletion", async () => {
+    const doc = await from(
+      `<w:p>${run("Party: ")}${control(1, `<w:alias w:val="Outer"/><w:lock w:val="sdtLocked"/>`, run("Dept ") + control(2, "<w:text/>", run("Legal")))}</w:p>` +
+        `<w:p>${run("Next")}</w:p>`,
+    );
+    for (const options of [undefined, TRACKED]) {
+      const r = apply(doc, { type: "delete_paragraph", target: "p0" }, options);
+      expect(r.error).toBe('p0: the paragraph holds a content control "Outer" that is locked against deletion');
+    }
+    expect(doc.getParagraphs()).toHaveLength(2);
+  });
+
+  it("delete_paragraph inside a block control locked against deletion is allowed: the control stays", async () => {
+    const doc = await from(
+      control(1, `<w:lock w:val="sdtLocked"/>`, `<w:p>${run("One ")}${control(2, "", run("inner"))}</w:p><w:p>${run("Two")}</w:p>`),
+    );
+    expect(apply(doc, { type: "delete_paragraph", target: "p0" }).success).toBe(true);
+    expect(doc.toString()).toContain('<w:id w:val="1"/>');
+    expect(doc.getParagraphs().map((p) => p.text)).toEqual(["Two"]);
+  });
+
+  it("add_table and add_list after a table check the control around that table", async () => {
+    const doc = await from(
+      control(1, `<w:alias w:val="Schedule"/><w:lock w:val="sdtContentLocked"/>`, table(`<w:tr>${cell(run("a"))}${cell(run("b"))}</w:tr>`)) +
+        `<w:p>${run("After")}</w:p>`,
+    );
+    const message = 'tbl0: the text is in a locked content control "Schedule"; its content cannot be edited';
+    expect(apply(doc, { type: "add_table", afterId: "tbl0", rows: [["x", "y"]] }).error).toBe(message);
+    expect(apply(doc, { type: "add_list", afterId: "tbl0", listType: "bullet", items: ["x"] }).error).toBe(message);
+    // Rows of a table inside a content-locked control cannot change either
+    const locked = 'tbl0: the table is in a locked content control "Schedule"; its content cannot be edited';
+    expect(apply(doc, { type: "add_table_row", target: "tbl0", afterRow: 0, cells: ["x", "y"] }).error).toBe(locked);
+    expect(apply(doc, { type: "delete_table_row", target: "tbl0", row: 0 }).error).toBe(locked);
+    expect(doc.getTables()).toHaveLength(1);
+    expect(doc.getTables()[0]!.rows).toHaveLength(1);
+  });
+
+  it("add_table after a table in an open rich-text control lands inside it", async () => {
+    const doc = await from(control(1, "", table(`<w:tr>${cell(run("a"))}${cell(run("b"))}</w:tr>`)) + `<w:p>${run("After")}</w:p>`);
+    expect(apply(doc, { type: "add_table", afterId: "tbl0", rows: [["x", "y"]] }).success).toBe(true);
+    expect(doc.toString()).toMatch(/<\/w:tbl><w:tbl>.*<\/w:tbl><\/w:sdtContent>/);
+  });
+
+  it.each([
+    ["a locked control around a cell", `<w:tr>${cell(run("k"))}${control(1, `<w:alias w:val="Amount"/><w:lock w:val="sdtLocked"/>`, cell(run("v")))}</w:tr>`],
+    ["a locked control inside a cell", `<w:tr>${cell(run("k"))}${cell(control(1, `<w:alias w:val="Amount"/><w:lock w:val="sdtLocked"/>`, run("v")))}</w:tr>`],
+    ["a content-locked control inside a cell", `<w:tr>${cell(run("k"))}${cell(control(1, `<w:alias w:val="Amount"/><w:lock w:val="contentLocked"/>`, run("v")))}</w:tr>`],
+    ["a locked control around a nested control", `<w:tr>${cell(run("k"))}${cell(control(1, `<w:alias w:val="Amount"/><w:lock w:val="sdtLocked"/>`, control(2, "", run("v"))))}</w:tr>`],
+  ])("delete_table_row is refused for a row holding %s", async (_name, lockedRow) => {
+    const doc = await from(table(`<w:tr>${cell(run("h1"))}${cell(run("h2"))}</w:tr>${lockedRow}`));
+    const before = doc.toString();
+    for (const options of [undefined, TRACKED]) {
+      const r = apply(doc, { type: "delete_table_row", target: "tbl0", row: 1 }, options);
+      expect(r.error).toBe('tbl0 row 1: the row holds a locked content control "Amount"; it cannot be deleted');
+    }
+    expect(doc.toString()).toBe(before);
+    // A row without the control is still deletable
+    expect(apply(doc, { type: "delete_table_row", target: "tbl0", row: 0 }).success).toBe(true);
+  });
+
+  it("an empty control flagged as showing its prompt prints without a separator space", async () => {
+    const doc = await from(
+      `<w:p>${run("Name: ")}<w:sdt><w:sdtPr><w:id w:val="1"/><w:showingPlcHdr/></w:sdtPr><w:sdtContent/></w:sdt></w:p>` +
+        `<w:p>${run("When: ")}<w:sdt><w:sdtPr><w:id w:val="2"/><w:showingPlcHdr/><w:date/></w:sdtPr><w:sdtContent/></w:sdt></w:p>`,
+    );
+    const md = doc.project("markdown");
+    expect(md).toContain("[p0] Name: {field:}");
+    expect(md).toContain("[p1] When: {field date:}");
   });
 });

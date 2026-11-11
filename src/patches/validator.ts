@@ -18,6 +18,8 @@ import {
   checkRunsEditable,
   checkBlockInsert,
   checkParagraphDelete,
+  checkTableEditable,
+  checkRowDelete,
   findCheckbox,
 } from "./control-ops.js";
 import { resolveHeaderFooterContainer } from "./container-utils.js";
@@ -92,10 +94,17 @@ function checkControls(patch: Patch, doc: NormalizedDocument, markers: boolean):
       return;
     case "add_table":
     case "add_list": {
+      // The new block lands next to the element, inside the control that wraps it
       const after = patch.afterId && !patch.container ? findElementById(patch.afterId, doc) : undefined;
-      if (after?.kind === "paragraph") checkBlockInsert(after);
+      if (after && after.kind !== "page_break") checkBlockInsert(after);
       return;
     }
+    case "add_table_row":
+      checkTableEditable(findTableById(patch.target, doc)!);
+      return;
+    case "delete_table_row":
+      checkRowDelete(findTableById(patch.target, doc)!, patch.row);
+      return;
     default:
       return;
   }

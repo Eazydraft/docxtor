@@ -17,6 +17,7 @@
 
 import type {
   NormalizedParagraph,
+  NormalizedTable,
   ControlInfo,
   RunMapping,
   ReplaceTextPatch,
@@ -142,19 +143,20 @@ export function checkRunsEditable(para: NormalizedParagraph, runs?: RunMapping[]
  * put next to `para`. It lands in the control that wraps `para`, so that
  * control must be an open, filled rich-text one.
  */
-export function checkBlockInsert(para: NormalizedParagraph): void {
-  const control = para.control;
+export function checkBlockInsert(target: NormalizedParagraph | NormalizedTable): void {
+  const control = target.control;
   if (!control) return;
-  assertEditable(para.id, control);
+  const what = target.kind === "table" ? "table" : "paragraph";
+  assertEditable(target.id, control);
   if (control.placeholder) {
     throw new ControlEditError(
-      `${para.id}: the paragraph is the placeholder of an empty ${describe(control)}; ` +
+      `${target.id}: the ${what} is the placeholder of an empty ${describe(control)}; ` +
         `fill the control with replace_text before adding content to it`,
     );
   }
   if (control.kind !== "richText" && control.kind !== "docPart" && control.kind !== "other") {
     throw new ControlEditError(
-      `${para.id}: the paragraph is in a ${describe(control)}, which holds a single value; ` +
+      `${target.id}: the ${what} is in a ${describe(control)}, which holds a single value; ` +
         `content cannot be added to it`,
     );
   }
@@ -172,13 +174,73 @@ export function checkParagraphDelete(para: NormalizedParagraph): void {
       );
     }
   }
+  // An inline control goes with the paragraph, and so does every control it
+  // is nested in, up to (not including) the one wrapped around the paragraph.
+  const kept = new Set(controlChain(para.control));
   for (const range of para.controls ?? []) {
-    if (range.control.locked === "control" || range.control.locked === "both") {
+    for (const c of controlChain(range.control)) {
+      if (kept.has(c)) break;
+      if (c.locked === "control" || c.locked === "both") {
+        throw new ControlEditError(
+          `${para.id}: the paragraph holds a ${describe(c)} that is locked against deletion`,
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Check that the rows of a table may change (a row added or deleted): not
+ * when a content-locked control wraps the table.
+ */
+export function checkTableEditable(table: NormalizedTable): void {
+  for (const c of controlChain(table.control)) {
+    if (c.locked === "content" || c.locked === "both") {
       throw new ControlEditError(
-        `${para.id}: the paragraph holds a ${describe(range.control)} that is locked against deletion`,
+        `${table.id}: the table is in a locked ${describe(c)}; its content cannot be edited`,
       );
     }
   }
+}
+
+/**
+ * Check that a table row may be deleted. The row takes with it every
+ * control inside it (around a cell, around or inside a cell's paragraphs,
+ * in a nested table), so none of them may be locked: neither against
+ * deletion nor against editing its content.
+ */
+export function checkRowDelete(table: NormalizedTable, rowIndex: number): void {
+  checkTableEditable(table);
+  const row = table.rows[rowIndex];
+  if (!row) return;
+
+  // Controls around the table stay; everything below them goes with the row.
+  const kept = new Set(controlChain(table.control));
+  const where = `${table.id} row ${rowIndex}`;
+  const check = (control: ControlInfo | undefined): void => {
+    for (const c of controlChain(control)) {
+      if (kept.has(c)) break;
+      if (c.locked) {
+        throw new ControlEditError(
+          `${where}: the row holds a locked ${describe(c)}; it cannot be deleted`,
+        );
+      }
+    }
+  };
+  const visit = (cells: NormalizedTable["rows"][number]["cells"]): void => {
+    for (const cell of cells) {
+      check(cell.control);
+      for (const para of cell.paragraphs) {
+        check(para.control);
+        for (const range of para.controls ?? []) check(range.control);
+      }
+      for (const nested of cell.nestedTables) {
+        check(nested.control);
+        for (const nestedRow of nested.rows) visit(nestedRow.cells);
+      }
+    }
+  };
+  visit(row.cells);
 }
 
 // =============================================================================

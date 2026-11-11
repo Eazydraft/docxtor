@@ -720,7 +720,8 @@ function controlMarker(
     return { open: empty ? "{field picture" : "{field picture: ", close: "}" };
   }
   if (control.placeholder) {
-    return { open: `{field${word}${options}: `, close: "}" };
+    // Flagged as showing its prompt but holding no text: no separator space
+    return { open: empty ? `{field${word}${options}:` : `{field${word}${options}: `, close: "}" };
   }
   if (control.kind === "dropDownList" || control.kind === "comboBox" || control.kind === "date") {
     return { open: empty ? `{field${word}${options}=` : `{field${word}${options}= `, close: "}" };
