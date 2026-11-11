@@ -120,6 +120,26 @@ describe("xml parser + serializer round-trip", () => {
     expect(serializeXml(parseXml(core))).toBe(core);
   });
 
+  it("is not fooled by /> inside an attribute value, a comment or CDATA", () => {
+    for (const xml of [
+      `<Properties><HyperlinkBase url="https://example.test/>"></HyperlinkBase><Company></Company></Properties>`,
+      `<Properties><Link href='a/>b'></Link><Company></Company></Properties>`,
+      `<Properties><!-- was <Company/> --><Company></Company></Properties>`,
+      `<Properties><Note><![CDATA[<x/>]]></Note><Company></Company></Properties>`,
+    ]) {
+      expect(serializeXml(parseXml(xml)).replace(/'a\/>b'/, `"a/>b"`)).toBe(xml.replace(/'a\/>b'/, `"a/>b"`));
+    }
+  });
+
+  it("finds an open-close pair whose start tag has > in an attribute value", () => {
+    const xml = `<Properties><Rule test="a > b"></Rule><Pages>3</Pages></Properties>`;
+    expect(serializeXml(parseXml(xml))).toBe(xml);
+  });
+
+  it("a part with one real self-closing tag is written self-closed throughout", () => {
+    expect(serializeXml(parseXml(`<a><b x="1/>"></b><c/></a>`))).toBe(`<a><b x="1/>"/><c/></a>`);
+  });
+
   it("still self-closes w:rPr children", () => {
     const xml = `<w:rPr><w:b/></w:rPr>`;
     expect(serializeXml(parseXml(xml))).toBe(xml);

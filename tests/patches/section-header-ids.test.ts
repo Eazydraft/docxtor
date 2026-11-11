@@ -109,6 +109,50 @@ describe("header and footer ids across sections", () => {
   });
 });
 
+describe("a part referenced more than once", () => {
+  /** Rewrite the fixture so section 2's first-page header is reached through a second relationship to header1.xml. */
+  async function sharedPartDocx(sameSection: boolean): Promise<Buffer> {
+    const zip = await JSZip.loadAsync(await createTwoSectionDocx());
+    const rels = await zip.file("word/_rels/document.xml.rels")!.async("string");
+    zip.file("word/_rels/document.xml.rels", rels.replace('Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header2.xml"', 'Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"'));
+    if (sameSection) {
+      // Both relationship ids referenced from section 1: as its first-page and its even-page header
+      const doc = await zip.file("word/document.xml")!.async("string");
+      zip.file("word/document.xml", doc
+        .replace('<w:headerReference w:type="first" r:id="rId1"/>', '<w:headerReference w:type="first" r:id="rId1"/><w:headerReference w:type="even" r:id="rId3"/>')
+        .replace('<w:headerReference w:type="first" r:id="rId3"/>', ""));
+    }
+    return zip.generateAsync({ type: "nodebuffer" }) as Promise<Buffer>;
+  }
+
+  it.each([
+    ["from two sections", false],
+    ["twice from one section", true],
+  ])("under two relationship ids %s appears once, with its first reference", async (_name, sameSection) => {
+    const doc = await Docxtor.load(await sharedPartDocx(sameSection));
+    const headers = [...doc.getHeaders().values()];
+    const shared = headers.filter((h) => h.paragraphs[0]!.text === "Section one first-page header");
+    expect(shared).toHaveLength(1);
+    expect([shared[0]!.rId, shared[0]!.sectionIndex, shared[0]!.variant]).toEqual(["rId1", 1, "first"]);
+
+    // No id names two paragraphs, anywhere
+    const ids = [...headers, ...doc.getFooters().values()].flatMap((hf) => hf.paragraphs.map((p) => p.id));
+    expect(new Set(ids).size).toBe(ids.length);
+    const md = projectToMarkdown(doc.getAST());
+    expect(md.match(/Section one first-page header/g)).toHaveLength(1);
+  });
+
+  it("an edit to the shared part is written once", async () => {
+    const input = await sharedPartDocx(false);
+    const doc = await Docxtor.load(input);
+    const id = [...doc.getHeaders().values()][0]!.paragraphs[0]!.id;
+    const results = doc.applyPatches([{ type: "replace_text", target: id, find: "Section one", replace: "Shared" }]);
+    expect(results[0]!.success).toBe(true);
+    const out = await part(await doc.toBuffer(), "word/header1.xml");
+    expect(out.match(/Shared/g)).toHaveLength(1);
+  });
+});
+
 describe("container with section", () => {
   const append = (section?: number): Patch => ({
     type: "append_text",

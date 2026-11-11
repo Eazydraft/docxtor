@@ -46,12 +46,34 @@ export function parseXml(xml: string): FXPNode[] {
   // Word writes empty elements self-closed in word/*.xml and as an open-close
   // pair in docProps/*.xml. The form is a property of the part, so remember
   // which one this part uses.
-  if (!xml.includes("/>") && EMPTY_PAIR_RE.test(xml)) expandedEmptyElements.add(nodes);
+  if (usesOnlyEmptyPairs(xml)) expandedEmptyElements.add(nodes);
   return nodes;
 }
 
+/** Attributes of a start tag. A quoted value may hold `>` or `/>`. */
+const ATTRIBUTES = String.raw`(?:\s+[^\s=<>"'\/]+\s*=\s*(?:"[^"]*"|'[^']*'))*\s*`;
+
+/** A self-closing tag: `<w:b/>`, `<w:sz w:val="24"/>`. */
+const SELF_CLOSING_RE = new RegExp(String.raw`<[^\s<>\/!?"'=]+${ATTRIBUTES}\/>`);
+
 /** An empty element written as an open-close pair: `<dc:title></dc:title>`. */
-const EMPTY_PAIR_RE = /<([^\s<>\/!?]+)(?:\s[^<>]*)?><\/\1>/;
+const EMPTY_PAIR_RE = new RegExp(String.raw`<([^\s<>\/!?"'=]+)${ATTRIBUTES}><\/\1\s*>`);
+
+/** Comments, CDATA sections and processing instructions: text that can hold tag-like strings. */
+const NON_ELEMENT_RE = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>/g;
+
+/**
+ * Whether a part writes its empty elements as open-close pairs: it has at
+ * least one such pair and no self-closing tag. Tags are matched as tags, so
+ * `/>` inside an attribute value, a comment or a CDATA section does not count.
+ */
+function usesOnlyEmptyPairs(xml: string): boolean {
+  // Only strip when there is something to strip besides the XML declaration
+  const markup = xml.includes("<!") || xml.lastIndexOf("<?") > 1 ? xml.replace(NON_ELEMENT_RE, "") : xml;
+  // Nearly every word/*.xml part has a self-closing tag near its start
+  if (markup.includes("/>") && SELF_CLOSING_RE.test(markup)) return false;
+  return EMPTY_PAIR_RE.test(markup);
+}
 
 /**
  * Parsed parts that write empty elements as an open-close pair: parts with

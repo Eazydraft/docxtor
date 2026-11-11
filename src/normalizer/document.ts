@@ -222,9 +222,12 @@ export function normalizeHeadersFooters(doc: NormalizedDocument): void {
     const target = relMap.get(ref.rId);
     if (!target) continue;
     const parts = ref.type === "header" ? doc.xmlParts.headers : doc.xmlParts.footers;
-    const fxp = parts.get(`word/${target}`);
-    // A part referenced again by a later section keeps its first section
-    const key = `${ref.type}:${ref.rId}`;
+    const path = `word/${target}`;
+    const fxp = parts.get(path);
+    // One entry per part. A part can be referenced more than once, by a later
+    // section or under a second relationship id; it keeps its first reference,
+    // so its paragraphs appear once and under one id.
+    const key = `${ref.type}:${path}`;
     if (!fxp || seen.has(key)) continue;
     seen.add(key);
     resolved.push({ ref, fxp });
