@@ -9,6 +9,7 @@
  */
 
 import type {
+  HeaderFooter,
   NormalizedDocument,
   NormalizedParagraph,
   NormalizedTable,
@@ -234,4 +235,55 @@ export function reNormalizeParagraph(doc: NormalizedDocument, para: NormalizedPa
   if (doc.xmlParts.numbering) {
     enrichListType(para, doc.xmlParts.numbering);
   }
+}
+
+/**
+ * Resolve a `container: { type, variant, section? }` to one header or footer.
+ *
+ * A part is matched through every reference to it, so a part shared by
+ * sections 1 and 2 is found for either section. Without `section`, the
+ * container must name exactly one part: when sections have different parts
+ * of that variant, the result is an error that lists the sections. With
+ * `section`, that section must reference one.
+ */
+export function resolveHeaderFooterContainer(
+  doc: NormalizedDocument,
+  container: { type: "header" | "footer"; variant: string; section?: number },
+): { hf: HeaderFooter; rootNode: FXPNode } | { error: string } {
+  const map = container.type === "header" ? doc.headers : doc.footers;
+  const matches = [...map.values()]
+    .map((hf) => ({ hf, refs: hf.references.filter((r) => r.variant === container.variant) }))
+    .filter((m) => m.refs.length > 0);
+  if (matches.length === 0) {
+    return { error: `No ${container.type} with variant "${container.variant}" found` };
+  }
+
+  const sections = [...new Set(matches.flatMap((m) => m.refs.map((r) => r.sectionIndex)))].sort((a, b) => a - b);
+  const list =
+    sections.length > 1
+      ? `sections ${sections.slice(0, -1).join(", ")} and ${sections[sections.length - 1]}`
+      : `section ${sections[0]}`;
+
+  let hf: HeaderFooter | undefined;
+  if (container.section === undefined) {
+    // Several sections sharing one part is not ambiguous: there is one part to edit
+    if (matches.length > 1) {
+      return {
+        error: `${container.type} '${container.variant}' exists in ${list}; say which with \`section\``,
+      };
+    }
+    hf = matches[0]!.hf;
+  } else {
+    hf = matches.find((m) => m.refs.some((r) => r.sectionIndex === container.section))?.hf;
+    if (!hf) {
+      return {
+        error: `No ${container.type} with variant "${container.variant}" in section ${container.section}; it exists in ${list}`,
+      };
+    }
+  }
+
+  const rootTag = container.type === "header" ? "w:hdr" : "w:ftr";
+  const rootNode = hf!.xmlRef.find((n) => getTagName(n) === rootTag);
+  if (!rootNode) return { error: `${container.type} part has no ${rootTag} root` };
+  return { hf: hf!, rootNode };
 }

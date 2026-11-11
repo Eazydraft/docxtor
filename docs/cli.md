@@ -12,7 +12,7 @@ docxtor <command> [options]
 
 ### `view FILE`
 
-Prints the document as one line per paragraph, each with the id that `edit` patches and `--in` options target: `[p12]` for body paragraphs, `[tbl0.r1.c0.p0]` for a paragraph in a table cell, `[hdr.default.p0]` and `[ftr.default.p0]` for headers and footers. Paragraphs that carry a native Word id show it as `¶4F2A1C7B`, addressable as `para:4F2A1C7B`. Tracked table rows end with `{+row inserted by …+}` or `{-row deleted by …-}`. Style names and list levels are shown, and list numbering appears at the start of the text as Word renders it.
+Prints the document as one line per paragraph, each with the id that `edit` patches and `--in` options target: `[p12]` for body paragraphs, `[tbl0.r1.c0.p0]` for a paragraph in a table cell, `[hdr.default.p0]` and `[ftr.default.p0]` for headers and footers. In a document with more than one section the ids carry the section, `[hdr.s2.first.p0]`. Paragraphs that carry a native Word id show it as `¶4F2A1C7B`, addressable as `para:4F2A1C7B`. Tracked table rows end with `{+row inserted by …+}` or `{-row deleted by …-}`. Style names and list levels are shown, and list numbering appears at the start of the text as Word renders it.
 
 | Option | |
 |---|---|

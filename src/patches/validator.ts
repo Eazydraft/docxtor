@@ -11,6 +11,7 @@ import type {
 } from "../types.js";
 import { getChildren, getTagName, getAttr } from "../xml/helpers.js";
 import { hasBlockMarkdown } from "./text-segments.js";
+import { resolveHeaderFooterContainer } from "./container-utils.js";
 
 export interface ValidationResult {
   valid: boolean;
@@ -443,7 +444,7 @@ export function validatePatch(
 }
 
 function validateContainerTarget(
-  container: { type: string; variant: string },
+  container: { type: string; variant: string; section?: number },
   doc: NormalizedDocument,
 ): ValidationResult {
   if (!["header", "footer"].includes(container.type)) {
@@ -453,14 +454,18 @@ function validateContainerTarget(
     return { valid: false, error: `Invalid container variant: ${container.variant}` };
   }
 
-  const parts = container.type === "header" ? doc.headers : doc.footers;
-  const exists = [...parts.values()].some((part) => part.variant === container.variant);
-  if (!exists) {
-    return {
-      valid: false,
-      error: `No ${container.type} with variant "${container.variant}" found`,
-    };
+  if (
+    container.section !== undefined &&
+    (!Number.isInteger(container.section) || container.section < 1)
+  ) {
+    return { valid: false, error: `Invalid container section: ${container.section} (sections are numbered from 1)` };
   }
+
+  const resolved = resolveHeaderFooterContainer(
+    doc,
+    container as { type: "header" | "footer"; variant: string; section?: number },
+  );
+  if ("error" in resolved) return { valid: false, error: resolved.error };
 
   return { valid: true };
 }

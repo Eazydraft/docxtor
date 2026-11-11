@@ -5,6 +5,7 @@
  */
 
 import type {
+  HeaderFooter,
   NormalizedDocument,
   NormalizedParagraph,
   NormalizedTable,
@@ -15,6 +16,7 @@ import type {
   StyleInfo,
   ProjectionOptions,
 } from "../types.js";
+import { idsCarrySection } from "../normalizer/header-footer.js";
 import { getLevelInfo } from "../patches/numbering.js";
 
 // =============================================================================
@@ -63,6 +65,8 @@ interface JsonProjectionTable {
 interface JsonProjectionHeaderFooter {
   type: "header" | "footer";
   variant: string;
+  /** 1-based section, present when more than one section has headers or footers. */
+  section?: number;
   paragraphs: JsonProjectionParagraph[];
   tables?: JsonProjectionTable[];
 }
@@ -119,6 +123,7 @@ export function projectToJson(
         const hfEntry: JsonProjectionHeaderFooter = {
           type: "header",
           variant: header.variant,
+          ...(idsCarrySection(header) ? { section: header.sectionIndex } : {}),
           paragraphs: header.paragraphs.map((p) =>
             projectParagraphToJson(p, includeFormatting, includeRevisions, false, runFilter),
           ),
@@ -137,6 +142,7 @@ export function projectToJson(
         const hfEntry: JsonProjectionHeaderFooter = {
           type: "footer",
           variant: footer.variant,
+          ...(idsCarrySection(footer) ? { section: footer.sectionIndex } : {}),
           paragraphs: footer.paragraphs.map((p) =>
             projectParagraphToJson(p, includeFormatting, includeRevisions, false, runFilter),
           ),
@@ -474,7 +480,7 @@ export function projectToMarkdown(
   if (includeHeadersFooters) {
     for (const header of doc.headers.values()) {
       lines.push("");
-      lines.push(`--- Header (${header.variant}) ---`);
+      lines.push(`--- Header (${headerFooterLabel(header)}) ---`);
       const hdrCounters = new Map<string, number>();
       for (const para of header.paragraphs) {
         const listPrefix = buildListPrefix(para, hdrCounters, numberingFxp);
@@ -490,7 +496,7 @@ export function projectToMarkdown(
 
     for (const footer of doc.footers.values()) {
       lines.push("");
-      lines.push(`--- Footer (${footer.variant}) ---`);
+      lines.push(`--- Footer (${headerFooterLabel(footer)}) ---`);
       const ftrCounters = new Map<string, number>();
       for (const para of footer.paragraphs) {
         const listPrefix = buildListPrefix(para, ftrCounters, numberingFxp);
@@ -796,4 +802,9 @@ function formatTableMarkdown(
   }
 
   return lines;
+}
+
+/** `first`, or `first, section 2` when the document's ids carry the section. */
+function headerFooterLabel(hf: HeaderFooter): string {
+  return idsCarrySection(hf) ? `${hf.variant}, section ${hf.sectionIndex}` : hf.variant;
 }

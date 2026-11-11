@@ -8,7 +8,7 @@
 import { readFile } from "node:fs/promises";
 import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
 import { Docxtor, type NormalizedTable, type Patch, type PatchOptions, type PatchResult } from "../src/index.js";
-import { allParagraphs, matchStarts, occurrenceAt, planEdit, quoteVariants, snippet } from "./paragraphs.js";
+import { allParagraphs, matchStarts, occurrenceAt, patchTargets, planEdit, quoteVariants, snippet } from "./paragraphs.js";
 import { formatChanges, listChanges } from "./revisions.js";
 import { formatComments, listComments } from "./comments.js";
 import { getAttr, getChildren, getTagName, unescapeXmlText } from "../src/xml/helpers.js";
@@ -234,11 +234,14 @@ async function cmdReplace(argv: string[]): Promise<void> {
   for (let k = 0; k < finds.length; k++) {
     let find = finds[k]!;
     const replace = repls[k]!;
-    const paras = allParagraphs(doc).filter((l) => inScope(l.para.id, l.para.paraId));
+    const every = allParagraphs(doc);
+    const targetOf = patchTargets(every);
+    const paras = every.filter((l) => inScope(l.para.id, l.para.paraId));
     // Every match. Try curly/straight quote variants if the literal text is absent.
-    let hits: { id: string; text: string; start: number }[] = [];
+    // `id` is the positional id shown to the user; `target` is what the patch names.
+    let hits: { id: string; target: string; text: string; start: number }[] = [];
     for (const variant of quoteVariants(find)) {
-      hits = paras.flatMap(({ para }) => matchStarts(para.text, variant, !!values["whole-word"]).map((start) => ({ id: para.id, text: para.text, start })));
+      hits = paras.flatMap(({ para }) => matchStarts(para.text, variant, !!values["whole-word"]).map((start) => ({ id: para.id, target: targetOf(para), text: para.text, start })));
       if (hits.length) { find = variant; break; }
     }
     if (hits.length === 0) {
@@ -257,12 +260,12 @@ async function cmdReplace(argv: string[]): Promise<void> {
     const patches: Patch[] = [...hits].reverse().map((h): Patch => {
       const start = h.start + m.offset;
       if (m.kind === "insert") {
-        return { type: "insert_text", target: h.id, position: m.position, anchor: m.anchor, text: m.text, occurrence: occurrenceAt(h.text, m.anchor, start) };
+        return { type: "insert_text", target: h.target, position: m.position, anchor: m.anchor, text: m.text, occurrence: occurrenceAt(h.text, m.anchor, start) };
       }
       const occurrence = occurrenceAt(h.text, m.find, start);
       return m.kind === "delete"
-        ? { type: "delete_text", target: h.id, find: m.find, occurrence }
-        : { type: "replace_text", target: h.id, find: m.find, replace: m.replace, occurrence };
+        ? { type: "delete_text", target: h.target, find: m.find, occurrence }
+        : { type: "replace_text", target: h.target, find: m.find, replace: m.replace, occurrence };
     });
     const failed = doc.applyPatches(patches, opts).filter((r) => !r.success);
     if (failed.length) fail(`${failed.length} replacements of "${find}" failed; nothing was written.\n${failed.map((r) => `  ${JSON.stringify(r.patch)} -> ${r.error}`).join("\n")}`);
@@ -282,13 +285,16 @@ async function cmdComment(argv: string[]): Promise<void> {
   const out = needOut(values.out);
   const doc = await load(positionals[0]);
   let target = values.in;
+  let shown = values.in;
   let find = values.find;
   let occurrence: number | undefined;
   if (find) {
-    const paras = allParagraphs(doc).filter((l) => !values.in || l.para.id === values.in || l.para.paraId === values.in.replace(/^para:/, ""));
-    let hits: { id: string; text: string; start: number }[] = [];
+    const every = allParagraphs(doc);
+    const targetOf = patchTargets(every);
+    const paras = every.filter((l) => !values.in || l.para.id === values.in || l.para.paraId === values.in.replace(/^para:/, ""));
+    let hits: { id: string; target: string; text: string; start: number }[] = [];
     for (const variant of quoteVariants(find)) {
-      hits = paras.flatMap(({ para }) => matchStarts(para.text, variant, false).map((start) => ({ id: para.id, text: para.text, start })));
+      hits = paras.flatMap(({ para }) => matchStarts(para.text, variant, false).map((start) => ({ id: para.id, target: targetOf(para), text: para.text, start })));
       if (hits.length) { find = variant; break; }
     }
     if (hits.length === 0) fail(`"${values.find}" not found; check with: view FILE --grep '<a distinctive word>'`);
@@ -300,13 +306,14 @@ async function cmdComment(argv: string[]): Promise<void> {
       const list = hits.slice(0, 20).map((h, i) => `  ${i + 1}. [${h.id}] ${snippet(h.text, h.start, h.start + find!.length, 40)}`);
       fail(`"${find}" matches ${hits.length} times; give a longer --find, --in ID or --occurrence N:\n${list.join("\n")}`);
     }
-    target = hits[0]!.id;
+    target = hits[0]!.target;
+    shown = hits[0]!.id;
     occurrence = occurrenceAt(hits[0]!.text, find, hits[0]!.start);
   }
   const author = values.author ?? "docxtor";
   const patch: Patch = { type: "add_comment", target: target!, text: values.text, author, markers: false, ...(find ? { find, occurrence } : {}) };
   await applyAndSave(doc, [patch], { ...patchOptions(values), trackRevisions: false }, out);
-  process.stdout.write(`comment on [${target}]${find ? ` anchored to "${find}"` : ""} by "${author}"\nwrote ${out}\n`);
+  process.stdout.write(`comment on [${shown}]${find ? ` anchored to "${find}"` : ""} by "${author}"\nwrote ${out}\n`);
 }
 
 async function cmdEdit(argv: string[]): Promise<void> {
