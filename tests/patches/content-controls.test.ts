@@ -880,6 +880,32 @@ describe("prompts and inline controls in structural edits", () => {
     expect(doc.findParagraphById("p0")!.text).toBe("Supplier: Acme Ltd");
   });
 
+  it("a tracked remove_list_item reaches a hyperlink and a control inside it", async () => {
+    const numPr = `<w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>`;
+    const doc = await Docxtor.load(
+      await createBodyDocx(
+        `<w:p>${numPr}${run("See ")}<w:hyperlink w:anchor="x">${run("clause ")}${control(1, "", run("12"))}</w:hyperlink>${run(".")}</w:p><w:p>${numPr}${run("Second")}</w:p>`,
+      ),
+    );
+    expect(doc.findParagraphById("p0")!.text).toBe("See clause 12.");
+    expect(apply(doc, { type: "remove_list_item", target: "p0" }, TRACKED).success).toBe(true);
+    expect(doc.findParagraphById("p0")!.text).toBe("");
+    expect(doc.toString()).toContain('<w:id w:val="1"/>');
+    doc.rejectAllRevisions();
+    expect(doc.findParagraphById("p0")!.text).toBe("See clause 12.");
+  });
+
+  it("runs of a paragraph wrapped by a block control carry no inline control", async () => {
+    const doc = await load();
+    // p7 is the prompt paragraph of an empty block-level control; p2 sits in a filled one
+    for (const id of ["p7", "p2", "tbl0.r0.c1.p0"]) {
+      const para = doc.findParagraphById(id)!;
+      expect(para.control, id).toBeDefined();
+      expect(para.controls, id).toBeUndefined();
+      expect(para.runs.every((r) => r.control === undefined), id).toBe(true);
+    }
+  });
+
   it("a page break inside a block control carries the control", async () => {
     const doc = await Docxtor.load(
       await createBodyDocx(control(1, `<w:alias w:val="Part"/>`, `<w:p>${run("Before")}</w:p><w:p><w:r><w:br w:type="page"/></w:r></w:p>`) + `<w:p>${run("After")}</w:p>`),

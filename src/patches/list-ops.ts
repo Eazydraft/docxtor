@@ -231,6 +231,9 @@ export function executeRemoveListItem(
         // Text in an inline content control is part of the item: mark it
         // deleted inside the control, which stays in place.
         markRunsDeleted(sdtContentChildren(child), revCtx);
+      } else if (tag === "w:hyperlink" || tag === "w:smartTag" || tag === "w:fldSimple") {
+        // Likewise the text of a hyperlink, and of any control inside it
+        markRunsDeleted(getChildren(child), revCtx);
       }
     }
     reNormalize(doc, targetPara);
