@@ -284,6 +284,21 @@ describe("docxtor CLI", () => {
     expect((await texts(out))[0]).toBe("Title: Insert Coin Ltd ref ACME-42");
     expect((await cli("view", out)).out).toContain("[p0] Title: {+Insert Coin Ltd+} ref ACME-42");
 
+    // "n" occurs three times, all in the one prompt "Insert Title for Contract": that is one fill,
+    // not an ambiguous find, and not three patches of which two would fail.
+    const twice = join(dir, "twice.docx");
+    const t = await cli("replace", form, "-o", twice, "--find", "n", "--replace", "Deed", "--in", "p0", "--untracked");
+    expect(t.err).toBe("");
+    expect(t.out).toContain("1 replacement in 1 paragraph (p0)");
+    expect((await texts(twice))[0]).toBe("Title: Deed ref ACME-42");
+    const all = join(dir, "all.docx");
+    const a = await cli("replace", form, "-o", all, "--find", "t", "--replace", "Deed", "--in", "p0", "--all", "--untracked");
+    expect(a.err).toBe("");
+    expect(a.code).toBe(0);
+    // "Title: " has one "t" outside the prompt; the prompt's several are one fill
+    expect(a.out).toContain("2 replacements in 1 paragraph (p0)");
+    expect((await texts(all))[0]).toBe("TiDeedle: Deed ref ACME-42");
+
     const bad = await cli("replace", form, "-o", join(dir, "bad.docx"), "--find", "Choose an item.", "--replace", "Lease");
     expect(bad.code).toBe(1);
     expect(bad.err).toContain('"Lease" is not an option of the dropdown content control "Type of contract"');

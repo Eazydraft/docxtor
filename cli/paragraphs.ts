@@ -2,7 +2,7 @@
  * Paragraph enumeration and occurrence helpers shared by the CLI commands.
  */
 
-import type { Docxtor, NormalizedParagraph, NormalizedTable, BodyElement } from "../src/index.js";
+import type { Docxtor, NormalizedParagraph, NormalizedTable, BodyElement, ControlInfo } from "../src/index.js";
 
 export interface Located {
   para: NormalizedParagraph;
@@ -46,15 +46,17 @@ export function allParagraphs(doc: Docxtor): Located[] {
 }
 
 /**
- * True when the text at `[start, end)` is the prompt of an empty content
- * control. An edit there fills the control with the whole replacement, so
- * the find and replace must not be trimmed to the words that differ.
+ * The empty content control whose prompt holds the text at `[start, end)`,
+ * if there is one. An edit there fills the control with the whole
+ * replacement, so the find and replace must not be trimmed to the words
+ * that differ, and one control takes one edit however often the prompt
+ * contains the find.
  */
-export function inPlaceholder(para: NormalizedParagraph, start: number, end: number): boolean {
+export function promptControl(para: NormalizedParagraph, start: number, end: number): ControlInfo | undefined {
   const inline = (para.controls ?? []).filter((r) => start >= r.startOffset && end <= r.endOffset && r.endOffset > r.startOffset);
   // Nested controls follow the one that holds them, so the last match is the innermost.
   const innermost = inline[inline.length - 1]?.control ?? para.control;
-  return innermost?.placeholder === true;
+  return innermost?.placeholder === true ? innermost : undefined;
 }
 
 /**

@@ -8,7 +8,7 @@
 import { readFile } from "node:fs/promises";
 import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
 import { Docxtor, type NormalizedTable, type Patch, type PatchOptions, type PatchResult } from "../src/index.js";
-import { allParagraphs, inPlaceholder, matchStarts, occurrenceAt, patchTargets, planEdit, quoteVariants, snippet } from "./paragraphs.js";
+import { allParagraphs, matchStarts, occurrenceAt, patchTargets, planEdit, promptControl, quoteVariants, snippet } from "./paragraphs.js";
 import { formatChanges, listChanges } from "./revisions.js";
 import { formatComments, listComments } from "./comments.js";
 import { getAttr, getChildren, getTagName, unescapeXmlText } from "../src/xml/helpers.js";
@@ -242,7 +242,17 @@ async function cmdReplace(argv: string[]): Promise<void> {
     // `id` is the positional id shown to the user; `target` is what the patch names.
     let hits: { id: string; target: string; text: string; start: number; prompt: boolean }[] = [];
     for (const variant of quoteVariants(find)) {
-      hits = paras.flatMap(({ para }) => matchStarts(para.text, variant, !!values["whole-word"]).map((start) => ({ id: para.id, target: targetOf(para), text: para.text, start, prompt: inPlaceholder(para, start, start + variant.length) })));
+      // A match on the prompt of an empty content control fills that control, whole. The prompt may
+      // hold the find more than once; the control still takes one replacement, so keep its first match.
+      const filled = new Set<unknown>();
+      hits = paras.flatMap(({ para }) => matchStarts(para.text, variant, !!values["whole-word"]).flatMap((start) => {
+        const control = promptControl(para, start, start + variant.length);
+        if (control) {
+          if (filled.has(control.xmlRef)) return [];
+          filled.add(control.xmlRef);
+        }
+        return [{ id: para.id, target: targetOf(para), text: para.text, start, prompt: control !== undefined }];
+      }));
       if (hits.length) { find = variant; break; }
     }
     if (hits.length === 0) {
