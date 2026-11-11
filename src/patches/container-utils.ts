@@ -15,7 +15,7 @@ import type {
   NormalizedPageBreak,
   FXPNode,
 } from "../types.js";
-import { findChild, getChildren, getTagName } from "../xml/helpers.js";
+import { findChild, getChildren, getTagName, contentChildrenOf } from "../xml/helpers.js";
 import { normalizeParagraph } from "../normalizer/paragraph.js";
 import { enrichListType } from "../normalizer/document.js";
 
@@ -46,9 +46,11 @@ export function insertIntoBody(
   afterXmlRef?: FXPNode,
 ): void {
   if (afterXmlRef) {
-    const idx = bodyChildren.indexOf(afterXmlRef);
-    if (idx !== -1) {
-      bodyChildren.splice(idx + 1, 0, ...nodes);
+    // The element may sit inside a block-level content control: the new
+    // nodes go next to it, in the array that really holds it.
+    const holder = contentChildrenOf(bodyChildren).find((c) => c.node === afterXmlRef);
+    if (holder) {
+      holder.siblings.splice(holder.siblings.indexOf(afterXmlRef) + 1, 0, ...nodes);
       return;
     }
   }
@@ -78,54 +80,47 @@ export function getNextPIdx(doc: NormalizedDocument): number {
 
 /**
  * Find the FXP parent children array that directly contains a paragraph's xmlRef.
- * Searches w:body, w:tc (table cells, recursively), and header/footer roots.
+ * Searches w:body, w:tc (table cells, recursively), and header/footer roots,
+ * reading through content controls: for a paragraph inside a block-level
+ * control this is the children of its `w:sdtContent`.
  */
 export function findParentChildren(
   doc: NormalizedDocument,
   xmlRef: FXPNode,
 ): FXPNode[] | undefined {
-  // Check body
-  const bodyChildren = getBodyChildren(doc);
-  if (bodyChildren.includes(xmlRef)) return bodyChildren;
-
-  // Check table cells in body
-  for (const child of bodyChildren) {
-    if (getTagName(child) === "w:tbl") {
-      const result = findInTable(child, xmlRef);
-      if (result) return result;
-    }
-  }
+  const inBody = findInBlocks(getBodyChildren(doc), xmlRef);
+  if (inBody) return inBody;
 
   // Check headers/footers
   for (const hf of [...doc.headers.values(), ...doc.footers.values()]) {
     const rootTag = hf.type === "header" ? "w:hdr" : "w:ftr";
     const rootNode = hf.xmlRef.find((n) => getTagName(n) === rootTag);
     if (rootNode) {
-      const rootChildren = getChildren(rootNode);
-      if (rootChildren.includes(xmlRef)) return rootChildren;
-      for (const child of rootChildren) {
-        if (getTagName(child) === "w:tbl") {
-          const result = findInTable(child, xmlRef);
-          if (result) return result;
-        }
-      }
+      const result = findInBlocks(getChildren(rootNode), xmlRef);
+      if (result) return result;
     }
   }
 
   return undefined;
 }
 
-function findInTable(tblNode: FXPNode, target: FXPNode): FXPNode[] | undefined {
-  for (const tr of getChildren(tblNode).filter((n) => getTagName(n) === "w:tr")) {
-    for (const tc of getChildren(tr).filter((n) => getTagName(n) === "w:tc")) {
-      const tcChildren = getChildren(tc);
-      if (tcChildren.includes(target)) return tcChildren;
-      // Check nested tables
-      for (const child of tcChildren) {
-        if (getTagName(child) === "w:tbl") {
-          const result = findInTable(child, target);
-          if (result) return result;
-        }
+/**
+ * Search block-level content (`children` of a body, cell, header or footer)
+ * for `target`, descending into tables. Returns the array that holds it.
+ */
+function findInBlocks(children: FXPNode[], target: FXPNode): FXPNode[] | undefined {
+  const blocks = contentChildrenOf(children);
+  for (const block of blocks) {
+    if (block.node === target) return block.siblings;
+  }
+  for (const block of blocks) {
+    if (getTagName(block.node) !== "w:tbl") continue;
+    for (const tr of contentChildrenOf(getChildren(block.node))) {
+      if (getTagName(tr.node) !== "w:tr") continue;
+      for (const tc of contentChildrenOf(getChildren(tr.node))) {
+        if (getTagName(tc.node) !== "w:tc") continue;
+        const result = findInBlocks(getChildren(tc.node), target);
+        if (result) return result;
       }
     }
   }
@@ -222,9 +217,10 @@ export function deriveNewParagraphId(
  * Re-normalize a paragraph in place, enriching listType.
  */
 export function reNormalizeParagraph(doc: NormalizedDocument, para: NormalizedParagraph): void {
-  const fresh = normalizeParagraph(para.xmlRef, para.id);
+  const fresh = normalizeParagraph(para.xmlRef, para.id, para.control);
   para.text = fresh.text;
   para.runs = fresh.runs;
+  para.controls = fresh.controls;
   para.style = fresh.style;
   para.listInfo = fresh.listInfo;
   para.revisions = fresh.revisions;

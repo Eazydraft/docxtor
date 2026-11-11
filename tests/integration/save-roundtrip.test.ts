@@ -11,7 +11,7 @@
 import { describe, it, expect } from "vitest";
 import JSZip from "jszip";
 import { Docxtor } from "../../src/index.js";
-import { createLeaseDocx, createBodyDocx } from "../fixtures/create-docx.js";
+import { createLeaseDocx, createBodyDocx, createContentControlDocx } from "../fixtures/create-docx.js";
 
 /** Every file in a .docx (directory entries left out), as path → bytes. */
 async function parts(buffer: Buffer): Promise<Map<string, Buffer>> {
@@ -53,6 +53,7 @@ describe("a save with no patches", () => {
   it.each([
     ["lease (numbering, table, header, footer, footnotes, tracked changes, properties)", () => createLeaseDocx()],
     ["Word-style single-line XML with CRLF", () => wordStyleDocx()],
+    ["content controls (inline, around a cell, around paragraphs, nested, in a header)", () => createContentControlDocx()],
   ])("returns every part byte for byte: %s", async (_name, make) => {
     const input = await make();
     const output = await (await Docxtor.load(input)).toBuffer();

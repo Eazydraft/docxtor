@@ -20,6 +20,7 @@
 - Field code placeholders (`{{PAGE}}`, `{{NUMPAGES}}`, `{{DATE}}`, `{{TIME}}`, `{{FILENAME}}`) — combinable with inline formatting
 - Container targeting for `append_text` and `add_table` (add content to headers/footers)
 - Hyperlinks (text inside `w:hyperlink` elements)
+- Content controls (`w:sdt`): text inside them is read and editable, wrapped paragraphs and cells are counted, empty fields are filled by replacing their prompt, and drop-down lists, dates and checkboxes keep their stored value in step (`set_checkbox`)
 - Run splitting with formatting preservation
 - Inline formatting patches (bold, italic, underline, strikethrough, fontSize, fontFamily, color, highlight)
 - Inline formatting markers in projections and text ops (`**bold**`, `_italic_`, `~~strikethrough~~`, `<u>underline</u>`)
@@ -40,6 +41,7 @@
 ## What it does not handle (yet)
 
 - Merged cells (`gridSpan` / `vMerge`)
+- Creating content controls, repeating sections, picture controls, and writing data-bound values to their custom XML part
 - Image manipulation
 - Style creation (can only apply pre-existing styles)
 - Reading or resolving existing comments (only `add_comment` is supported)

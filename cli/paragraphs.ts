@@ -46,6 +46,18 @@ export function allParagraphs(doc: Docxtor): Located[] {
 }
 
 /**
+ * True when the text at `[start, end)` is the prompt of an empty content
+ * control. An edit there fills the control with the whole replacement, so
+ * the find and replace must not be trimmed to the words that differ.
+ */
+export function inPlaceholder(para: NormalizedParagraph, start: number, end: number): boolean {
+  const inline = (para.controls ?? []).filter((r) => start >= r.startOffset && end <= r.endOffset && r.endOffset > r.startOffset);
+  // Nested controls follow the one that holds them, so the last match is the innermost.
+  const innermost = inline[inline.length - 1]?.control ?? para.control;
+  return innermost?.placeholder === true;
+}
+
+/**
  * The library's occurrence number for a match starting at `start`: docxtor
  * counts matches with `indexOf(find, idx + 1)`, so overlapping matches count.
  */

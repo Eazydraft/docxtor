@@ -8,7 +8,7 @@
 import { readFile } from "node:fs/promises";
 import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
 import { Docxtor, type NormalizedTable, type Patch, type PatchOptions, type PatchResult } from "../src/index.js";
-import { allParagraphs, matchStarts, occurrenceAt, planEdit, quoteVariants, snippet } from "./paragraphs.js";
+import { allParagraphs, inPlaceholder, matchStarts, occurrenceAt, planEdit, quoteVariants, snippet } from "./paragraphs.js";
 import { formatChanges, listChanges } from "./revisions.js";
 import { formatComments, listComments } from "./comments.js";
 import { getAttr, getChildren, getTagName, unescapeXmlText } from "../src/xml/helpers.js";
@@ -19,6 +19,7 @@ Read
   view FILE [--grep REGEX [--context N]] [--formatting] [--no-revisions] [--styles] [--json]
       Paragraphs with their ids ([p12], [tbl0.r1.c0.p0], [hdr.default.p0]).
       Tracked changes show inline as {+inserted+} and {-deleted-}.
+      Form fields show as {field: prompt} while empty; replace the prompt to fill one.
   revisions FILE [--json]
       Every tracked change, numbered, with its w:ids, author and context.
   comments FILE [--json]
@@ -236,9 +237,9 @@ async function cmdReplace(argv: string[]): Promise<void> {
     const replace = repls[k]!;
     const paras = allParagraphs(doc).filter((l) => inScope(l.para.id, l.para.paraId));
     // Every match. Try curly/straight quote variants if the literal text is absent.
-    let hits: { id: string; text: string; start: number }[] = [];
+    let hits: { id: string; text: string; start: number; prompt: boolean }[] = [];
     for (const variant of quoteVariants(find)) {
-      hits = paras.flatMap(({ para }) => matchStarts(para.text, variant, !!values["whole-word"]).map((start) => ({ id: para.id, text: para.text, start })));
+      hits = paras.flatMap(({ para }) => matchStarts(para.text, variant, !!values["whole-word"]).map((start) => ({ id: para.id, text: para.text, start, prompt: inPlaceholder(para, start, start + variant.length) })));
       if (hits.length) { find = variant; break; }
     }
     if (hits.length === 0) {
@@ -255,6 +256,8 @@ async function cmdReplace(argv: string[]): Promise<void> {
     // Right to left within each paragraph so earlier occurrence numbers stay valid.
     const m = planEdit(find, replace);
     const patches: Patch[] = [...hits].reverse().map((h): Patch => {
+      // On the prompt of an empty content control the replacement fills the control, whole.
+      if (h.prompt) return { type: "replace_text", target: h.id, find, replace, occurrence: occurrenceAt(h.text, find, h.start) };
       const start = h.start + m.offset;
       if (m.kind === "insert") {
         return { type: "insert_text", target: h.id, position: m.position, anchor: m.anchor, text: m.text, occurrence: occurrenceAt(h.text, m.anchor, start) };

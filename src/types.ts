@@ -173,6 +173,73 @@ export interface NormalizedParagraph {
    * and text from this offset onward is on the next page.
    */
   pageBreakOffset?: number;
+  /**
+   * The innermost content control (`w:sdt`) that wraps this whole paragraph:
+   * a block-level control around it, or a control around its table cell.
+   */
+  control?: ControlInfo;
+  /**
+   * Inline content controls inside this paragraph, in document order, each
+   * with the character range of `.text` it covers. A nested control follows
+   * the one that holds it. A control with no text has an empty range.
+   */
+  controls?: ControlRange[];
+}
+
+// =============================================================================
+// Content controls (w:sdt)
+// =============================================================================
+
+/**
+ * A Word content control: a fillable field wrapped around runs, paragraphs
+ * or a table cell. The text it holds is part of the paragraph text.
+ */
+export interface ControlInfo {
+  /** `w:id` of the control ("" when it has none). */
+  id: string;
+  kind:
+    | "richText"
+    | "text"
+    | "date"
+    | "dropDownList"
+    | "comboBox"
+    | "checkbox"
+    | "picture"
+    | "docPart"
+    | "other";
+  /** `w:alias`: the title Word shows on the control. */
+  alias?: string;
+  /** `w:tag`: the developer tag. */
+  tag?: string;
+  /**
+   * True while the control shows its prompt (`w:showingPlcHdr`): the text is
+   * a placeholder, not an answer.
+   */
+  placeholder: boolean;
+  /** Display texts of a drop-down list or combo box, in order. */
+  options?: string[];
+  /** State of a checkbox control. */
+  checked?: boolean;
+  /**
+   * `w:lock`: "content" (the content cannot be edited), "control" (the
+   * control cannot be deleted) or "both".
+   */
+  locked?: "content" | "control" | "both";
+  /** True when the control is bound to a custom XML part (`w:dataBinding`). */
+  bound?: boolean;
+  /** The control that holds this one, if any. */
+  parent?: ControlInfo;
+  /** Direct reference to the w:sdt FXP node. */
+  xmlRef: FXPNode;
+}
+
+/** An inline content control and the range of paragraph text it covers. */
+export interface ControlRange {
+  control: ControlInfo;
+  /** Start character offset in the paragraph text (inclusive). */
+  startOffset: number;
+  /** End character offset in the paragraph text (exclusive). */
+  endOffset: number;
 }
 
 /**
@@ -215,6 +282,8 @@ export interface RunMapping {
   textXmlRef?: FXPNode;
   /** Captured formatting properties. */
   formatting: RunFormatting;
+  /** The innermost inline content control holding this run, if any. */
+  control?: ControlInfo;
 }
 
 export interface RunFormatting {
@@ -269,6 +338,8 @@ export interface NormalizedTable {
   xmlRef: FXPNode;
   /** Table style name (if any). */
   style?: string;
+  /** The innermost content control wrapped around the table, if any. */
+  control?: ControlInfo;
 }
 
 export interface NormalizedTableRow {
@@ -291,6 +362,8 @@ export interface NormalizedTableCell {
   nestedTables: NormalizedTable[];
   /** Direct reference to the w:tc FXP node. */
   xmlRef: FXPNode;
+  /** The content control wrapped around this cell, if any. */
+  control?: ControlInfo;
 }
 
 // =============================================================================
@@ -397,6 +470,7 @@ export type Patch =
   | InsertParagraphPatch
   | DeleteParagraphPatch
   | AddCommentPatch
+  | SetCheckboxPatch
   | AddTablePatch
   | AddTableRowPatch
   | DeleteTableRowPatch
@@ -465,6 +539,16 @@ export interface AddCommentPatch {
    * `PatchOptions.inlineMarkers`. Set `false` to write the text verbatim.
    */
   markers?: boolean;
+}
+
+export interface SetCheckboxPatch {
+  type: "set_checkbox";
+  /** Target paragraph ID (positional or `para:` form) holding the checkbox control. */
+  target: string;
+  /** The state to put the checkbox in. */
+  checked: boolean;
+  /** Which checkbox control in the paragraph (1-based). Default: 1. */
+  occurrence?: number;
 }
 
 export interface ReplaceTextPatch {

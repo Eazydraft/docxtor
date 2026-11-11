@@ -455,6 +455,8 @@ export type {
   RunMapping,
   RunFormatting,
   RunFilter,
+  ControlInfo,
+  ControlRange,
   ListInfo,
   HeaderFooter,
   BodyElement,
@@ -466,6 +468,7 @@ export type {
   InsertParagraphPatch,
   DeleteParagraphPatch,
   AddCommentPatch,
+  SetCheckboxPatch,
   AddTablePatch,
   AddTableRowPatch,
   DeleteTableRowPatch,
@@ -505,7 +508,7 @@ export { normalizeDocument, reNormalizeDocument } from "./normalizer/document.js
 export type { HeaderFooterRef } from "./normalizer/document.js";
 export { applyPatches, cloneDocument } from "./patches/engine.js";
 export { project, projectToJson, projectToMarkdown } from "./projection/llm.js";
-export type { JsonProjection, JsonProjectionPageBreak, JsonProjectionRunFormatting } from "./projection/llm.js";
+export type { JsonProjection, JsonProjectionPageBreak, JsonProjectionRunFormatting, JsonProjectionControl } from "./projection/llm.js";
 export { validatePatch, findParagraphById, findParagraphByParaId, findTableById } from "./patches/validator.js";
 export type { ValidationResult } from "./patches/validator.js";
 export { acceptAllRevisions, rejectAllRevisions } from "./revisions/accept-reject.js";

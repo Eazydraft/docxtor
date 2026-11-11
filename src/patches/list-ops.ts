@@ -14,6 +14,7 @@ import type {
   ConvertToListPatch,
   RemoveListPatch,
   SetListPropertiesPatch,
+  ControlInfo,
 } from "../types.js";
 import { createNumberingDefinition } from "./numbering.js";
 import { enrichListType } from "../normalizer/document.js";
@@ -123,11 +124,14 @@ export function executeAddList(
   const bodyChildren = getBodyChildren(doc);
   let afterXmlRef: FXPNode | undefined;
   let afterElementId: string | undefined;
+  let afterControl: ControlInfo | undefined;
   if (patch.afterId) {
     const target = findElementById(patch.afterId, doc);
     if (target) {
       afterXmlRef = target.xmlRef;
       afterElementId = target.id;
+      // Next to an element inside a block-level control, the list is inside it too
+      if (target.kind !== "page_break") afterControl = target.control;
     }
   }
 
@@ -142,7 +146,7 @@ export function executeAddList(
 
   for (let i = 0; i < nodes.length; i++) {
     const id = `p${nextPIdx++}`;
-    const normalized = normalizeParagraph(nodes[i]!, id);
+    const normalized = normalizeParagraph(nodes[i]!, id, afterControl);
     if (doc.xmlParts.numbering) enrichListType(normalized, doc.xmlParts.numbering);
     if (insertIdx !== -1) {
       doc.body.splice(insertIdx + 1 + i, 0, normalized);
@@ -182,7 +186,7 @@ export function executeAddListItem(
   const container = findNormalizedContainer(doc, targetPara.id);
   const containerArray = container ? container.array : doc.body;
   const id = deriveNewParagraphId(targetPara.id, containerArray);
-  const normalized = normalizeParagraph(newNode, id);
+  const normalized = normalizeParagraph(newNode, id, targetPara.control);
   if (doc.xmlParts.numbering) enrichListType(normalized, doc.xmlParts.numbering);
 
   if (container) {

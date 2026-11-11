@@ -19,9 +19,9 @@ import {
   cloneNode,
   findChildren,
   getChildren,
-  insertAfter,
-  removeChild,
   findChild,
+  contentChildren,
+  sdtContentChildren,
   createElement,
   escapeXmlText,
   needsSpacePreserve,
@@ -65,8 +65,11 @@ export function executeAddTableRow(
     );
   }
 
-  // Clone the source row
+  // Clone the source row. A content control in the row (around a cell, a
+  // paragraph or some runs) is not cloned with it: the copy keeps what the
+  // control held and drops the wrapper, so no control id appears twice.
   const newRowNode = cloneNode(sourceRow.xmlRef);
+  unwrapControls(newRowNode);
 
   // Replace text in each cell of the cloned row
   const tcNodes = findChildren(newRowNode, "w:tc");
@@ -104,19 +107,21 @@ export function executeAddTableRow(
     }
   }
 
-  // Insert the new row into the table XML
-  const tableChildren = getChildren(table.xmlRef);
+  // Insert the new row into the table XML, next to the source row in the
+  // array that really holds it (a row can sit inside a content control).
+  const rows = contentChildren(table.xmlRef).filter((c) => "w:tr" in c.node);
   if (patch.afterRow === -1) {
     // Insert at the beginning, after tblPr and tblGrid
-    const firstTr = tableChildren.find((c) => "w:tr" in c);
-    if (firstTr) {
-      const idx = tableChildren.indexOf(firstTr);
-      tableChildren.splice(idx, 0, newRowNode);
+    const first = rows[0];
+    if (first) {
+      first.siblings.splice(first.siblings.indexOf(first.node), 0, newRowNode);
     } else {
-      tableChildren.push(newRowNode);
+      getChildren(table.xmlRef).push(newRowNode);
     }
   } else {
-    insertAfter(table.xmlRef, sourceRow.xmlRef, newRowNode);
+    const source = rows.find((c) => c.node === sourceRow.xmlRef);
+    if (!source) throw new Error("Reference child not found in parent");
+    source.siblings.splice(source.siblings.indexOf(source.node) + 1, 0, newRowNode);
   }
 
   // If tracking revisions, add w:ins to the new row's w:trPr
@@ -163,7 +168,26 @@ export function executeDeleteTableRow(
     trPrChildren.push(createTrPrDel(revCtx));
   } else {
     // Without revision tracking: remove the row from XML
-    removeChild(table.xmlRef, row.xmlRef);
+    const holder = contentChildren(table.xmlRef).find((c) => c.node === row.xmlRef);
+    if (holder) holder.siblings.splice(holder.siblings.indexOf(row.xmlRef), 1);
+  }
+}
+
+/**
+ * Replace every content control under `node` by its content, in place.
+ * Used on a cloned row: the clone must not repeat the source's control ids,
+ * and a prompt is not something to copy.
+ */
+function unwrapControls(node: FXPNode): void {
+  const children = getChildren(node);
+  for (let i = 0; i < children.length; i++) {
+    const child = children[i]!;
+    if ("w:sdt" in child) {
+      children.splice(i, 1, ...sdtContentChildren(child));
+      i--; // re-examine what took its place (a nested control, say)
+      continue;
+    }
+    if (!("#text" in child)) unwrapControls(child);
   }
 }
 

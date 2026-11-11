@@ -237,7 +237,8 @@ export function executeInsertParagraph(
   const created: NormalizedParagraph[] = [];
   for (let i = 0; i < nodes.length; i++) {
     const id = deriveNewParagraphId(target.id, container.array);
-    const normalized = normalizeParagraph(nodes[i]!, id);
+    // The new paragraph sits in the same content control as the target
+    const normalized = normalizeParagraph(nodes[i]!, id, target.control);
     if (doc.xmlParts.numbering) enrichListType(normalized, doc.xmlParts.numbering);
     container.array.splice(normInsertAt + i, 0, normalized);
     created.push(normalized);

@@ -69,6 +69,42 @@ Delete a substring from a paragraph.
 }
 ```
 
+## Text patches inside a content control
+
+Text in a Word content control (a form field) is paragraph text, so `replace_text`, `insert_text`, `delete_text` and `replace_cell_text` reach it with no extra syntax. What the patch does depends on the control the match lies in:
+
+| The match is in | The patch |
+|---|---|
+| the prompt of an empty control (`{field: …}` in the view) | **fills the control**: the whole prompt goes, the new text replaces it, and the control stops being flagged as empty |
+| a filled rich-text or plain-text control | is an ordinary text edit, made inside the control |
+| a drop-down list | must leave the control holding one of its list items, or it fails and names the items; `w:lastValue` follows |
+| a combo box | takes a list item or any other text |
+| a date picker | writes the text as given; when it reads as a date (`2026-11-11`, `11 November 2026`, `November 11, 2026`) the control's `w:fullDate` is set too |
+| a checkbox | must replace one glyph by the other (`☐` ↔ `☒`); `w14:checked` flips with it. [`set_checkbox`](#set_checkbox) does the same without the glyph |
+
+Filling an empty control:
+
+```ts
+{ type: "replace_text", target: "p7", find: "Insert Title for Contract", replace: "Supply of Widgets" }
+```
+
+- A prompt is not document text, so every run of it is removed even when `find` matches only part of it: replacing `Insert` with `Supply` gives `Supply`, not `Supply Title for Contract`. `insert_text` anchored on a prompt fills the control with its `text` in the same way.
+- The new text is one run. It takes the control's own run properties (`w:sdtPr/w:rPr`) when the control has them and the paragraph's defaults otherwise, never the grey prompt style.
+- `w:showingPlcHdr` is removed and `w:placeholder` is kept, so Word can show the prompt again if the field is emptied.
+- With `trackRevisions` the fill is one `w:ins` and no `w:del`. Rejecting it leaves the control empty rather than bringing the prompt back: the prompt text lives in the glossary part, which docxtor does not read. Word shows an empty field and restores the prompt on the next edit.
+
+Refused, with a message that says why:
+
+- an edit that would leave a control empty ("clearing a content control is not supported"), and deleting a prompt;
+- a match that starts inside a control and ends outside it, or the reverse: edit the two parts separately;
+- anything inside a control locked against editing (`w:lock` `contentLocked` or `sdtContentLocked`), including formatting and style patches;
+- a data-bound control (`w:dataBinding`): Word overwrites its text from a custom XML part when the file is opened, so the edit would be lost;
+- a picture control;
+- `delete_paragraph` on a paragraph that holds a control locked against deletion (`sdtLocked`);
+- `insert_paragraph`, `add_list_item`, `add_table` and `add_list` next to a paragraph wrapped by an empty control or by one that holds a single value (plain text, date, drop-down list). Inside a filled rich-text control they work, and the new content lands inside the same control.
+
+Repeating sections are shown as their content; adding or removing an item is not supported. docxtor does not create content controls.
+
 ## `append_text`
 
 Append a new paragraph to the end of the document body (or a header/footer). No `target` needed — this is a document-level operation. Particularly useful with `Docxtor.create()` to build documents from scratch.
@@ -205,6 +241,23 @@ Attach a Word comment to a paragraph or to a substring of it. Creates `word/comm
 
 The comment date comes from `PatchOptions.revisionDate` (default: now). Comments are left alone by `acceptAllRevisions` / `rejectAllRevisions`.
 
+## `set_checkbox`
+
+Check or uncheck a checkbox content control without knowing which glyph it shows.
+
+```ts
+{
+  type: "set_checkbox",
+  target: "p40",          // the paragraph holding the checkbox
+  checked: true,
+  occurrence: 1,          // which checkbox in the paragraph (1-based, default: 1)
+}
+```
+
+The glyph, its font and `w14:checked` change together, using the control's own `w14:checkedState` / `w14:uncheckedState` (Word's defaults are `☒` and `☐` in MS Gothic). Setting the state the checkbox already has changes nothing. With `trackRevisions` the old glyph becomes a deletion and the new one an insertion; `w14:checked` is not itself revision-tracked, so after such a change is rejected it still says the new state while the glyph shows the old one.
+
+Only checkbox content controls are handled. Legacy form-field checkboxes and plain `☐` characters are ordinary text.
+
 ## `replace_cell_text`
 
 Replace text in a table cell paragraph (same as `replace_text` but uses the cell's paragraph ID).
@@ -220,7 +273,7 @@ Replace text in a table cell paragraph (same as `replace_text` but uses the cell
 
 ## `add_table_row`
 
-Add a row to a table. The new row copies the structure (cell properties, widths) from the last existing row.
+Add a row to a table. The new row copies the structure (cell properties, widths) from the last existing row. Content controls in that row are not copied: the new row gets plain cells, so no control appears twice.
 
 ```ts
 {

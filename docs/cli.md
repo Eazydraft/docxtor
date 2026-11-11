@@ -12,7 +12,7 @@ docxtor <command> [options]
 
 ### `view FILE`
 
-Prints the document as one line per paragraph, each with the id that `edit` patches and `--in` options target: `[p12]` for body paragraphs, `[tbl0.r1.c0.p0]` for a paragraph in a table cell, `[hdr.default.p0]` and `[ftr.default.p0]` for headers and footers. Paragraphs that carry a native Word id show it as `¶4F2A1C7B`, addressable as `para:4F2A1C7B`. Tracked table rows end with `{+row inserted by …+}` or `{-row deleted by …-}`. Style names and list levels are shown, and list numbering appears at the start of the text as Word renders it.
+Prints the document as one line per paragraph, each with the id that `edit` patches and `--in` options target: `[p12]` for body paragraphs, `[tbl0.r1.c0.p0]` for a paragraph in a table cell, `[hdr.default.p0]` and `[ftr.default.p0]` for headers and footers. Paragraphs that carry a native Word id show it as `¶4F2A1C7B`, addressable as `para:4F2A1C7B`. Tracked table rows end with `{+row inserted by …+}` or `{-row deleted by …-}`. Style names and list levels are shown, and list numbering appears at the start of the text as Word renders it. Form fields (content controls) show as `{field: prompt}` while empty, with the kind and the list items for a date picker or a drop-down list (`{field dropdown "A" OR "B": Choose an item.}`), and as `{field date= 1 May 2026}` once a date or a list item is chosen; see the [API reference](api.md#docprojectformat-options).
 
 | Option | |
 |---|---|
@@ -57,6 +57,7 @@ Finds TEXT anywhere: body, tables, headers and footers.
 - Repeat `--find`/`--replace` pairs to make several edits in one call. They apply in order, and each sees the results of the ones before it.
 - Only what differs is marked. `--find "within thirty (30) days" --replace "within sixty (60) days"` tracks "thirty (30)" → "sixty (60)"; a pure deletion or insertion is marked exactly, so `--find "including, without limitation," --replace "including"` deletes ", without limitation,".
 - If the text isn't found exactly, straight and curly quote variants are tried.
+- A find on the prompt of an empty form field fills the field: the whole prompt is replaced by the whole `--replace` text, even when the find covers only part of the prompt. A drop-down list takes one of its items only. See [text patches inside a content control](patches.md#text-patches-inside-a-content-control).
 - A find that matches more than once is refused with a numbered list of the matches, unless one of these says which:
 
 | Option | |

@@ -7,6 +7,7 @@
 - [How a batch behaves](#how-a-batch-behaves)
 - Text in a paragraph: [replace_text](#replace_text), [insert_text](#insert_text), [delete_text](#delete_text), [replace_cell_text](#replace_cell_text)
 - Paragraphs: [insert_paragraph](#insert_paragraph), [delete_paragraph](#delete_paragraph), [append_text](#append_text)
+- Form fields: [text in a field](#text-in-a-form-field), [set_checkbox](#set_checkbox)
 - Comments: [add_comment](#add_comment)
 - Formatting and styles: [apply_formatting](#apply_formatting), [apply_style](#apply_style)
 - Tables: [add_table](#add_table), [add_table_row](#add_table_row), [delete_table_row](#delete_table_row)
@@ -84,6 +85,29 @@ Tracked: the whole paragraph, including its mark, is a deletion. Untracked: the 
 
 Adds content at the end of the body: each line becomes a paragraph, a markdown table (with a `| --- |` line) becomes a Word table, and `- ` or `1. ` lines become a real list (indent two spaces per level). Add `"container": { "type": "footer", "variant": "default" }` to append to a header or footer instead.
 
+## Form fields
+
+### Text in a form field
+
+`view` shows an empty form field (a Word content control) as `{field: prompt}`, and a date picker or drop-down list with its kind and items. The text inside the braces is paragraph text, so the text patches above reach it:
+
+```json
+{ "type": "replace_text", "target": "p7", "find": "Insert Title for Contract", "replace": "Supply of Widgets" }
+```
+
+- On a prompt, the patch fills the field: the whole prompt is removed and the replacement becomes the field's text, even when `find` is only part of the prompt. `insert_text` anchored on a prompt fills it too. Tracked: one insertion, no deletion.
+- In a filled text field, patches edit the text as anywhere else.
+- A drop-down list must end up holding one of its items; otherwise the patch fails and names them. A date field takes any text and stores the date when the text is one (`2026-11-11`, `11 November 2026`).
+- Refused with a reason: emptying a field, a `find` that crosses the edge of a field, a locked field, a field bound to document data, a picture field.
+
+### set_checkbox
+
+```json
+{ "type": "set_checkbox", "target": "p40", "checked": true, "occurrence": 1 }
+```
+
+Ticks or unticks a checkbox field in the paragraph (`occurrence` picks among several, default 1). Replacing `☐` with `☒` through `replace_text` does the same. Only Word checkbox content controls count; a plain `☐` character is ordinary text.
+
 ## Comments
 
 ### add_comment
@@ -129,7 +153,7 @@ A bordered table after `afterId` (a paragraph or table id), or at the end of the
 { "type": "add_table_row", "target": "tbl0", "afterRow": 1, "cells": ["Jet A-1", "60,000 MT", "~5,000 MT", "USD 10.00"] }
 ```
 
-`afterRow` is 0-based (`-1` inserts at the top). The cell count must match the table's; the new row copies the last row's cell properties. Rows below shift down for later patches.
+`afterRow` is 0-based (`-1` inserts at the top). The cell count must match the table's; the new row copies the last row's cell properties, as plain cells: a form field in the copied row is not repeated. Rows below shift down for later patches.
 
 ### delete_table_row
 

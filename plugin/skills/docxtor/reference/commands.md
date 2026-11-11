@@ -13,7 +13,7 @@ All commands: `docxtor <command> ...` (see SKILL.md for how to run it). Errors g
 docxtor view FILE [--grep REGEX [--context N]] [--no-revisions] [--formatting] [--styles] [--json]
 ```
 
-One line per paragraph, prefixed with its id. Table rows print as `| [tbl0.r1.c0.p0] text | [tbl0.r1.c1.p0] text |`, with `{+row inserted by …+}` or `{-row deleted by …-}` after a tracked row; headers and footers follow the body under `--- Header (default) ---` lines.
+One line per paragraph, prefixed with its id. Table rows print as `| [tbl0.r1.c0.p0] text | [tbl0.r1.c1.p0] text |`, with `{+row inserted by …+}` or `{-row deleted by …-}` after a tracked row; headers and footers follow the body under `--- Header (default) ---` lines. An empty form field prints as `{field: prompt}` (`{field date: …}`, `{field dropdown "A" OR "B": …}` for typed ones) and a chosen date or list item as `{field date= 1 May 2026}`.
 
 | Option | Effect |
 |---|---|
@@ -93,6 +93,7 @@ wrote redline.docx (tracked, author "Acme")
 - Marks only the words that differ between `--find` and `--replace`.
 - Tries straight/curly quote variants when the literal text isn't found.
 - An empty `--replace ""` deletes the text.
+- A find on the prompt of an empty form field fills the field with the whole `--replace` text.
 
 | Option | Effect |
 |---|---|

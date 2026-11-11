@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { Docxtor } from "../../src/index.js";
-import { createLeaseDocx, createMultiParagraphDocx } from "../fixtures/create-docx.js";
+import { createLeaseDocx, createMultiParagraphDocx, createContentControlDocx } from "../fixtures/create-docx.js";
 
 const run = promisify(execFile);
 const CLI = join(import.meta.dirname, "../../cli/docxtor.ts");
@@ -28,7 +28,7 @@ async function cli(...args: string[]): Promise<{ code: number; out: string; err:
 const texts = async (file: string): Promise<string[]> => (await Docxtor.load(file)).getParagraphs().map((p) => p.text);
 
 let dir: string;
-let v1: string, lease: string;
+let v1: string, lease: string, form: string;
 
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), "docxtor-cli-"));
@@ -42,6 +42,8 @@ beforeAll(async () => {
     "4. Term. One year.",
   ]));
   await writeFile(lease, await createLeaseDocx());
+  form = join(dir, "form.docx");
+  await writeFile(form, await createContentControlDocx());
 }, 30_000);
 
 describe("docxtor CLI", () => {
@@ -267,5 +269,23 @@ describe("docxtor CLI", () => {
     const ok = await cli("edit", v1, "-o", out, patches);
     expect(ok.code).toBe(0);
     expect((await texts(out))[3]).toBe("2A. New clause.");
+  }, 30_000);
+
+  it("view shows form fields, and replace on a prompt fills the control whole", async () => {
+    const v = await cli("view", form);
+    expect(v.out).toContain("[p0] Title: {field: Insert Title for Contract} ref ACME-42");
+    expect(v.out).toContain("| [tbl0.r0.c0.p0] Start date | [tbl0.r0.c1.p0] {field date: Select date} |");
+
+    // The find and the replacement share a word; the prompt still goes whole.
+    const out = join(dir, "filled.docx");
+    const r = await cli("replace", form, "-o", out, "--find", "Insert Title", "--replace", "Insert Coin Ltd");
+    expect(r.code).toBe(0);
+    expect((await texts(out))[0]).toBe("Title: Insert Coin Ltd ref ACME-42");
+    expect((await cli("view", out)).out).toContain("[p0] Title: {+Insert Coin Ltd+} ref ACME-42");
+
+    const bad = await cli("replace", form, "-o", join(dir, "bad.docx"), "--find", "Choose an item.", "--replace", "Lease");
+    expect(bad.code).toBe(1);
+    expect(bad.err).toContain('"Lease" is not an option of the dropdown content control "Type of contract"');
+    expect(bad.err).toContain('choose one of: "One-off purchase", "Ongoing supply"');
   }, 30_000);
 });

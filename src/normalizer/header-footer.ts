@@ -13,7 +13,8 @@ import type {
   NormalizedParagraph,
   NormalizedTable,
 } from "../types.js";
-import { getChildren, getTagName } from "../xml/helpers.js";
+import { contentChildren, getTagName } from "../xml/helpers.js";
+import { ControlResolver } from "./control.js";
 import { normalizeParagraph } from "./paragraph.js";
 import { normalizeTable } from "./table.js";
 
@@ -41,17 +42,20 @@ export function normalizeHeaderFooter(
   const tables: NormalizedTable[] = [];
 
   if (rootNode) {
-    const children = getChildren(rootNode);
+    const resolver = new ControlResolver();
     let paraIdx = 0;
     let tableIdx = 0;
 
-    for (const child of children) {
+    // Read through block-level content controls (a page-number gallery, say)
+    for (const { node: child, sdts } of contentChildren(rootNode)) {
       const tag = getTagName(child);
+      const control = resolver.resolve(sdts);
       if (tag === "w:p") {
         paragraphs.push(
           normalizeParagraph(
             child,
             `${prefix}.${variant}.p${paraIdx}`,
+            control,
           ),
         );
         paraIdx++;
@@ -60,6 +64,8 @@ export function normalizeHeaderFooter(
           normalizeTable(
             child,
             `${prefix}.${variant}.tbl${tableIdx}`,
+            control,
+            resolver,
           ),
         );
         tableIdx++;

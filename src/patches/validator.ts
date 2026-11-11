@@ -11,6 +11,15 @@ import type {
 } from "../types.js";
 import { getChildren, getTagName, getAttr } from "../xml/helpers.js";
 import { hasBlockMarkdown } from "./text-segments.js";
+import { findOccurrence, resolveRunRanges } from "../mapping/text-to-runs.js";
+import {
+  ControlEditError,
+  planControlEdit,
+  checkRunsEditable,
+  checkBlockInsert,
+  checkParagraphDelete,
+  findCheckbox,
+} from "./control-ops.js";
 
 export interface ValidationResult {
   valid: boolean;
@@ -22,8 +31,76 @@ export const PARA_ID_PREFIX = "para:";
 
 /**
  * Validate a single patch against the document.
+ *
+ * @param markers - Whether inline formatting markers apply to the patch's
+ *                  text fields (see `PatchOptions.inlineMarkers`). Default: true.
  */
 export function validatePatch(
+  patch: Patch,
+  doc: NormalizedDocument,
+  markers: boolean = true,
+): ValidationResult {
+  const result = validateStructure(patch, doc);
+  if (!result.valid) return result;
+  // What a content control allows: a locked, data-bound or typed control
+  // refuses some edits, with a reason the caller can act on.
+  try {
+    checkControls(patch, doc, markers);
+  } catch (err) {
+    if (err instanceof ControlEditError) return { valid: false, error: err.message };
+    throw err;
+  }
+  return result;
+}
+
+/** Runs of `para` covered by the given occurrence of `find`, or undefined when absent. */
+function matchedRuns(para: NormalizedParagraph, find: string | undefined, occurrence: number | undefined) {
+  if (find === undefined || find.length === 0) return undefined;
+  const start = findOccurrence(para.text, find, occurrence ?? 1);
+  if (start === -1) return undefined;
+  return resolveRunRanges(para.runs, start, start + find.length).map((r) => r.run);
+}
+
+function checkControls(patch: Patch, doc: NormalizedDocument, markers: boolean): void {
+  switch (patch.type) {
+    case "replace_text":
+    case "insert_text":
+    case "delete_text":
+    case "replace_cell_text":
+      planControlEdit(findParagraphById(patch.target, doc)!, patch, markers);
+      return;
+    case "set_checkbox":
+      findCheckbox(findParagraphById(patch.target, doc)!, patch);
+      return;
+    case "apply_formatting":
+    case "apply_style": {
+      const para = findParagraphById(patch.target, doc)!;
+      // A paragraph style changes no run, so only a control around the
+      // paragraph matters; anything else is checked run by run.
+      if (patch.type === "apply_style" && patch.find === undefined) checkRunsEditable(para, []);
+      else checkRunsEditable(para, matchedRuns(para, patch.find, patch.occurrence));
+      return;
+    }
+    case "insert_paragraph":
+    case "add_list_item":
+      checkBlockInsert(findParagraphById(patch.target, doc)!);
+      return;
+    case "delete_paragraph":
+    case "remove_list_item":
+      checkParagraphDelete(findParagraphById(patch.target, doc)!);
+      return;
+    case "add_table":
+    case "add_list": {
+      const after = patch.afterId && !patch.container ? findElementById(patch.afterId, doc) : undefined;
+      if (after?.kind === "paragraph") checkBlockInsert(after);
+      return;
+    }
+    default:
+      return;
+  }
+}
+
+function validateStructure(
   patch: Patch,
   doc: NormalizedDocument,
 ): ValidationResult {
@@ -73,6 +150,22 @@ export function validatePatch(
             error: `Invalid occurrence: ${patch.occurrence} (must be a positive integer)`,
           };
         }
+      }
+      return { valid: true };
+    }
+    case "set_checkbox": {
+      const para = findParagraphById(patch.target, doc);
+      if (!para) {
+        return { valid: false, error: `Paragraph "${patch.target}" not found` };
+      }
+      if (typeof patch.checked !== "boolean") {
+        return { valid: false, error: "checked must be true or false" };
+      }
+      if (patch.occurrence !== undefined && (patch.occurrence < 1 || !Number.isInteger(patch.occurrence))) {
+        return {
+          valid: false,
+          error: `Invalid occurrence: ${patch.occurrence} (must be a positive integer)`,
+        };
       }
       return { valid: true };
     }
