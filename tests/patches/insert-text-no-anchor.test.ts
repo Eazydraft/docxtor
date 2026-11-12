@@ -281,6 +281,12 @@ describe("text that is in another paragraph than the target", () => {
     expect(r.error).toContain("; it is in p1, p3 (use one of those as the target)");
   });
 
+  it("leaves the error unchanged when the target holds the text but not that occurrence", async () => {
+    const doc = await Docxtor.load(await createBodyDocx(para("one beta") + para("beta two")));
+    const r = apply(doc, { type: "replace_text", target: "p0", find: "beta", replace: "delta", occurrence: 2 });
+    expect(r.error).toBe('Text "beta" not found in paragraph "p0" (occurrence 2)');
+  });
+
   it("leaves the error unchanged when the text is nowhere", async () => {
     const doc = await load();
     const r = apply(doc, { type: "replace_text", target: "p0", find: "Nowhere", replace: "x" });

@@ -209,7 +209,11 @@ function elsewhereHint(doc: NormalizedDocument, patch: Patch, error: string, mar
   const typed = patch.type === "insert_text" ? raw.anchor : raw.find;
   if (typeof typed !== "string" || typeof raw.target !== "string") return "";
   const needle = stripFormattingMarkers(typed, markers);
-  const ids = paragraphsContaining(doc, needle, findParagraphById(raw.target, doc));
+  const target = findParagraphById(raw.target, doc);
+  // The target holds the text, only not that many times: the occurrence is
+  // wrong, not the target, so the error stands as it is.
+  if (target?.text.includes(needle)) return "";
+  const ids = paragraphsContaining(doc, needle, target);
   if (ids.length === 0) return "";
   if (ids.length === 1) return `; it is in ${ids[0]} (use that as the target)`;
   const more = ids.length > MAX_ELSEWHERE ? `, … (${ids.length} paragraphs)` : "";

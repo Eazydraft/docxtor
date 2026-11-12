@@ -100,7 +100,7 @@ When the `find` of a `replace_text`, `delete_text`, `replace_cell_text` or `add_
 Text "Version 2.1" not found in paragraph "tbl2.r0.c0.p0" (occurrence 1); it is in tbl2.r0.c0.p1 (use that as the target)
 ```
 
-Up to 20 ids are listed. The check runs only when a patch has already failed.
+Up to 20 ids are listed. The check runs only when a patch has already failed. When the target holds the text but not the `occurrence` asked for, the error is left as it is: the occurrence is wrong, not the target.
 
 ## `delete_text`
 
