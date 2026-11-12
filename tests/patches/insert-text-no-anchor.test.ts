@@ -71,6 +71,49 @@ describe("view of a table cell with several paragraphs", () => {
   });
 });
 
+describe("view of a table nested in a cell", () => {
+  const nestedBody = (inner: string): string =>
+    `<w:tbl><w:tr>${cell(para("Outer") + inner + "<w:p/>")}${cell(para("Beside"))}</w:tr><w:tr>${cell(para("Next row"))}${cell("<w:p/>")}</w:tr></w:tbl><w:p/>`;
+  const innerTable = (extra = ""): string =>
+    `<w:tbl><w:tr>${cell(para("Inner A"))}${cell(para("Inner B") + extra)}</w:tr><w:tr>${cell(para("Inner C"))}${cell("<w:p/>")}</w:tr></w:tbl>`;
+
+  it("prints the nested rows after the row that holds them, with ids under the cell's", async () => {
+    const doc = await Docxtor.load(await createBodyDocx(nestedBody(innerTable())));
+    const rows = doc.project("markdown").split("\n").filter((l) => l.startsWith("|"));
+    expect(rows).toEqual([
+      "| [tbl0.r0.c0.p0] Outer [tbl0.r0.c0.p1]  | [tbl0.r0.c1.p0] Beside |",
+      "| [tbl0.r0.c0.tbl0.r0.c0.p0] Inner A | [tbl0.r0.c0.tbl0.r0.c1.p0] Inner B |",
+      "| [tbl0.r0.c0.tbl0.r1.c0.p0] Inner C | [tbl0.r0.c0.tbl0.r1.c1.p0]  |",
+      "| [tbl0.r1.c0.p0] Next row | [tbl0.r1.c1.p0]  |",
+    ]);
+  });
+
+  it("prints a table nested two levels deep", async () => {
+    const deepest = `<w:tbl><w:tr>${cell(para("Deep"))}</w:tr></w:tbl><w:p/>`;
+    const doc = await Docxtor.load(await createBodyDocx(nestedBody(innerTable(deepest))));
+    const rows = doc.project("markdown").split("\n").filter((l) => l.startsWith("|"));
+    expect(rows.slice(1, 4)).toEqual([
+      "| [tbl0.r0.c0.tbl0.r0.c0.p0] Inner A | [tbl0.r0.c0.tbl0.r0.c1.p0] Inner B [tbl0.r0.c0.tbl0.r0.c1.p1]  |",
+      "| [tbl0.r0.c0.tbl0.r0.c1.tbl0.r0.c0.p0] Deep |",
+      "| [tbl0.r0.c0.tbl0.r1.c0.p0] Inner C | [tbl0.r0.c0.tbl0.r1.c1.p0]  |",
+    ]);
+  });
+
+  it("every id it prints is a patch target, and edits show in the nested row", async () => {
+    const doc = await Docxtor.load(await createBodyDocx(nestedBody(innerTable())));
+    expect(apply(doc, { type: "replace_text", target: "tbl0.r0.c0.tbl0.r0.c1.p0", find: "Inner B", replace: "Changed" }, TRACKED).error).toBeUndefined();
+    expect(apply(doc, { type: "insert_text", target: "tbl0.r0.c0.tbl0.r1.c1.p0", position: "start", text: "Filled" }).error).toBeUndefined();
+    const md = doc.project("markdown", { includeRevisions: true });
+    expect(md).toContain("[tbl0.r0.c0.tbl0.r0.c1.p0] {-Inner B-}{+Changed+} |");
+    expect(md).toContain("[tbl0.r0.c0.tbl0.r1.c1.p0] Filled |");
+  });
+
+  it("leaves nested tables out with the other tables", async () => {
+    const doc = await Docxtor.load(await createBodyDocx(nestedBody(innerTable())));
+    expect(doc.project("markdown", { includeTables: false })).not.toContain("Inner A");
+  });
+});
+
 describe("insert_text without an anchor", () => {
   it("inserts at the start of a paragraph that has text", async () => {
     const doc = await load();

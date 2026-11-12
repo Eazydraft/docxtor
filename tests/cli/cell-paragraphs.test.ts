@@ -183,6 +183,38 @@ describe("findAcrossBreak and explainNoMatch", () => {
   });
 });
 
+describe("a table nested in a cell", () => {
+  const ROW_INS = `<w:trPr><w:ins w:id="50" w:author="Acme" w:date="2026-01-01T00:00:00Z"/></w:trPr>`;
+  const inner = `<w:tbl><w:tr>${cell(para("Inner A"))}${cell(para("Inner B"))}</w:tr><w:tr>${ROW_INS}${cell(para("Inner C"))}${cell(para("Inner D"))}</w:tr></w:tbl>`;
+  let f: string;
+
+  beforeAll(async () => {
+    f = join(dir, "nested.docx");
+    await writeFile(f, await createBodyDocx(
+      `<w:tbl><w:tr>${cell(para("Outer") + inner + "<w:p/>")}${cell(para("Beside"))}</w:tr></w:tbl><w:p/>`,
+    ));
+  });
+
+  it("view prints its rows, and labels a tracked nested row and not the row that holds it", async () => {
+    const rows = (await cli("view", f)).out.split("\n").filter((l) => l.startsWith("|"));
+    expect(rows).toEqual([
+      "| [tbl0.r0.c0.p0] Outer [tbl0.r0.c0.p1]  | [tbl0.r0.c1.p0] Beside |",
+      "| [tbl0.r0.c0.tbl0.r0.c0.p0] Inner A | [tbl0.r0.c0.tbl0.r0.c1.p0] Inner B |",
+      "| [tbl0.r0.c0.tbl0.r1.c0.p0] Inner C | [tbl0.r0.c0.tbl0.r1.c1.p0] Inner D | {+row inserted by Acme+}",
+    ]);
+  }, 30_000);
+
+  it("view --grep finds text in the nested table, and replace reports the id view shows", async () => {
+    const g = await cli("view", f, "--grep", "Inner D");
+    expect(g.out.trim()).toBe("| [tbl0.r0.c0.tbl0.r1.c0.p0] Inner C | [tbl0.r0.c0.tbl0.r1.c1.p0] Inner D | {+row inserted by Acme+}");
+    const out = join(dir, "nested-out.docx");
+    const r = await cli("replace", f, "-o", out, "--find", "Inner D", "--replace", "Inner E", "--in", "tbl0.r0.c0.tbl0.r1.c1.p0");
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("(tbl0.r0.c0.tbl0.r1.c1.p0)");
+    expect((await cli("view", out)).out).toContain("[tbl0.r0.c0.tbl0.r1.c1.p0] Inner {-D-}{+E+} |");
+  }, 30_000);
+});
+
 describe("a cell with no paragraph", () => {
   it("keeps its place in the row, and a patch that targets it is told why it fails", async () => {
     const f = join(dir, "noparagraph.docx");

@@ -58,6 +58,7 @@ Full options: [reference/commands.md](reference/commands.md). Every patch type f
 ```
 
 - `[p144]` is the paragraph id that patches target. Table cells are `tbl0.r1.c0.p0` (table, row, cell, paragraph). Headers and footers are `hdr.default.p0` and `ftr.default.p0`. In a document with more than one section the ids carry the section, `hdr.s2.first.p0`.
+- A table inside a cell prints its rows right after the row that holds it; its ids start with the cell's (`tbl0.r1.c0.tbl0.r0.c0.p0` is in cell `tbl0.r1.c0`).
 - A cell with several paragraphs shows an id before each one; a find never spans two paragraphs. A cell that prints only its id is empty.
 - `(FirstParagraph)` is the style; `{list:1017 L0}` is a list paragraph (numbering id, level).
 - Numbering that Word generates, such as `c.` or `11.1`, is shown at the start of the text but is not part of it: don't put it in a `--find`.

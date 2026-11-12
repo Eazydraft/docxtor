@@ -20,7 +20,8 @@ Read
       Paragraphs with their ids ([p12], [tbl0.r1.c0.p0], [hdr.default.p0],
       [fn1.p0]). Tracked changes show inline as {+inserted+} and {-deleted-};
       a footnote reference shows as [^1], with the notes listed at the end.
-      A table cell with several paragraphs shows an id before each one.
+      A table cell with several paragraphs shows an id before each one;
+      a table nested in a cell prints its rows after the row that holds it.
       Form fields show as {field: prompt} while empty; replace the prompt to fill one.
   revisions FILE [--json]
       Every tracked change, numbered, with its w:ids, author and context.
