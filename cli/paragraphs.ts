@@ -235,3 +235,59 @@ export function patchTargets(paras: Located[]): (para: NormalizedParagraph) => s
   }
   return (para) => (para.paraId && count.get(para.paraId.toUpperCase()) === 1 ? `para:${para.paraId}` : para.id);
 }
+
+/** The container a paragraph id belongs to: `tbl0.r3.c1` for `tbl0.r3.c1.p0`, `fn1` for `fn1.p0`, `""` for a body paragraph. */
+function containerOf(id: string): string {
+  return id.replace(/\.?p\d+$/, "");
+}
+
+/**
+ * Two neighbouring paragraphs of one container (body, table cell, header, footer, note) that `find`
+ * runs across: its first part ends one paragraph and the rest starts the next. Any spaces typed
+ * between the two parts are ignored, since `view` shows a table cell's paragraphs on one line with a
+ * space between them.
+ */
+export function findAcrossBreak(paras: Located[], find: string): [NormalizedParagraph, NormalizedParagraph] | undefined {
+  for (const variant of quoteVariants(find)) {
+    for (let i = 0; i + 1 < paras.length; i++) {
+      const a = paras[i]!.para;
+      const b = paras[i + 1]!.para;
+      if (containerOf(a.id) !== containerOf(b.id)) continue;
+      const head = a.text.trimEnd();
+      const tail = b.text.trimStart();
+      if (head.length === 0 || tail.length === 0) continue;
+      const lastChar = head[head.length - 1]!;
+      for (let k = 1; k < variant.length; k++) {
+        if (variant[k - 1] !== lastChar) continue;
+        const rest = variant.slice(k).trimStart();
+        if (rest.length > 0 && head.endsWith(variant.slice(0, k)) && tail.startsWith(rest)) return [a, b];
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Why a find that matched nothing failed, when docxtor can tell: the text is in a paragraph other than
+ * the `--in` one, or it runs across a paragraph break. Returns undefined when the text is nowhere, so
+ * the caller keeps its own "not found" message. `every` is all paragraphs of the document; `splitAdvice`
+ * says what to do about a find that runs across a break.
+ */
+export function explainNoMatch(every: Located[], find: string, wholeWord: boolean, inId: string | undefined, splitAdvice: string): string | undefined {
+  if (inId) {
+    const hits = findHits(every, find, wholeWord);
+    if (hits.length === 1) {
+      const id = hits[0]!.para.id;
+      return `"${find}" is not in ${inId}; it is in ${id}. Use --in ${id}.`;
+    }
+    if (hits.length > 1) {
+      const list = hits.slice(0, 20).map((h, i) => `  ${i + 1}. [${h.para.id}] ${snippet(h.para.text, h.start, h.start + h.matched.length, 40)}`);
+      return `"${find}" is not in ${inId}; it matches ${hits.length} times elsewhere. Use --in with one of these ids:\n${list.join("\n")}${hits.length > 20 ? "\n  …" : ""}`;
+    }
+  }
+  const across = findAcrossBreak(every, find);
+  if (across) {
+    return `"${find}" runs across two paragraphs (${across[0].id} and ${across[1].id}); a find must stay inside one paragraph. ${splitAdvice}`;
+  }
+  return undefined;
+}

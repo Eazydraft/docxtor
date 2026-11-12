@@ -483,27 +483,109 @@ export function executeInsertText(
   revCtx?: RevisionContext,
   markers: boolean = true,
 ): void {
-  const occurrence = patch.occurrence ?? 1;
-  const plainAnchor = stripFormattingMarkers(patch.anchor, markers);
-  const anchorStart = findOccurrence(paragraph.text, plainAnchor, occurrence);
+  const point = resolveInsertPoint(paragraph, patch, markers);
 
-  if (anchorStart === -1) {
+  if (!point) {
     throw new Error(
-      `Anchor text "${plainAnchor}" not found in paragraph "${paragraph.id}" (occurrence ${occurrence})`,
+      `Anchor text "${insertAnchor(patch, markers)}" not found in paragraph "${paragraph.id}" (occurrence ${patch.occurrence ?? 1})`,
     );
   }
 
-  // Determine the character offset where we want to insert
-  const insertOffset =
-    patch.position === "before"
-      ? anchorStart
-      : anchorStart + plainAnchor.length;
-
-  if (revCtx) {
-    executeInsertTextRevision(paragraph, patch, insertOffset, revCtx, markers);
+  if (paragraph.runs.length === 0) {
+    fillEmptyParagraph(paragraph, patch, point.side, revCtx, markers);
+  } else if (revCtx) {
+    executeInsertTextRevision(paragraph, patch, point, revCtx, markers);
   } else {
-    executeInsertTextDirect(paragraph, patch, insertOffset, markers);
+    executeInsertTextDirect(paragraph, patch, point, markers);
   }
+}
+
+/** Where an insert_text patch puts its text. */
+export interface InsertPoint {
+  /** Offset in the paragraph's text. */
+  offset: number;
+  /**
+   * The side of the insert point the text belongs to: `"before"` when it
+   * goes before an anchor or at the start of the paragraph, `"after"` when
+   * it goes after an anchor or at the end.
+   */
+  side: "before" | "after";
+  /** Start and end of the anchor in the paragraph's text; absent without an anchor. */
+  anchor?: { start: number; end: number };
+}
+
+/** The anchor of an insert_text patch as plain text; `""` when it has none. */
+export function insertAnchor(patch: InsertTextPatch, markers: boolean = true): string {
+  return stripFormattingMarkers(patch.anchor ?? "", markers);
+}
+
+/**
+ * Resolve where an insert_text patch puts its text, or undefined when its
+ * anchor is not in the paragraph.
+ *
+ * Without an anchor the text goes at the end of the paragraph for
+ * `position: "end"` and at the start for any other position.
+ */
+export function resolveInsertPoint(
+  paragraph: NormalizedParagraph,
+  patch: InsertTextPatch,
+  markers: boolean = true,
+): InsertPoint | undefined {
+  const anchor = insertAnchor(patch, markers);
+  if (anchor.length === 0) {
+    return patch.position === "end"
+      ? { offset: paragraph.text.length, side: "after" }
+      : { offset: 0, side: "before" };
+  }
+  const start = findOccurrence(paragraph.text, anchor, patch.occurrence ?? 1);
+  if (start === -1) return undefined;
+  const end = start + anchor.length;
+  return patch.position === "before"
+    ? { offset: start, side: "before", anchor: { start, end } }
+    : { offset: end, side: "after", anchor: { start, end } };
+}
+
+/** Paragraph-mark w:rPr children that are revision state, not formatting. */
+const MARK_REVISION_TAGS = new Set(["w:ins", "w:del", "w:moveFrom", "w:moveTo", "w:rPrChange"]);
+
+/**
+ * Run properties for text typed into an empty paragraph: those of the
+ * paragraph mark (`w:pPr/w:rPr`), which is what Word gives the first run,
+ * without the mark's revision bookkeeping.
+ */
+function paragraphMarkRPr(paragraphNode: FXPNode): FXPNode | undefined {
+  const pPr = findChild(paragraphNode, "w:pPr");
+  const rPr = pPr ? findChild(pPr, "w:rPr") : undefined;
+  if (!rPr) return undefined;
+  const kept = getChildren(rPr).filter((c) => {
+    const tag = getTagName(c);
+    return tag !== undefined && !MARK_REVISION_TAGS.has(tag);
+  });
+  return kept.length > 0 ? createElement("w:rPr", kept.map(cloneNode)) : undefined;
+}
+
+/**
+ * Put the text of an insert_text patch into a paragraph that has no text.
+ * There is no run to insert next to, so the text arrives as new runs with
+ * the paragraph mark's properties: after `w:pPr` for the start of the
+ * paragraph, after everything else (a bookmark, a break) for the end.
+ */
+function fillEmptyParagraph(
+  paragraph: NormalizedParagraph,
+  patch: InsertTextPatch,
+  side: "before" | "after",
+  revCtx: RevisionContext | undefined,
+  markers: boolean,
+): void {
+  const rPr = paragraphMarkRPr(paragraph.xmlRef);
+  const segments = parseFormattedText(patch.text, markers);
+  const runs = segments.some((s) => s.bold || s.italic || s.strikethrough || s.underline)
+    ? createFormattedRuns(segments, rPr)
+    : [createRun(stripFormattingMarkers(patch.text, markers), rPr)];
+  const children = getChildren(paragraph.xmlRef);
+  const index =
+    side === "after" ? children.length : children.findIndex((c) => getTagName(c) === "w:pPr") + 1;
+  children.splice(index, 0, ...(revCtx ? [createInsElement(revCtx, runs)] : runs));
 }
 
 /**
@@ -549,10 +631,11 @@ export function findInsertTargetRun(
 function executeInsertTextDirect(
   paragraph: NormalizedParagraph,
   patch: InsertTextPatch,
-  insertOffset: number,
+  point: InsertPoint,
   markers: boolean,
 ): void {
-  const targetRun = findInsertTargetRun(paragraph, insertOffset, patch.position);
+  const insertOffset = point.offset;
+  const targetRun = findInsertTargetRun(paragraph, insertOffset, point.side);
   if (!targetRun) {
     throw new Error(
       `No runs found in paragraph "${paragraph.id}" for insertion`,
@@ -574,7 +657,7 @@ function executeInsertTextDirect(
     // A zero-width child at the insert point (a page break right after the
     // anchor) stays next to the anchor: before the new text when inserting
     // before the anchor, after it when inserting after the anchor.
-    const side = sideOfChildrenAtInsert(patch);
+    const side = point.side;
     setRunText(targetRun.xmlRef, newText, (offset) =>
       offset < localInsertOffset || (offset === localInsertOffset && side === "before")
         ? offset
@@ -590,7 +673,7 @@ function executeInsertTextDirect(
       paragraph.xmlRef,
       targetRun.xmlRef,
       localInsertOffset,
-      sideOfChildrenAtInsert(patch),
+      point.side,
     );
     split.parentChildren.splice(split.index, 0, ...formattedRuns);
   }
@@ -606,11 +689,12 @@ function executeInsertTextDirect(
 function executeInsertTextRevision(
   paragraph: NormalizedParagraph,
   patch: InsertTextPatch,
-  insertOffset: number,
+  point: InsertPoint,
   revCtx: RevisionContext,
   markers: boolean,
 ): void {
-  const targetRun = findInsertTargetRun(paragraph, insertOffset, patch.position);
+  const insertOffset = point.offset;
+  const targetRun = findInsertTargetRun(paragraph, insertOffset, point.side);
   if (!targetRun) {
     throw new Error(
       `No runs found in paragraph "${paragraph.id}" for insertion`,
@@ -659,20 +743,10 @@ function executeInsertTextRevision(
       paragraph.xmlRef,
       targetRun.xmlRef,
       localInsertOffset,
-      sideOfChildrenAtInsert(patch),
+      point.side,
     );
     split.parentChildren.splice(split.index, 0, insElement);
   }
-}
-
-/**
- * Which side of inserted text a zero-width child at the insert point stays
- * on. Inserting after an anchor keeps a break that follows the anchor after
- * the new text; inserting before an anchor keeps a break that precedes the
- * anchor before it.
- */
-function sideOfChildrenAtInsert(patch: InsertTextPatch): "before" | "after" {
-  return patch.position === "after" ? "after" : "before";
 }
 
 // =============================================================================

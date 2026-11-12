@@ -8,7 +8,7 @@
 import { readFile } from "node:fs/promises";
 import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
 import { Docxtor, type NormalizedTable, type Patch, type PatchOptions, type PatchResult } from "../src/index.js";
-import { alignReplacement, allParagraphs, findHits, occurrenceAt, patchTargets, planEdit, promptRange, snippet } from "./paragraphs.js";
+import { alignReplacement, allParagraphs, explainNoMatch, findHits, occurrenceAt, patchTargets, planEdit, promptRange, snippet } from "./paragraphs.js";
 import { formatChanges, listChanges } from "./revisions.js";
 import { formatComments, listComments } from "./comments.js";
 import { getAttr, getChildren, getTagName, unescapeXmlText } from "../src/xml/helpers.js";
@@ -20,6 +20,7 @@ Read
       Paragraphs with their ids ([p12], [tbl0.r1.c0.p0], [hdr.default.p0],
       [fn1.p0]). Tracked changes show inline as {+inserted+} and {-deleted-};
       a footnote reference shows as [^1], with the notes listed at the end.
+      A table cell with several paragraphs shows an id before each one.
       Form fields show as {field: prompt} while empty; replace the prompt to fill one.
   revisions FILE [--json]
       Every tracked change, numbered, with its w:ids, author and context.
@@ -34,12 +35,15 @@ Write (tracked changes by default; -o may equal FILE to update in place)
       Find text anywhere (body, tables, headers, footers, footnotes) and
       replace it. A space in --find also matches a tab. Refuses a find that
       matches more than once unless --all, --in or --occurrence says which.
+      A find stays inside one paragraph (one id in view).
   comment FILE -o OUT --text TEXT (--find TEXT | --in ID) [--in ID]
       Add a Word comment anchored to TEXT (or to the whole paragraph ID).
   edit FILE -o OUT [PATCHES.json | -] [--dry-run]
       Apply a JSON array of docxtor patches (stdin when omitted or "-").
       All-or-nothing: if any patch fails nothing is written. --dry-run
       checks every patch and reports each one without writing.
+      To fill an empty paragraph or table cell: {"type":"insert_text",
+      "target":ID,"position":"start","text":TEXT} (no anchor; "end" appends).
   accept FILE -o OUT [--ids 3,4] [--by AUTHOR] [--others reject|keep]
   reject FILE -o OUT [--ids 3,4] [--by AUTHOR] [--others accept|keep]
       Resolve tracked changes: all of them, or only the listed w:ids
@@ -269,6 +273,9 @@ async function cmdReplace(argv: string[]): Promise<void> {
       return [hit];
     });
     if (hits.length === 0) {
+      // The text may be in another paragraph than --in, or run across a paragraph break.
+      const why = explainNoMatch(every, typed, !!values["whole-word"], values.in, "Split it into two --find/--replace pairs.");
+      if (why) fail(`${why} Nothing was written.`);
       fail(`"${typed}" not found${values.in ? ` in ${values.in}` : ""}; nothing was written. Text in a docx may differ from what you expect (quotes, dashes, non-breaking spaces, a tracked deletion); check with: view FILE --grep '<a distinctive word>'`);
     }
     if (values.occurrence) {
@@ -329,7 +336,12 @@ async function cmdComment(argv: string[]): Promise<void> {
     const targetOf = patchTargets(every);
     const paras = every.filter((l) => !values.in || l.para.id === values.in || l.para.paraId === values.in.replace(/^para:/, ""));
     let hits = findHits(paras, find, false).map((h) => ({ id: h.para.id, target: targetOf(h.para), text: h.para.text, start: h.start, find: h.matched }));
-    if (hits.length === 0) fail(`"${values.find}" not found; check with: view FILE --grep '<a distinctive word>'`);
+    if (hits.length === 0) {
+      const why = explainNoMatch(every, find, false, values.in, "Anchor the comment on text from one of them.");
+      fail(why
+        ? `${why} Nothing was written.`
+        : `"${values.find}" not found${values.in ? ` in ${values.in}` : ""}; nothing was written. Text in a docx may differ from what you expect (quotes, dashes, non-breaking spaces, a tracked deletion); check with: view FILE --grep '<a distinctive word>'`);
+    }
     if (values.occurrence) {
       const n = Number(values.occurrence);
       if (!Number.isInteger(n) || n < 1 || n > hits.length) fail(`--occurrence ${values.occurrence}: there are ${hits.length} matches`);

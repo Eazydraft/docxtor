@@ -17,7 +17,7 @@ and editing instructions. Respond with a JSON array of patches.
 
 Patch types:
 - replace_text: { type: "replace_text", target: "<id>", find: "<text>", replace: "<text>" }
-- insert_text: { type: "insert_text", target: "<id>", position: "before"|"after", anchor: "<text>", text: "<text>" }
+- insert_text: { type: "insert_text", target: "<id>", position: "before"|"after", anchor: "<text>", text: "<text>" } (omit anchor and use position "start"|"end" to fill an empty paragraph or table cell)
 - delete_text: { type: "delete_text", target: "<id>", find: "<text>" }
 - append_text: { type: "append_text", text: "<text>" } (supports markdown tables, {{FIELD}} placeholders, and inline formatting)
 - insert_paragraph: { type: "insert_paragraph", target: "<id>", position: "before"|"after", text: "<text>" } (inherits the target's style and numbering)

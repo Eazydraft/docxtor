@@ -47,6 +47,7 @@ Full options: [reference/commands.md](reference/commands.md). Every patch type f
 [p144] (FirstParagraph) 11.1 Payment for each Shipment of Products shall be due within thirty (30) days …
 [p210] {list:1017 L0} c. the following Clauses shall survive the termination …
 | [tbl0.r1.c0.p0] Diesel | [tbl0.r1.c1.p0] $900 |
+| [tbl2.r0.c0.p0] USING THE TERMS [tbl2.r0.c0.p1] The Terms have 2 parts. | [tbl2.r0.c1.p0]  |
 [hdr.default.p0] CONFIDENTIAL
 [p9] (BodyText) Payment is due in {-30-}{+45+} days.
 [p7] Contract title: {field: Insert Title for Contract}
@@ -57,6 +58,7 @@ Full options: [reference/commands.md](reference/commands.md). Every patch type f
 ```
 
 - `[p144]` is the paragraph id that patches target. Table cells are `tbl0.r1.c0.p0` (table, row, cell, paragraph). Headers and footers are `hdr.default.p0` and `ftr.default.p0`. In a document with more than one section the ids carry the section, `hdr.s2.first.p0`.
+- A cell with several paragraphs shows an id before each one; a find never spans two paragraphs. A cell that prints only its id is empty.
 - `(FirstParagraph)` is the style; `{list:1017 L0}` is a list paragraph (numbering id, level).
 - Numbering that Word generates, such as `c.` or `11.1`, is shown at the start of the text but is not part of it: don't put it in a `--find`.
 - A typed clause number is followed by a tab, printed as a tab (`17.2⇥For goods`). In `--find`, type a space there: `--find "17.2 For goods"` matches and the tab is kept. In an `edit` patch, write the tab as `\t`.
@@ -161,6 +163,7 @@ docxtor replace filled.docx -o filled.docx --author "Acme" --in tbl4.r1.c1.p0 \
 - To fill a field, replace its prompt with the answer. The whole prompt goes, and the field stops showing as `{field: …}`.
 - The same prompt often repeats ("Insert name", "Select date"). `--in ID`, with the id from `view`, says which one; it applies to every pair in the call, so give such fields a call of their own.
 - A drop-down list accepts one of the items `view` lists, spelled exactly; anything else is refused with the list. A date field takes a date as text ("11 November 2026").
+- A blank cell or line (no prompt text) is filled with `insert_text` and no anchor, through `docxtor edit`: `{ "type": "insert_text", "target": "tbl1.r5.c1.p0", "position": "start", "text": "June 22, 2026" }`.
 - Tick a checkbox with a patch: `{ "type": "set_checkbox", "target": "p40", "checked": true }` through `docxtor edit`. Add `"occurrence": 2` for the second checkbox in the paragraph.
 - A locked field, or one bound to document data, is refused with the reason. Tell the user rather than working around it.
 - Filling is tracked like any other edit. Use `--untracked` when the user wants a completed form, not a redline.
@@ -224,7 +227,9 @@ Cite section numbers as `view` prints them. For long documents, grep for heading
 |---|---|
 | `"X" matches N times` | Pick with `--occurrence N` or `--in ID`, or lengthen the find |
 | `"X" not found` | `view FILE --grep '<one distinctive word>'` and copy the exact text; it may sit inside a tracked deletion, which is no longer current text, or include a `[^1]` footnote mark, which is not text |
-| `not found in paragraph "p12"` (from `edit`) | The error prints the paragraph's current text: copy from it |
+| `"X" is not in p12; it is in p13` | The text is in another paragraph than `--in`: use the id the message gives |
+| `"X" runs across two paragraphs` | The find covers a paragraph break (two ids in one table cell): split it into one `--find` per paragraph |
+| `not found in paragraph "p12"` (from `edit`) | The error prints the paragraph's current text: copy from it. If it ends `it is in p13`, the text is right and the target is wrong: use that id |
 | `Paragraph "p99" not found` | Ids shifted or are wrong: run `view` again |
 | `no tracked change has w:id ...` | Take the ids from `revisions` on the same file |
 | `"X" is not an option of the dropdown content control` | Use one of the items the message lists, spelled exactly |

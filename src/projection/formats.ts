@@ -1094,12 +1094,12 @@ function formatTableMarkdown(
 
   for (const row of table.rows) {
     const cells = row.cells.map((cell) => {
-      const text = cell.paragraphs
-        .map((p) => renderParagraphText(p, includeRevisions, false, includeFormatting))
+      // Every paragraph carries its own id, so a find can name the paragraph
+      // that holds the text and a paragraph break never reads as a space.
+      if (cell.paragraphs.length === 0) return `[${table.id}.r${row.index}.c${cell.colIndex}.p0] `;
+      return cell.paragraphs
+        .map((p) => `[${formatIdToken(p)}] ${renderParagraphText(p, includeRevisions, false, includeFormatting)}`)
         .join(" ");
-      const first = cell.paragraphs[0];
-      const id = first ? formatIdToken(first) : `${table.id}.r${row.index}.c${cell.colIndex}.p0`;
-      return `[${id}] ${text}`;
     });
     lines.push(`| ${cells.join(" | ")} |`);
   }

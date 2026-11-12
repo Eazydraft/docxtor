@@ -30,7 +30,7 @@ import type {
 } from "../types.js";
 import { findOccurrence, resolveRunRanges } from "../mapping/text-to-runs.js";
 import { stripFormattingMarkers, parseFormattedText } from "./markdown-parser.js";
-import { createFormattedRuns, findInsertTargetRun } from "./text-ops.js";
+import { createFormattedRuns, findInsertTargetRun, insertAnchor, resolveInsertPoint } from "./text-ops.js";
 import { findRunParentChildren } from "./run-splitter.js";
 import { markRunsDeleted } from "./paragraph-ops.js";
 import { createInsElement, type RevisionContext } from "./revision.js";
@@ -294,11 +294,22 @@ export function planControlEdit(
   if (!para.control && !para.controls) return undefined;
 
   const occurrence = patch.occurrence ?? 1;
-  const needle = stripFormattingMarkers(patch.type === "insert_text" ? patch.anchor : patch.find, markers);
-  const matchStart = findOccurrence(para.text, needle, occurrence);
-  if (matchStart === -1) return undefined;
-  const matchEnd = matchStart + needle.length;
-  const matchRuns = resolveRunRanges(para.runs, matchStart, matchEnd).map((r) => r.run);
+  // An insert_text without an anchor has no match: its text goes at the
+  // start or the end of the paragraph.
+  const point = patch.type === "insert_text" ? resolveInsertPoint(para, patch, markers) : undefined;
+  const needle = patch.type === "insert_text" ? insertAnchor(patch, markers) : stripFormattingMarkers(patch.find, markers);
+  let matchStart: number;
+  let matchEnd: number;
+  if (patch.type === "insert_text") {
+    if (!point) return undefined;
+    matchStart = point.anchor?.start ?? point.offset;
+    matchEnd = point.anchor?.end ?? point.offset;
+  } else {
+    matchStart = findOccurrence(para.text, needle, occurrence);
+    if (matchStart === -1) return undefined;
+    matchEnd = matchStart + needle.length;
+  }
+  const matchRuns = point && !point.anchor ? [] : resolveRunRanges(para.runs, matchStart, matchEnd).map((r) => r.run);
 
   // What the patch writes, and the range of paragraph text it replaces.
   const raw = patch.type === "insert_text" ? patch.text : patch.type === "delete_text" ? "" : patch.replace;
@@ -307,20 +318,23 @@ export function planControlEdit(
   let editEnd = matchEnd;
   let runs = matchRuns;
 
-  if (patch.type === "insert_text") {
+  // A paragraph with no text has no run to land in: the new text becomes a
+  // run of the paragraph itself, inside whatever control wraps the paragraph.
+  let emptyFill = false;
+  if (point) {
     // An anchor on a prompt fills the control. Otherwise the text goes next
     // to the anchor, in whichever run the insertion picks.
     const anchorControl = soleControl(matchRuns) ?? para.control;
     if (!(matchRuns.length > 0 && sameControl(matchRuns) && anchorControl?.placeholder)) {
-      const offset = patch.position === "before" ? matchStart : matchEnd;
-      const target = findInsertTargetRun(para, offset, patch.position);
-      if (!target) return undefined;
-      runs = [target];
-      editStart = offset;
-      editEnd = offset;
+      const target = findInsertTargetRun(para, point.offset, point.side);
+      if (target) runs = [target];
+      else if (para.runs.length === 0) emptyFill = true;
+      else return undefined;
+      editStart = point.offset;
+      editEnd = point.offset;
     }
   }
-  if (runs.length === 0) return undefined;
+  if (runs.length === 0 && !emptyFill) return undefined;
 
   if (!sameControl(runs)) {
     const edge = crossedControl(runs);
@@ -330,7 +344,7 @@ export function planControlEdit(
     );
   }
 
-  const inline = runs[0]!.control;
+  const inline = runs[0]?.control;
   const control = inline ?? para.control;
   if (!control) return undefined;
   const scope: ControlScope = inline ? "inline" : "block";

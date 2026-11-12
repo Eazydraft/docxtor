@@ -81,6 +81,26 @@ Insert text before or after an anchor string.
 }
 ```
 
+Without an `anchor` (omitted, or `""`), the text goes at the start of the paragraph with `position: "start"` and at its end with `position: "end"`. This is how an empty paragraph or table cell is filled, such as the blank cell beside `Date:` in a signature block:
+
+```ts
+{ type: "insert_text", target: "tbl1.r5.c1.p0", position: "start", text: "June 22, 2026" }
+```
+
+- In a paragraph with no text, `"start"` and `"end"` both fill it. The new run takes the run properties of the paragraph mark (`w:pPr/w:rPr`) when there are any, so the text has the cell's font and size. Tracked, it is one `w:ins`; accepting it gives the same XML as the untracked fill.
+- In a paragraph with text, the insertion joins the first run (`"start"`) or the last (`"end"`) and takes its formatting.
+- `"before"` or `"after"` with no anchor means the start. `"start"` and `"end"` with an anchor fail validation.
+
+## Text in another paragraph
+
+When the `find` of a `replace_text`, `delete_text`, `replace_cell_text` or `add_comment`, or the `anchor` of an `insert_text`, is not in the target paragraph but is in others, the error names them:
+
+```
+Text "Version 2.1" not found in paragraph "tbl2.r0.c0.p0" (occurrence 1); it is in tbl2.r0.c0.p1 (use that as the target)
+```
+
+Up to 20 ids are listed. The check runs only when a patch has already failed.
+
 ## `delete_text`
 
 Delete a substring from a paragraph.

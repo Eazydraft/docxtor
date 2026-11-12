@@ -199,6 +199,34 @@ function validateStructure(
           error: `Paragraph "${patch.target}" not found`,
         };
       }
+      if (patch.type === "insert_text") {
+        // Patches arrive as JSON from callers, so a field may be missing or
+        // of the wrong type whatever the patch's TypeScript type says.
+        const raw = patch as { anchor?: unknown; text?: unknown; position?: unknown };
+        if (typeof raw.text !== "string") {
+          return { valid: false, error: "insert_text needs text (the text to insert)" };
+        }
+        if (raw.anchor !== undefined && raw.anchor !== null && typeof raw.anchor !== "string") {
+          return {
+            valid: false,
+            error: "insert_text anchor must be text already in the paragraph; omit it to insert at the start or end of the paragraph",
+          };
+        }
+        if (raw.position !== undefined && !["before", "after", "start", "end"].includes(raw.position as string)) {
+          return {
+            valid: false,
+            error: `Invalid position: ${JSON.stringify(raw.position)} (must be "before" or "after" an anchor, or "start" or "end" with no anchor)`,
+          };
+        }
+        if ((raw.position === "start" || raw.position === "end") && typeof raw.anchor === "string" && raw.anchor.length > 0) {
+          return {
+            valid: false,
+            error: `position "${raw.position}" takes no anchor: drop the anchor to insert at the ${raw.position} of the paragraph, or use "before" or "after" with it`,
+          };
+        }
+      } else if (typeof (patch as { find?: unknown }).find !== "string") {
+        return { valid: false, error: `${patch.type} needs find (text already in the paragraph)` };
+      }
       if ("find" in patch && patch.find.length === 0) {
         return { valid: false, error: "Empty find string" };
       }
@@ -629,6 +657,24 @@ export function findParagraphByParaId(
 ): NormalizedParagraph | undefined {
   const wanted = paraId.toUpperCase();
   return findParagraph(doc, (p) => p.paraId === wanted);
+}
+
+/**
+ * Ids of the paragraphs whose text contains `text`, in document order
+ * (body with tables, headers, footers, notes), leaving out `except`.
+ */
+export function paragraphsContaining(
+  doc: NormalizedDocument,
+  text: string,
+  except?: NormalizedParagraph,
+): string[] {
+  const ids: string[] = [];
+  if (text.length === 0) return ids;
+  findParagraph(doc, (p) => {
+    if (p !== except && p.text.includes(text)) ids.push(p.id);
+    return false;
+  });
+  return ids;
 }
 
 function findParagraph(
