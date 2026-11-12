@@ -1096,6 +1096,10 @@ function formatTableMarkdown(
     const cells = row.cells.map((cell) => {
       // Every paragraph carries its own id, so a find can name the paragraph
       // that holds the text and a paragraph break never reads as a space.
+      // A cell with no paragraph (a malformed file) keeps its place in the
+      // row under the id its first paragraph would have. No paragraph has
+      // that id: a patch that targets it is refused with a message that
+      // says so (paragraphNotFound in the validator).
       if (cell.paragraphs.length === 0) return `[${table.id}.r${row.index}.c${cell.colIndex}.p0] `;
       return cell.paragraphs
         .map((p) => `[${formatIdToken(p)}] ${renderParagraphText(p, includeRevisions, false, includeFormatting)}`)

@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { Docxtor } from "../../src/index.js";
-import { createBodyDocx } from "../fixtures/create-docx.js";
+import { createBodyDocx, createNotesDocx } from "../fixtures/create-docx.js";
 import { allParagraphs, explainNoMatch, findAcrossBreak } from "../../cli/paragraphs.js";
 
 const run = promisify(execFile);
@@ -148,11 +148,59 @@ describe("findAcrossBreak and explainNoMatch", () => {
     expect(findAcrossBreak(every, "left side right side")?.map((p) => p.id)).toEqual(["tbl0.r0.c1.p0", "tbl0.r0.c1.p1"]);
   });
 
+  it("does not pair body paragraphs that have a table or a page break between them", async () => {
+    // The table's only cell has no paragraph, so the table adds nothing to the list of paragraphs
+    const doc = await Docxtor.load(await createBodyDocx(
+      para("before the table") + `<w:tbl><w:tr><w:tc><w:tcPr/></w:tc></w:tr></w:tbl>` + para("after the table") +
+      `<w:p><w:r><w:br w:type="page"/></w:r></w:p>` + para("after the break") + para("last one"),
+    ));
+    const every = allParagraphs(doc);
+    expect(findAcrossBreak(every, "before the table after the table")).toBeUndefined();
+    expect(findAcrossBreak(every, "after the table after the break")).toBeUndefined();
+    expect(findAcrossBreak(every, "after the break last one")?.map((p) => p.id)).toEqual([every[every.length - 2]!.para.id, every[every.length - 1]!.para.id]);
+  });
+
+  it("does not pair paragraphs of a footnote, or of a cell in its table, that have a table between them", async () => {
+    const nested = `<w:tbl><w:tr>${cell(para("inner"))}</w:tr></w:tbl>`;
+    const doc = await Docxtor.load(await createNotesDocx({
+      body: `<w:p><w:r><w:t>Body</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r></w:p>`,
+      footnotes:
+        `<w:footnote w:id="1">${para("note start")}` +
+        `<w:tbl><w:tr>${cell(para("cell first") + nested + para("cell second"))}${cell(para("plain one") + para("plain two"))}</w:tr></w:tbl>` +
+        `${para("note end")}</w:footnote>`,
+    }));
+    const every = allParagraphs(doc);
+    const ids = (find: string): string[] | undefined => findAcrossBreak(every, find)?.map((p) => p.id);
+    expect(ids("note start note end")).toBeUndefined();
+    expect(ids("cell first cell second")).toBeUndefined();
+    expect(ids("plain one plain two")).toEqual(["fn1.tbl0.r0.c1.p0", "fn1.tbl0.r0.c1.p1"]);
+  });
+
   it("returns nothing when the text is nowhere", async () => {
     const every = allParagraphs(await Docxtor.load(file));
     expect(explainNoMatch(every, "Nowhere", false, "p0", "Split it.")).toBeUndefined();
     expect(explainNoMatch(every, "Nowhere", false, undefined, "Split it.")).toBeUndefined();
   });
+});
+
+describe("a cell with no paragraph", () => {
+  it("keeps its place in the row, and a patch that targets it is told why it fails", async () => {
+    const f = join(dir, "noparagraph.docx");
+    await writeFile(f, await createBodyDocx(`<w:tbl><w:tr>${cell(para("A"))}<w:tc><w:tcPr/></w:tc></w:tr></w:tbl><w:p/>`));
+    expect((await cli("view", f)).out).toContain("| [tbl0.r0.c0.p0] A | [tbl0.r0.c1.p0]  |");
+    const patches = join(dir, "noparagraph.json");
+    await writeFile(patches, JSON.stringify([{ type: "insert_text", target: "tbl0.r0.c1.p0", position: "start", text: "B" }]));
+    const r = await cli("edit", f, "--dry-run", patches);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('Paragraph "tbl0.r0.c1.p0" not found: the cell tbl0.r0.c1 holds no paragraph, so it has no text to edit');
+    // The id came from view, so the advice to run view again is left out
+    expect(r.out).not.toContain("ids come from");
+    // An id that names nothing still gets it
+    await writeFile(patches, JSON.stringify([{ type: "insert_text", target: "tbl0.r5.c1.p0", position: "start", text: "B" }]));
+    const gone = await cli("edit", f, "--dry-run", patches);
+    expect(gone.out).toContain('Paragraph "tbl0.r5.c1.p0" not found\n');
+    expect(gone.out).toContain("ids come from");
+  }, 30_000);
 });
 
 describe("edit", () => {

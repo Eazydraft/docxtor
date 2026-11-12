@@ -138,7 +138,7 @@ function explain(doc: Docxtor, error: string): string {
     const p = doc.findParagraphById(inPara[1]!) ?? doc.findParagraphByParaId(inPara[1]!.replace(/^para:/, ""));
     if (p) return `${error}\n       ${inPara[1]} currently reads: "${p.text.length > 300 ? `${p.text.slice(0, 300)}…` : p.text}"`;
   }
-  if (/not found/i.test(error) && /["'](p\d|tbl\d|hdr\.|ftr\.|fn\d|en\d|para:)/.test(error)) {
+  if (/not found/i.test(error) && !/holds no paragraph/.test(error) && /["'](p\d|tbl\d|hdr\.|ftr\.|fn\d|en\d|para:)/.test(error)) {
     return `${error}\n       (ids come from \`view FILE\`; ids are positional, so re-run view after edits that add or remove paragraphs)`;
   }
   return error;

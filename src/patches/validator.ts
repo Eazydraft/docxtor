@@ -127,7 +127,7 @@ function validateStructure(
     case "insert_paragraph": {
       const para = findParagraphById(patch.target, doc);
       if (!para) {
-        return { valid: false, error: `Paragraph "${patch.target}" not found` };
+        return { valid: false, error: paragraphNotFound(patch.target, doc) };
       }
       if (!patch.text || patch.text.length === 0) {
         return { valid: false, error: "Empty paragraph text" };
@@ -147,14 +147,14 @@ function validateStructure(
     case "delete_paragraph": {
       const para = findParagraphById(patch.target, doc);
       if (!para) {
-        return { valid: false, error: `Paragraph "${patch.target}" not found` };
+        return { valid: false, error: paragraphNotFound(patch.target, doc) };
       }
       return validateNoteParagraphRemoval(para, doc);
     }
     case "add_comment": {
       const para = findParagraphById(patch.target, doc);
       if (!para) {
-        return { valid: false, error: `Paragraph "${patch.target}" not found` };
+        return { valid: false, error: paragraphNotFound(patch.target, doc) };
       }
       if (!patch.text || patch.text.length === 0) {
         return { valid: false, error: "Empty comment text" };
@@ -175,7 +175,7 @@ function validateStructure(
     case "set_checkbox": {
       const para = findParagraphById(patch.target, doc);
       if (!para) {
-        return { valid: false, error: `Paragraph "${patch.target}" not found` };
+        return { valid: false, error: paragraphNotFound(patch.target, doc) };
       }
       if (typeof patch.checked !== "boolean") {
         return { valid: false, error: "checked must be true or false" };
@@ -196,7 +196,7 @@ function validateStructure(
       if (!para) {
         return {
           valid: false,
-          error: `Paragraph "${patch.target}" not found`,
+          error: paragraphNotFound(patch.target, doc),
         };
       }
       if (patch.type === "insert_text") {
@@ -285,7 +285,7 @@ function validateStructure(
       if (!para) {
         return {
           valid: false,
-          error: `Paragraph "${patch.target}" not found`,
+          error: paragraphNotFound(patch.target, doc),
         };
       }
       if (patch.find !== undefined && patch.find.length === 0) {
@@ -317,7 +317,7 @@ function validateStructure(
       if (!para) {
         return {
           valid: false,
-          error: `Paragraph "${patch.target}" not found`,
+          error: paragraphNotFound(patch.target, doc),
         };
       }
       if (patch.find !== undefined && patch.find.length === 0) {
@@ -495,7 +495,7 @@ function validateStructure(
     case "add_list_item": {
       const para = findParagraphById(patch.target, doc);
       if (!para) {
-        return { valid: false, error: `Paragraph "${patch.target}" not found` };
+        return { valid: false, error: paragraphNotFound(patch.target, doc) };
       }
       if (!para.listInfo) {
         return { valid: false, error: `Paragraph "${patch.target}" is not a list item` };
@@ -515,7 +515,7 @@ function validateStructure(
     case "remove_list_item": {
       const para = findParagraphById(patch.target, doc);
       if (!para) {
-        return { valid: false, error: `Paragraph "${patch.target}" not found` };
+        return { valid: false, error: paragraphNotFound(patch.target, doc) };
       }
       if (!para.listInfo) {
         return { valid: false, error: `Paragraph "${patch.target}" is not a list item` };
@@ -534,7 +534,7 @@ function validateStructure(
       for (const target of patch.targets) {
         const para = findParagraphById(target, doc);
         if (!para) {
-          return { valid: false, error: `Paragraph "${target}" not found` };
+          return { valid: false, error: paragraphNotFound(target, doc) };
         }
       }
       return { valid: true };
@@ -547,7 +547,7 @@ function validateStructure(
       for (const target of patch.targets) {
         const para = findParagraphById(target, doc);
         if (!para) {
-          return { valid: false, error: `Paragraph "${target}" not found` };
+          return { valid: false, error: paragraphNotFound(target, doc) };
         }
         if (!para.listInfo) {
           return { valid: false, error: `Paragraph "${target}" is not a list item` };
@@ -559,7 +559,7 @@ function validateStructure(
     case "set_list_properties": {
       const para = findParagraphById(patch.target, doc);
       if (!para) {
-        return { valid: false, error: `Paragraph "${patch.target}" not found` };
+        return { valid: false, error: paragraphNotFound(patch.target, doc) };
       }
       if (!para.listInfo) {
         return { valid: false, error: `Paragraph "${patch.target}" is not a list item` };
@@ -629,6 +629,27 @@ function validateContainerTarget(
   if ("error" in resolved) return { valid: false, error: resolved.error };
 
   return { valid: true };
+}
+
+/**
+ * The error for a paragraph id that names no paragraph.
+ *
+ * A table cell with no paragraph at all (a malformed file: Word requires
+ * one in every cell) is shown by the projections under the id its first
+ * paragraph would have, `tbl0.r1.c2.p0`. A patch that targets that id is
+ * told what it found, since the id did come from the view.
+ */
+function paragraphNotFound(target: string, doc: NormalizedDocument): string {
+  const m = /^(.+)\.r(\d+)\.c(\d+)\.p0$/.exec(target);
+  const row = m ? findTableById(m[1]!, doc)?.rows.find((r) => r.index === Number(m[2])) : undefined;
+  const cell = row?.cells.find((c) => c.colIndex === Number(m![3]));
+  if (cell && cell.paragraphs.length === 0) {
+    return (
+      `Paragraph "${target}" not found: the cell ${m![1]}.r${m![2]}.c${m![3]} holds no paragraph, so it has no text to edit ` +
+      `(the file is malformed there; Word puts a paragraph in every cell)`
+    );
+  }
+  return `Paragraph "${target}" not found`;
 }
 
 /**

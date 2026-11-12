@@ -231,6 +231,7 @@ Cite section numbers as `view` prints them. For long documents, grep for heading
 | `"X" runs across two paragraphs` | The find covers a paragraph break (two ids in one table cell): split it into one `--find` per paragraph |
 | `not found in paragraph "p12"` (from `edit`) | The error prints the paragraph's current text: copy from it. If it ends `it is in p13`, the text is right and the target is wrong: use that id |
 | `Paragraph "p99" not found` | Ids shifted or are wrong: run `view` again |
+| `the cell tbl0.r0.c1 holds no paragraph` | The file is malformed there and the cell can't be edited; tell the user |
 | `no tracked change has w:id ...` | Take the ids from `revisions` on the same file |
 | `"X" is not an option of the dropdown content control` | Use one of the items the message lists, spelled exactly |
 | `crosses the edge of a content control` | The find starts inside a form field and ends outside it (or crosses into a field nested in another): edit the field's text and the text around it separately |

@@ -9,17 +9,19 @@ export interface Located {
   /** "body", "table", "header", "footer", "footnote" or "endnote". */
   where: "body" | "table" | "header" | "footer" | "footnote" | "endnote";
   /**
-   * Set when the paragraph's container (a table cell, a header, a footer, a note) also holds a table.
-   * Such a container's paragraphs are listed before its tables, so the next paragraph in the list may
-   * have a table before it in the document.
+   * Set when the next entry of the list is not known to be the paragraph that follows this one in the
+   * document. A body paragraph before a table or a page break has it. So does every paragraph of a
+   * table cell, header, footer or note that also holds a table: such a container lists its paragraphs
+   * before its tables, so a table may lie between two of them.
    */
-  besideTable?: boolean;
+  breakAfter?: boolean;
 }
 
 function tableParagraphs(table: NormalizedTable, out: Located[]): void {
   for (const row of table.rows) {
     for (const cell of row.cells) {
-      for (const p of cell.paragraphs) out.push({ para: p, where: "table", ...(cell.nestedTables.length > 0 ? { besideTable: true } : {}) });
+      const mixed = cell.nestedTables.length > 0;
+      for (const p of cell.paragraphs) out.push(mixed ? { para: p, where: "table", breakAfter: true } : { para: p, where: "table" });
       for (const t of cell.nestedTables) tableParagraphs(t, out);
     }
   }
@@ -28,11 +30,31 @@ function tableParagraphs(table: NormalizedTable, out: Located[]): void {
 /** Body paragraphs and table-cell paragraphs, in document order. */
 export function bodyParagraphs(body: BodyElement[]): Located[] {
   const out: Located[] = [];
+  let previous: Located | undefined;
   for (const el of body) {
-    if (el.kind === "paragraph") out.push({ para: el, where: "body" });
-    else if (el.kind === "table") tableParagraphs(el, out);
+    if (el.kind === "paragraph") {
+      previous = { para: el, where: "body" };
+      out.push(previous);
+      continue;
+    }
+    // A table or a page break stands between the paragraphs around it, whether or not it adds entries.
+    if (previous) previous.breakAfter = true;
+    previous = undefined;
+    if (el.kind === "table") tableParagraphs(el, out);
   }
   return out;
+}
+
+/** The paragraphs of a header, footer or note, then those of its tables, all labelled `where`. */
+function partParagraphs(part: { paragraphs: NormalizedParagraph[]; tables: NormalizedTable[] }, where: Located["where"], out: Located[]): void {
+  const mixed = part.tables.length > 0;
+  for (const p of part.paragraphs) out.push(mixed ? { para: p, where, breakAfter: true } : { para: p, where });
+  for (const t of part.tables) {
+    const cells: Located[] = [];
+    tableParagraphs(t, cells);
+    // Keep what the cell said about its own order (a nested table between its paragraphs)
+    for (const c of cells) out.push({ ...c, where });
+  }
 }
 
 /** Every paragraph: body (with tables), then headers, footers, footnotes and endnotes. */
@@ -40,21 +62,11 @@ export function allParagraphs(doc: Docxtor): Located[] {
   const out = bodyParagraphs(doc.getBody());
   for (const [kind, map] of [["header", doc.getHeaders()], ["footer", doc.getFooters()]] as const) {
     for (const hf of map.values()) {
-      for (const p of hf.paragraphs) out.push({ para: p, where: kind, ...(hf.tables.length > 0 ? { besideTable: true } : {}) });
-      for (const t of hf.tables) {
-        const cells: Located[] = [];
-        tableParagraphs(t, cells);
-        for (const c of cells) out.push({ para: c.para, where: kind });
-      }
+      partParagraphs(hf, kind, out);
     }
   }
   for (const note of [...doc.getFootnotes().values(), ...doc.getEndnotes().values()]) {
-    for (const p of note.paragraphs) out.push({ para: p, where: note.kind, ...(note.tables.length > 0 ? { besideTable: true } : {}) });
-    for (const t of note.tables) {
-      const cells: Located[] = [];
-      tableParagraphs(t, cells);
-      for (const c of cells) out.push({ para: c.para, where: note.kind });
-    }
+    partParagraphs(note, note.kind, out);
   }
   return out;
 }
@@ -253,9 +265,8 @@ function containerOf(id: string): string {
  * between the two parts are ignored, since `view` shows a table cell's paragraphs on one line with a
  * space between them.
  *
- * The two paragraphs must follow one another in the document. In the body the list is in document
- * order. A cell, header, footer or note that also holds a table lists its paragraphs before its
- * tables, so a table may lie between two of them: such containers are skipped. With `wholeWord`,
+ * The two paragraphs must follow one another in the document, so an entry marked `breakAfter` is not
+ * paired with the one after it. With `wholeWord`,
  * the find must start and end at a word boundary, as a match inside one paragraph must.
  */
 export function findAcrossBreak(paras: Located[], find: string, wholeWord = false): [NormalizedParagraph, NormalizedParagraph] | undefined {
@@ -264,7 +275,7 @@ export function findAcrossBreak(paras: Located[], find: string, wholeWord = fals
     for (let i = 0; i + 1 < paras.length; i++) {
       const a = paras[i]!.para;
       const b = paras[i + 1]!.para;
-      if (paras[i]!.besideTable || containerOf(a.id) !== containerOf(b.id)) continue;
+      if (paras[i]!.breakAfter || containerOf(a.id) !== containerOf(b.id)) continue;
       const head = a.text.trimEnd();
       const tail = b.text.trimStart();
       if (head.length === 0 || tail.length === 0) continue;

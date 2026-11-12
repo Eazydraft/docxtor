@@ -87,6 +87,7 @@ Without an `anchor` (omitted, or `""`), the text goes at the start of the paragr
 { type: "insert_text", target: "tbl1.r5.c1.p0", position: "start", text: "June 22, 2026" }
 ```
 
+- A cell must hold a paragraph to be filled. A cell with none (a malformed file) is refused: `Paragraph "tbl0.r0.c1.p0" not found: the cell tbl0.r0.c1 holds no paragraph`.
 - In a paragraph with no text, `"start"` and `"end"` both fill it. The new run takes the run properties of the paragraph mark (`w:pPr/w:rPr`) when there are any, so the text has the cell's font and size. Tracked, it is one `w:ins`; accepting it gives the same XML as the untracked fill.
 - A paragraph with no text that holds an empty content control (a field with neither text nor prompt) is filled inside the control, under the control's rules: a locked control is refused, and a drop-down list takes one of its items. With several controls, `"start"` fills the first and `"end"` the last.
 - In a paragraph with text, the insertion joins the first run (`"start"`) or the last (`"end"`) and takes its formatting.
