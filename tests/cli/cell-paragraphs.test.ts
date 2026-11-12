@@ -130,6 +130,24 @@ describe("findAcrossBreak and explainNoMatch", () => {
     expect(ids("Nowhere at all")).toBeUndefined();
   });
 
+  it("with whole-word, the find must start and end at a word boundary", async () => {
+    const doc = await Docxtor.load(await createBodyDocx(para("XAgreement") + para("SellerY") + para("the Agreement") + para("Seller pays")));
+    const every = allParagraphs(doc);
+    expect(findAcrossBreak(every, "Agreement Seller")?.map((p) => p.id)).toEqual(["p0", "p1"]);
+    expect(findAcrossBreak(every, "Agreement Seller", true)?.map((p) => p.id)).toEqual(["p2", "p3"]);
+    expect(explainNoMatch(every.slice(0, 2), "Agreement Seller", true, undefined, "Split it.")).toBeUndefined();
+  });
+
+  it("does not pair two paragraphs of a cell that have a nested table between them", async () => {
+    const nested = `<w:tbl><w:tr>${cell(para("inner"))}</w:tr></w:tbl>`;
+    const doc = await Docxtor.load(await createBodyDocx(
+      `<w:tbl><w:tr>${cell(para("first part") + nested + para("second part"))}${cell(para("left side") + para("right side"))}</w:tr></w:tbl><w:p/>`,
+    ));
+    const every = allParagraphs(doc);
+    expect(findAcrossBreak(every, "first part second part")).toBeUndefined();
+    expect(findAcrossBreak(every, "left side right side")?.map((p) => p.id)).toEqual(["tbl0.r0.c1.p0", "tbl0.r0.c1.p1"]);
+  });
+
   it("returns nothing when the text is nowhere", async () => {
     const every = allParagraphs(await Docxtor.load(file));
     expect(explainNoMatch(every, "Nowhere", false, "p0", "Split it.")).toBeUndefined();

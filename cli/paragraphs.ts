@@ -8,12 +8,18 @@ export interface Located {
   para: NormalizedParagraph;
   /** "body", "table", "header", "footer", "footnote" or "endnote". */
   where: "body" | "table" | "header" | "footer" | "footnote" | "endnote";
+  /**
+   * Set when the paragraph's container (a table cell, a header, a footer, a note) also holds a table.
+   * Such a container's paragraphs are listed before its tables, so the next paragraph in the list may
+   * have a table before it in the document.
+   */
+  besideTable?: boolean;
 }
 
 function tableParagraphs(table: NormalizedTable, out: Located[]): void {
   for (const row of table.rows) {
     for (const cell of row.cells) {
-      for (const p of cell.paragraphs) out.push({ para: p, where: "table" });
+      for (const p of cell.paragraphs) out.push({ para: p, where: "table", ...(cell.nestedTables.length > 0 ? { besideTable: true } : {}) });
       for (const t of cell.nestedTables) tableParagraphs(t, out);
     }
   }
@@ -34,7 +40,7 @@ export function allParagraphs(doc: Docxtor): Located[] {
   const out = bodyParagraphs(doc.getBody());
   for (const [kind, map] of [["header", doc.getHeaders()], ["footer", doc.getFooters()]] as const) {
     for (const hf of map.values()) {
-      for (const p of hf.paragraphs) out.push({ para: p, where: kind });
+      for (const p of hf.paragraphs) out.push({ para: p, where: kind, ...(hf.tables.length > 0 ? { besideTable: true } : {}) });
       for (const t of hf.tables) {
         const cells: Located[] = [];
         tableParagraphs(t, cells);
@@ -43,7 +49,7 @@ export function allParagraphs(doc: Docxtor): Located[] {
     }
   }
   for (const note of [...doc.getFootnotes().values(), ...doc.getEndnotes().values()]) {
-    for (const p of note.paragraphs) out.push({ para: p, where: note.kind });
+    for (const p of note.paragraphs) out.push({ para: p, where: note.kind, ...(note.tables.length > 0 ? { besideTable: true } : {}) });
     for (const t of note.tables) {
       const cells: Located[] = [];
       tableParagraphs(t, cells);
@@ -246,13 +252,19 @@ function containerOf(id: string): string {
  * runs across: its first part ends one paragraph and the rest starts the next. Any spaces typed
  * between the two parts are ignored, since `view` shows a table cell's paragraphs on one line with a
  * space between them.
+ *
+ * The two paragraphs must follow one another in the document. In the body the list is in document
+ * order. A cell, header, footer or note that also holds a table lists its paragraphs before its
+ * tables, so a table may lie between two of them: such containers are skipped. With `wholeWord`,
+ * the find must start and end at a word boundary, as a match inside one paragraph must.
  */
-export function findAcrossBreak(paras: Located[], find: string): [NormalizedParagraph, NormalizedParagraph] | undefined {
+export function findAcrossBreak(paras: Located[], find: string, wholeWord = false): [NormalizedParagraph, NormalizedParagraph] | undefined {
+  const wordChar = /[\p{L}\p{N}_]/u;
   for (const variant of quoteVariants(find)) {
     for (let i = 0; i + 1 < paras.length; i++) {
       const a = paras[i]!.para;
       const b = paras[i + 1]!.para;
-      if (containerOf(a.id) !== containerOf(b.id)) continue;
+      if (paras[i]!.besideTable || containerOf(a.id) !== containerOf(b.id)) continue;
       const head = a.text.trimEnd();
       const tail = b.text.trimStart();
       if (head.length === 0 || tail.length === 0) continue;
@@ -260,7 +272,9 @@ export function findAcrossBreak(paras: Located[], find: string): [NormalizedPara
       for (let k = 1; k < variant.length; k++) {
         if (variant[k - 1] !== lastChar) continue;
         const rest = variant.slice(k).trimStart();
-        if (rest.length > 0 && head.endsWith(variant.slice(0, k)) && tail.startsWith(rest)) return [a, b];
+        if (rest.length === 0 || !head.endsWith(variant.slice(0, k)) || !tail.startsWith(rest)) continue;
+        if (wholeWord && (wordChar.test(head[head.length - k - 1] ?? "") || wordChar.test(tail[rest.length] ?? ""))) continue;
+        return [a, b];
       }
     }
   }
@@ -285,7 +299,7 @@ export function explainNoMatch(every: Located[], find: string, wholeWord: boolea
       return `"${find}" is not in ${inId}; it matches ${hits.length} times elsewhere. Use --in with one of these ids:\n${list.join("\n")}${hits.length > 20 ? "\n  …" : ""}`;
     }
   }
-  const across = findAcrossBreak(every, find);
+  const across = findAcrossBreak(every, find, wholeWord);
   if (across) {
     return `"${find}" runs across two paragraphs (${across[0].id} and ${across[1].id}); a find must stay inside one paragraph. ${splitAdvice}`;
   }
