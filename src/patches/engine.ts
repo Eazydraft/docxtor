@@ -29,6 +29,7 @@ import {
   findParagraphById,
   findTableById,
   findElementById,
+  paragraphsContaining,
 } from "./validator.js";
 import {
   executeReplaceText,
@@ -71,6 +72,7 @@ import {
 } from "./list-ops.js";
 import { createNumberingDefinition } from "./numbering.js";
 import { parseTextSegments } from "./text-segments.js";
+import { stripFormattingMarkers } from "./markdown-parser.js";
 import {
   getBodyChildren,
   insertIntoBody,
@@ -190,6 +192,32 @@ export function cloneDocument(doc: NormalizedDocument): NormalizedDocument {
 function markersFor(patch: Patch, options?: PatchOptions): boolean {
   const own = (patch as { markers?: boolean }).markers;
   return own ?? options?.inlineMarkers ?? true;
+}
+
+/** The most paragraph ids listed when a patch's text is found outside its target. */
+const MAX_ELSEWHERE = 20;
+
+/**
+ * When a patch fails because its `find` (or `anchor`) is not in the target
+ * paragraph, say which paragraphs do hold that text: the caller usually has
+ * the right text and the wrong id (a neighbouring paragraph of the same
+ * table cell, say). Runs only on the failure path.
+ */
+function elsewhereHint(doc: NormalizedDocument, patch: Patch, error: string, markers: boolean): string {
+  if (!/^(Text|Anchor text) ".*" not found in paragraph "/s.test(error)) return "";
+  const raw = (patch as { find?: unknown; anchor?: unknown; target?: unknown });
+  const typed = patch.type === "insert_text" ? raw.anchor : raw.find;
+  if (typeof typed !== "string" || typeof raw.target !== "string") return "";
+  const needle = stripFormattingMarkers(typed, markers);
+  const target = findParagraphById(raw.target, doc);
+  // The target holds the text, only not that many times: the occurrence is
+  // wrong, not the target, so the error stands as it is.
+  if (target?.text.includes(needle)) return "";
+  const ids = paragraphsContaining(doc, needle, target);
+  if (ids.length === 0) return "";
+  if (ids.length === 1) return `; it is in ${ids[0]} (use that as the target)`;
+  const more = ids.length > MAX_ELSEWHERE ? `, … (${ids.length} paragraphs)` : "";
+  return `; it is in ${ids.slice(0, MAX_ELSEWHERE).join(", ")}${more} (use one of those as the target)`;
 }
 
 /**
@@ -338,11 +366,8 @@ function applySinglePatch(
 
     return { success: true, patch };
   } catch (err) {
-    return {
-      success: false,
-      patch,
-      error: err instanceof Error ? err.message : String(err),
-    };
+    const message = err instanceof Error ? err.message : String(err);
+    return { success: false, patch, error: message + elsewhereHint(doc, patch, message, markers) };
   }
 }
 

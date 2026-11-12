@@ -81,6 +81,28 @@ Insert text before or after an anchor string.
 }
 ```
 
+Without an `anchor` (omitted, or `""`), the text goes at the start of the paragraph with `position: "start"` and at its end with `position: "end"`. This is how an empty paragraph or table cell is filled, such as the blank cell beside `Date:` in a signature block:
+
+```ts
+{ type: "insert_text", target: "tbl1.r5.c1.p0", position: "start", text: "June 22, 2026" }
+```
+
+- A cell must hold a paragraph to be filled. A cell with none (a malformed file) is refused: `Paragraph "tbl0.r0.c1.p0" not found: the cell tbl0.r0.c1 holds no paragraph`.
+- In a paragraph with no text, `"start"` and `"end"` both fill it. The new run takes the run properties of the paragraph mark (`w:pPr/w:rPr`) when there are any, so the text has the cell's font and size. Tracked, it is one `w:ins`; accepting it gives the same XML as the untracked fill.
+- A paragraph with no text that holds an empty content control (a field with neither text nor prompt) is filled inside the control, under the control's rules: a locked control is refused, and a drop-down list takes one of its items. With several controls, `"start"` fills the first and `"end"` the last.
+- In a paragraph with text, the insertion joins the first run (`"start"`) or the last (`"end"`) and takes its formatting.
+- `"before"` or `"after"` with no anchor means the start. `anchor: null` in JSON is read as no anchor. `"start"` and `"end"` with an anchor fail validation.
+
+## Text in another paragraph
+
+When the `find` of a `replace_text`, `delete_text`, `replace_cell_text` or `add_comment`, or the `anchor` of an `insert_text`, is not in the target paragraph but is in others, the error names them:
+
+```
+Text "Version 2.1" not found in paragraph "tbl2.r0.c0.p0" (occurrence 1); it is in tbl2.r0.c0.p1 (use that as the target)
+```
+
+Up to 20 ids are listed. The check runs only when a patch has already failed. When the target holds the text but not the `occurrence` asked for, the error is left as it is: the occurrence is wrong, not the target.
+
 ## `delete_text`
 
 Delete a substring from a paragraph.
@@ -253,7 +275,7 @@ Insert one or more new paragraphs immediately before or after an existing paragr
 - `text` supports inline formatting markers (`markers: false` writes it verbatim) and `{{FIELD}}` placeholders; `\n` creates multiple paragraphs, inserted contiguously in the given order. Markdown tables and lists are **not** supported here (the validator rejects them) — use `add_table` / `add_list` with `afterId`.
 - `inheritStyle` copies the target's `w:pPr` (paragraph style, numbering `numId`/`ilvl`, indentation, spacing — not section breaks or revision state) and gives the new text the formatting of the target's last run, which is what Word does when you press Enter at the end of a paragraph.
 - New paragraphs get the next free positional id in the target's container (e.g. `p13`, `tbl0.r1.c0.p1`), a fresh `paraId` when the part declares `w14`, and are addressable by later patches in the same batch.
-- With `trackRevisions`, the runs are wrapped in `w:ins` **and** the paragraph mark carries `w:pPr/w:rPr/w:ins`, so accepting the change leaves exactly one new paragraph and no stray blank one.
+- With `trackRevisions`, the runs are wrapped in `w:ins` **and** the paragraph mark carries `w:pPr/w:rPr/w:ins`, so accepting the change leaves exactly one new paragraph and no stray blank one. Rejecting it removes the new paragraph, also when it was inserted after the last paragraph of the body or of a table cell, or before a table, where it has no next paragraph to merge into. If another author has since added text to it, the paragraph stays with that text.
 
 ## `delete_paragraph`
 

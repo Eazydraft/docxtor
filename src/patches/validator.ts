@@ -127,7 +127,7 @@ function validateStructure(
     case "insert_paragraph": {
       const para = findParagraphById(patch.target, doc);
       if (!para) {
-        return { valid: false, error: `Paragraph "${patch.target}" not found` };
+        return { valid: false, error: paragraphNotFound(patch.target, doc) };
       }
       if (!patch.text || patch.text.length === 0) {
         return { valid: false, error: "Empty paragraph text" };
@@ -147,14 +147,14 @@ function validateStructure(
     case "delete_paragraph": {
       const para = findParagraphById(patch.target, doc);
       if (!para) {
-        return { valid: false, error: `Paragraph "${patch.target}" not found` };
+        return { valid: false, error: paragraphNotFound(patch.target, doc) };
       }
       return validateNoteParagraphRemoval(para, doc);
     }
     case "add_comment": {
       const para = findParagraphById(patch.target, doc);
       if (!para) {
-        return { valid: false, error: `Paragraph "${patch.target}" not found` };
+        return { valid: false, error: paragraphNotFound(patch.target, doc) };
       }
       if (!patch.text || patch.text.length === 0) {
         return { valid: false, error: "Empty comment text" };
@@ -175,7 +175,7 @@ function validateStructure(
     case "set_checkbox": {
       const para = findParagraphById(patch.target, doc);
       if (!para) {
-        return { valid: false, error: `Paragraph "${patch.target}" not found` };
+        return { valid: false, error: paragraphNotFound(patch.target, doc) };
       }
       if (typeof patch.checked !== "boolean") {
         return { valid: false, error: "checked must be true or false" };
@@ -196,8 +196,38 @@ function validateStructure(
       if (!para) {
         return {
           valid: false,
-          error: `Paragraph "${patch.target}" not found`,
+          error: paragraphNotFound(patch.target, doc),
         };
+      }
+      if (patch.type === "insert_text") {
+        // Patches arrive as JSON from callers, so a field may be missing or
+        // of the wrong type whatever the patch's TypeScript type says.
+        const raw = patch as { anchor?: unknown; text?: unknown; position?: unknown };
+        if (typeof raw.text !== "string") {
+          return { valid: false, error: "insert_text needs text (the text to insert)" };
+        }
+        // A JSON null is how many serializers write an optional field that
+        // is not set, so it reads as no anchor, like leaving the field out.
+        if (raw.anchor !== undefined && raw.anchor !== null && typeof raw.anchor !== "string") {
+          return {
+            valid: false,
+            error: "insert_text anchor must be text already in the paragraph; omit it to insert at the start or end of the paragraph",
+          };
+        }
+        if (raw.position !== undefined && !["before", "after", "start", "end"].includes(raw.position as string)) {
+          return {
+            valid: false,
+            error: `Invalid position: ${JSON.stringify(raw.position)} (must be "before" or "after" an anchor, or "start" or "end" with no anchor)`,
+          };
+        }
+        if ((raw.position === "start" || raw.position === "end") && typeof raw.anchor === "string" && raw.anchor.length > 0) {
+          return {
+            valid: false,
+            error: `position "${raw.position}" takes no anchor: drop the anchor to insert at the ${raw.position} of the paragraph, or use "before" or "after" with it`,
+          };
+        }
+      } else if (typeof (patch as { find?: unknown }).find !== "string") {
+        return { valid: false, error: `${patch.type} needs find (text already in the paragraph)` };
       }
       if ("find" in patch && patch.find.length === 0) {
         return { valid: false, error: "Empty find string" };
@@ -255,7 +285,7 @@ function validateStructure(
       if (!para) {
         return {
           valid: false,
-          error: `Paragraph "${patch.target}" not found`,
+          error: paragraphNotFound(patch.target, doc),
         };
       }
       if (patch.find !== undefined && patch.find.length === 0) {
@@ -287,7 +317,7 @@ function validateStructure(
       if (!para) {
         return {
           valid: false,
-          error: `Paragraph "${patch.target}" not found`,
+          error: paragraphNotFound(patch.target, doc),
         };
       }
       if (patch.find !== undefined && patch.find.length === 0) {
@@ -465,7 +495,7 @@ function validateStructure(
     case "add_list_item": {
       const para = findParagraphById(patch.target, doc);
       if (!para) {
-        return { valid: false, error: `Paragraph "${patch.target}" not found` };
+        return { valid: false, error: paragraphNotFound(patch.target, doc) };
       }
       if (!para.listInfo) {
         return { valid: false, error: `Paragraph "${patch.target}" is not a list item` };
@@ -485,7 +515,7 @@ function validateStructure(
     case "remove_list_item": {
       const para = findParagraphById(patch.target, doc);
       if (!para) {
-        return { valid: false, error: `Paragraph "${patch.target}" not found` };
+        return { valid: false, error: paragraphNotFound(patch.target, doc) };
       }
       if (!para.listInfo) {
         return { valid: false, error: `Paragraph "${patch.target}" is not a list item` };
@@ -504,7 +534,7 @@ function validateStructure(
       for (const target of patch.targets) {
         const para = findParagraphById(target, doc);
         if (!para) {
-          return { valid: false, error: `Paragraph "${target}" not found` };
+          return { valid: false, error: paragraphNotFound(target, doc) };
         }
       }
       return { valid: true };
@@ -517,7 +547,7 @@ function validateStructure(
       for (const target of patch.targets) {
         const para = findParagraphById(target, doc);
         if (!para) {
-          return { valid: false, error: `Paragraph "${target}" not found` };
+          return { valid: false, error: paragraphNotFound(target, doc) };
         }
         if (!para.listInfo) {
           return { valid: false, error: `Paragraph "${target}" is not a list item` };
@@ -529,7 +559,7 @@ function validateStructure(
     case "set_list_properties": {
       const para = findParagraphById(patch.target, doc);
       if (!para) {
-        return { valid: false, error: `Paragraph "${patch.target}" not found` };
+        return { valid: false, error: paragraphNotFound(patch.target, doc) };
       }
       if (!para.listInfo) {
         return { valid: false, error: `Paragraph "${patch.target}" is not a list item` };
@@ -602,6 +632,27 @@ function validateContainerTarget(
 }
 
 /**
+ * The error for a paragraph id that names no paragraph.
+ *
+ * A table cell with no paragraph at all (a malformed file: Word requires
+ * one in every cell) is shown by the projections under the id its first
+ * paragraph would have, `tbl0.r1.c2.p0`. A patch that targets that id is
+ * told what it found, since the id did come from the view.
+ */
+function paragraphNotFound(target: string, doc: NormalizedDocument): string {
+  const m = /^(.+)\.r(\d+)\.c(\d+)\.p0$/.exec(target);
+  const row = m ? findTableById(m[1]!, doc)?.rows.find((r) => r.index === Number(m[2])) : undefined;
+  const cell = row?.cells.find((c) => c.colIndex === Number(m![3]));
+  if (cell && cell.paragraphs.length === 0) {
+    return (
+      `Paragraph "${target}" not found: the cell ${m![1]}.r${m![2]}.c${m![3]} holds no paragraph, so it has no text to edit ` +
+      `(the file is malformed there; Word puts a paragraph in every cell)`
+    );
+  }
+  return `Paragraph "${target}" not found`;
+}
+
+/**
  * Find a paragraph by its ID anywhere in the document
  * (body, tables, headers, footers, footnotes, endnotes).
  *
@@ -629,6 +680,24 @@ export function findParagraphByParaId(
 ): NormalizedParagraph | undefined {
   const wanted = paraId.toUpperCase();
   return findParagraph(doc, (p) => p.paraId === wanted);
+}
+
+/**
+ * Ids of the paragraphs whose text contains `text`, in document order
+ * (body with tables, headers, footers, notes), leaving out `except`.
+ */
+export function paragraphsContaining(
+  doc: NormalizedDocument,
+  text: string,
+  except?: NormalizedParagraph,
+): string[] {
+  const ids: string[] = [];
+  if (text.length === 0) return ids;
+  findParagraph(doc, (p) => {
+    if (p !== except && p.text.includes(text)) ids.push(p.id);
+    return false;
+  });
+  return ids;
 }
 
 function findParagraph(

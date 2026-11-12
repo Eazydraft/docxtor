@@ -690,10 +690,20 @@ export interface InsertTextPatch {
   type: "insert_text";
   /** Target paragraph ID. */
   target: string;
-  /** Insert before or after the anchor text. */
-  position: "before" | "after";
-  /** Text to anchor against. */
-  anchor: string;
+  /**
+   * Insert before or after the anchor text. Without an anchor, `"start"`
+   * puts the text at the start of the paragraph and `"end"` at its end;
+   * `"before"` and `"after"` then mean the start. `"start"` and `"end"`
+   * take no anchor.
+   */
+  position: "before" | "after" | "start" | "end";
+  /**
+   * Text to anchor against. Omit it (or pass `""`; a JSON `null` is read
+   * as omitted) to insert at the start
+   * or end of the paragraph; this is how an empty paragraph or table cell
+   * is filled.
+   */
+  anchor?: string;
   /** Text to insert. */
   text: string;
   /** Which occurrence of the anchor (1-based). Default: 1. */

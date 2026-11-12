@@ -13,7 +13,7 @@ All commands: `docxtor <command> ...` (see SKILL.md for how to run it). Errors g
 docxtor view FILE [--grep REGEX [--context N]] [--no-revisions] [--formatting] [--styles] [--json]
 ```
 
-One line per paragraph, prefixed with its id. Table rows print as `| [tbl0.r1.c0.p0] text | [tbl0.r1.c1.p0] text |`, with `{+row inserted by …+}` or `{-row deleted by …-}` after a tracked row; headers and footers follow the body under `--- Header (default) ---` lines, then footnotes and endnotes under `--- Footnotes ---` and `--- Endnotes ---` with ids `fn1.p0` and `en1.p0`. In the text, a tab prints as a tab character, and a footnote or endnote reference as `[^1]` or `[^e1]`. The number is the one Word displays, the position of the reference in the text, not the `w:id` stored in the file; `[^1]` is the note listed as `fn1.p0` and `[^e1]` the one listed as `en1.p0`. The mark is not part of the text. An empty form field prints as `{field: prompt}` (`{field date: …}`, `{field dropdown "A" OR "B": …}` for typed ones) and a chosen date or list item as `{field date= 1 May 2026}`.
+One line per paragraph, prefixed with its id. Table rows print as `| [tbl0.r1.c0.p0] text | [tbl0.r1.c1.p0] text |`, with an id before each paragraph of a cell that has several (`| [tbl0.r1.c0.p0] Heading [tbl0.r1.c0.p1] Body |`) and `{+row inserted by …+}` or `{-row deleted by …-}` after a tracked row; the rows of a table nested in a cell follow the row that holds it, with ids under the cell's (`| [tbl0.r1.c0.tbl0.r0.c0.p0] text |`); headers and footers follow the body under `--- Header (default) ---` lines, then footnotes and endnotes under `--- Footnotes ---` and `--- Endnotes ---` with ids `fn1.p0` and `en1.p0`. In the text, a tab prints as a tab character, and a footnote or endnote reference as `[^1]` or `[^e1]`. The number is the one Word displays, the position of the reference in the text, not the `w:id` stored in the file; `[^1]` is the note listed as `fn1.p0` and `[^e1]` the one listed as `en1.p0`. The mark is not part of the text. An empty form field prints as `{field: prompt}` (`{field date: …}`, `{field dropdown "A" OR "B": …}` for typed ones) and a chosen date or list item as `{field date= 1 May 2026}`.
 
 | Option | Effect |
 |---|---|
@@ -94,6 +94,7 @@ wrote redline.docx (tracked, author "Acme")
 - Tries straight/curly quote variants when the literal text isn't found, then lets a space match a tab: `--find "17.2 For goods"` finds `17.2⇥For goods`. The tab is kept, and the report shows the text that matched.
 - An empty `--replace ""` deletes the text.
 - A find on the prompt of an empty form field fills the field with the whole `--replace` text.
+- A find stays inside one paragraph. When nothing matches, the error says so if the text is in another paragraph than `--in` (`"X" is not in p12; it is in p13. Use --in p13.`) or runs across a paragraph break (`"X" runs across two paragraphs (tbl0.r3.c1.p0 and tbl0.r3.c1.p1)`): split such a find into one `--find`/`--replace` pair per paragraph. `comment` reports the same.
 
 | Option | Effect |
 |---|---|

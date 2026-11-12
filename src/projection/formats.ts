@@ -565,6 +565,7 @@ function buildListPrefix(
  * [tbl0] Table
  * | [tbl0.r0.c0.p0] Header A | [tbl0.r0.c1.p0] Header B |
  * | [tbl0.r1.c0.p0] Cell 1   | [tbl0.r1.c1.p0] Cell 2   |
+ * | [tbl0.r1.c0.tbl0.r0.c0.p0] Row of a table nested in Cell 1 |
  *
  * --- Header (default) ---
  * [hdr.default.p0] Header text
@@ -1094,14 +1095,27 @@ function formatTableMarkdown(
 
   for (const row of table.rows) {
     const cells = row.cells.map((cell) => {
-      const text = cell.paragraphs
-        .map((p) => renderParagraphText(p, includeRevisions, false, includeFormatting))
+      // Every paragraph carries its own id, so a find can name the paragraph
+      // that holds the text and a paragraph break never reads as a space.
+      // A cell with no paragraph (a malformed file) keeps its place in the
+      // row under the id its first paragraph would have. No paragraph has
+      // that id: a patch that targets it is refused with a message that
+      // says so (paragraphNotFound in the validator).
+      if (cell.paragraphs.length === 0) return `[${table.id}.r${row.index}.c${cell.colIndex}.p0] `;
+      return cell.paragraphs
+        .map((p) => `[${formatIdToken(p)}] ${renderParagraphText(p, includeRevisions, false, includeFormatting)}`)
         .join(" ");
-      const first = cell.paragraphs[0];
-      const id = first ? formatIdToken(first) : `${table.id}.r${row.index}.c${cell.colIndex}.p0`;
-      return `[${id}] ${text}`;
     });
     lines.push(`| ${cells.join(" | ")} |`);
+    // A table nested in a cell follows the row that holds it, one line per
+    // nested row. Its ids start with the cell's (tbl0.r0.c0.tbl0.r0.c0.p0),
+    // which says where it sits; the lines are not indented, so every row
+    // of the view, nested or not, starts with "| [".
+    for (const cell of row.cells) {
+      for (const nested of cell.nestedTables) {
+        lines.push(...formatTableMarkdown(nested, includeRevisions, includeFormatting));
+      }
+    }
   }
 
   return lines;

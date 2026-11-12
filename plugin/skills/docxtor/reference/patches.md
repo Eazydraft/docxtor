@@ -42,6 +42,14 @@ Keeps the formatting of the replaced text. Tracked: the old text becomes a delet
 
 `position` is `before` or `after` the `anchor`.
 
+Omit `anchor` to insert at the start (`position: "start"`) or end (`"end"`) of the paragraph; this fills an empty paragraph or cell:
+
+```json
+{ "type": "insert_text", "target": "tbl1.r5.c1.p0", "position": "start", "text": "June 22, 2026" }
+```
+
+In an empty paragraph the new text takes the paragraph's own font and size. `start` and `end` take no anchor.
+
 ### delete_text
 
 ```json

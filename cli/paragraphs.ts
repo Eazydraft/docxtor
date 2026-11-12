@@ -8,12 +8,20 @@ export interface Located {
   para: NormalizedParagraph;
   /** "body", "table", "header", "footer", "footnote" or "endnote". */
   where: "body" | "table" | "header" | "footer" | "footnote" | "endnote";
+  /**
+   * Set when the next entry of the list is not known to be the paragraph that follows this one in the
+   * document. A body paragraph before a table or a page break has it. So does every paragraph of a
+   * table cell, header, footer or note that also holds a table: such a container lists its paragraphs
+   * before its tables, so a table may lie between two of them.
+   */
+  breakAfter?: boolean;
 }
 
 function tableParagraphs(table: NormalizedTable, out: Located[]): void {
   for (const row of table.rows) {
     for (const cell of row.cells) {
-      for (const p of cell.paragraphs) out.push({ para: p, where: "table" });
+      const mixed = cell.nestedTables.length > 0;
+      for (const p of cell.paragraphs) out.push(mixed ? { para: p, where: "table", breakAfter: true } : { para: p, where: "table" });
       for (const t of cell.nestedTables) tableParagraphs(t, out);
     }
   }
@@ -22,11 +30,31 @@ function tableParagraphs(table: NormalizedTable, out: Located[]): void {
 /** Body paragraphs and table-cell paragraphs, in document order. */
 export function bodyParagraphs(body: BodyElement[]): Located[] {
   const out: Located[] = [];
+  let previous: Located | undefined;
   for (const el of body) {
-    if (el.kind === "paragraph") out.push({ para: el, where: "body" });
-    else if (el.kind === "table") tableParagraphs(el, out);
+    if (el.kind === "paragraph") {
+      previous = { para: el, where: "body" };
+      out.push(previous);
+      continue;
+    }
+    // A table or a page break stands between the paragraphs around it, whether or not it adds entries.
+    if (previous) previous.breakAfter = true;
+    previous = undefined;
+    if (el.kind === "table") tableParagraphs(el, out);
   }
   return out;
+}
+
+/** The paragraphs of a header, footer or note, then those of its tables, all labelled `where`. */
+function partParagraphs(part: { paragraphs: NormalizedParagraph[]; tables: NormalizedTable[] }, where: Located["where"], out: Located[]): void {
+  const mixed = part.tables.length > 0;
+  for (const p of part.paragraphs) out.push(mixed ? { para: p, where, breakAfter: true } : { para: p, where });
+  for (const t of part.tables) {
+    const cells: Located[] = [];
+    tableParagraphs(t, cells);
+    // Keep what the cell said about its own order (a nested table between its paragraphs)
+    for (const c of cells) out.push({ ...c, where });
+  }
 }
 
 /** Every paragraph: body (with tables), then headers, footers, footnotes and endnotes. */
@@ -34,21 +62,11 @@ export function allParagraphs(doc: Docxtor): Located[] {
   const out = bodyParagraphs(doc.getBody());
   for (const [kind, map] of [["header", doc.getHeaders()], ["footer", doc.getFooters()]] as const) {
     for (const hf of map.values()) {
-      for (const p of hf.paragraphs) out.push({ para: p, where: kind });
-      for (const t of hf.tables) {
-        const cells: Located[] = [];
-        tableParagraphs(t, cells);
-        for (const c of cells) out.push({ para: c.para, where: kind });
-      }
+      partParagraphs(hf, kind, out);
     }
   }
   for (const note of [...doc.getFootnotes().values(), ...doc.getEndnotes().values()]) {
-    for (const p of note.paragraphs) out.push({ para: p, where: note.kind });
-    for (const t of note.tables) {
-      const cells: Located[] = [];
-      tableParagraphs(t, cells);
-      for (const c of cells) out.push({ para: c.para, where: note.kind });
-    }
+    partParagraphs(note, note.kind, out);
   }
   return out;
 }
@@ -234,4 +252,67 @@ export function patchTargets(paras: Located[]): (para: NormalizedParagraph) => s
     if (para.paraId) count.set(para.paraId.toUpperCase(), (count.get(para.paraId.toUpperCase()) ?? 0) + 1);
   }
   return (para) => (para.paraId && count.get(para.paraId.toUpperCase()) === 1 ? `para:${para.paraId}` : para.id);
+}
+
+/** The container a paragraph id belongs to: `tbl0.r3.c1` for `tbl0.r3.c1.p0`, `fn1` for `fn1.p0`, `""` for a body paragraph. */
+function containerOf(id: string): string {
+  return id.replace(/\.?p\d+$/, "");
+}
+
+/**
+ * Two neighbouring paragraphs of one container (body, table cell, header, footer, note) that `find`
+ * runs across: its first part ends one paragraph and the rest starts the next. Any spaces typed
+ * between the two parts are ignored, since `view` shows a table cell's paragraphs on one line with a
+ * space between them.
+ *
+ * The two paragraphs must follow one another in the document, so an entry marked `breakAfter` is not
+ * paired with the one after it. With `wholeWord`,
+ * the find must start and end at a word boundary, as a match inside one paragraph must.
+ */
+export function findAcrossBreak(paras: Located[], find: string, wholeWord = false): [NormalizedParagraph, NormalizedParagraph] | undefined {
+  const wordChar = /[\p{L}\p{N}_]/u;
+  for (const variant of quoteVariants(find)) {
+    for (let i = 0; i + 1 < paras.length; i++) {
+      const a = paras[i]!.para;
+      const b = paras[i + 1]!.para;
+      if (paras[i]!.breakAfter || containerOf(a.id) !== containerOf(b.id)) continue;
+      const head = a.text.trimEnd();
+      const tail = b.text.trimStart();
+      if (head.length === 0 || tail.length === 0) continue;
+      const lastChar = head[head.length - 1]!;
+      for (let k = 1; k < variant.length; k++) {
+        if (variant[k - 1] !== lastChar) continue;
+        const rest = variant.slice(k).trimStart();
+        if (rest.length === 0 || !head.endsWith(variant.slice(0, k)) || !tail.startsWith(rest)) continue;
+        if (wholeWord && (wordChar.test(head[head.length - k - 1] ?? "") || wordChar.test(tail[rest.length] ?? ""))) continue;
+        return [a, b];
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Why a find that matched nothing failed, when docxtor can tell: the text is in a paragraph other than
+ * the `--in` one, or it runs across a paragraph break. Returns undefined when the text is nowhere, so
+ * the caller keeps its own "not found" message. `every` is all paragraphs of the document; `splitAdvice`
+ * says what to do about a find that runs across a break.
+ */
+export function explainNoMatch(every: Located[], find: string, wholeWord: boolean, inId: string | undefined, splitAdvice: string): string | undefined {
+  if (inId) {
+    const hits = findHits(every, find, wholeWord);
+    if (hits.length === 1) {
+      const id = hits[0]!.para.id;
+      return `"${find}" is not in ${inId}; it is in ${id}. Use --in ${id}.`;
+    }
+    if (hits.length > 1) {
+      const list = hits.slice(0, 20).map((h, i) => `  ${i + 1}. [${h.para.id}] ${snippet(h.para.text, h.start, h.start + h.matched.length, 40)}`);
+      return `"${find}" is not in ${inId}; it matches ${hits.length} times elsewhere. Use --in with one of these ids:\n${list.join("\n")}${hits.length > 20 ? "\n  …" : ""}`;
+    }
+  }
+  const across = findAcrossBreak(every, find, wholeWord);
+  if (across) {
+    return `"${find}" runs across two paragraphs (${across[0].id} and ${across[1].id}); a find must stay inside one paragraph. ${splitAdvice}`;
+  }
+  return undefined;
 }

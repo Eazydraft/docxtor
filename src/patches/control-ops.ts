@@ -30,7 +30,7 @@ import type {
 } from "../types.js";
 import { findOccurrence, resolveRunRanges } from "../mapping/text-to-runs.js";
 import { stripFormattingMarkers, parseFormattedText } from "./markdown-parser.js";
-import { createFormattedRuns, findInsertTargetRun } from "./text-ops.js";
+import { createFormattedRuns, findInsertTargetRun, insertAnchor, resolveInsertPoint } from "./text-ops.js";
 import { findRunParentChildren } from "./run-splitter.js";
 import { markRunsDeleted } from "./paragraph-ops.js";
 import { createInsElement, type RevisionContext } from "./revision.js";
@@ -294,11 +294,22 @@ export function planControlEdit(
   if (!para.control && !para.controls) return undefined;
 
   const occurrence = patch.occurrence ?? 1;
-  const needle = stripFormattingMarkers(patch.type === "insert_text" ? patch.anchor : patch.find, markers);
-  const matchStart = findOccurrence(para.text, needle, occurrence);
-  if (matchStart === -1) return undefined;
-  const matchEnd = matchStart + needle.length;
-  const matchRuns = resolveRunRanges(para.runs, matchStart, matchEnd).map((r) => r.run);
+  // An insert_text without an anchor has no match: its text goes at the
+  // start or the end of the paragraph.
+  const point = patch.type === "insert_text" ? resolveInsertPoint(para, patch, markers) : undefined;
+  const needle = patch.type === "insert_text" ? insertAnchor(patch, markers) : stripFormattingMarkers(patch.find, markers);
+  let matchStart: number;
+  let matchEnd: number;
+  if (patch.type === "insert_text") {
+    if (!point) return undefined;
+    matchStart = point.anchor?.start ?? point.offset;
+    matchEnd = point.anchor?.end ?? point.offset;
+  } else {
+    matchStart = findOccurrence(para.text, needle, occurrence);
+    if (matchStart === -1) return undefined;
+    matchEnd = matchStart + needle.length;
+  }
+  const matchRuns = point && !point.anchor ? [] : resolveRunRanges(para.runs, matchStart, matchEnd).map((r) => r.run);
 
   // What the patch writes, and the range of paragraph text it replaces.
   const raw = patch.type === "insert_text" ? patch.text : patch.type === "delete_text" ? "" : patch.replace;
@@ -307,20 +318,30 @@ export function planControlEdit(
   let editEnd = matchEnd;
   let runs = matchRuns;
 
-  if (patch.type === "insert_text") {
+  // A paragraph with no text has no run to land in. When it holds an empty
+  // inline control (a field left with no text and no prompt), the text
+  // fills that control: the first one for the start of the paragraph, the
+  // last for the end, and the innermost where controls are nested.
+  // Otherwise the text becomes a run of the paragraph itself, inside
+  // whatever control wraps the paragraph.
+  let emptyFill = false;
+  let emptyInline: ControlInfo | undefined;
+  if (point) {
     // An anchor on a prompt fills the control. Otherwise the text goes next
     // to the anchor, in whichever run the insertion picks.
     const anchorControl = soleControl(matchRuns) ?? para.control;
     if (!(matchRuns.length > 0 && sameControl(matchRuns) && anchorControl?.placeholder)) {
-      const offset = patch.position === "before" ? matchStart : matchEnd;
-      const target = findInsertTargetRun(para, offset, patch.position);
-      if (!target) return undefined;
-      runs = [target];
-      editStart = offset;
-      editEnd = offset;
+      const target = findInsertTargetRun(para, point.offset, point.side);
+      if (target) runs = [target];
+      else if (para.runs.length === 0) {
+        emptyFill = true;
+        emptyInline = emptyInlineControl(para, point.side);
+      } else return undefined;
+      editStart = point.offset;
+      editEnd = point.offset;
     }
   }
-  if (runs.length === 0) return undefined;
+  if (runs.length === 0 && !emptyFill) return undefined;
 
   if (!sameControl(runs)) {
     const edge = crossedControl(runs);
@@ -330,7 +351,7 @@ export function planControlEdit(
     );
   }
 
-  const inline = runs[0]!.control;
+  const inline = runs[0]?.control ?? emptyInline;
   const control = inline ?? para.control;
   if (!control) return undefined;
   const scope: ControlScope = inline ? "inline" : "block";
@@ -401,9 +422,24 @@ export function planControlEdit(
     );
   }
 
-  return control.placeholder
+  return control.placeholder || control === emptyInline
     ? { mode: "fill", control, scope, text, raw }
     : { mode: "edit", control, text };
+}
+
+/**
+ * The inline control that text put into a paragraph with no text goes to:
+ * the first of the paragraph's controls for the start, the last for the
+ * end, and in either case the innermost of a nest. Undefined when the
+ * paragraph holds no inline control.
+ */
+function emptyInlineControl(para: NormalizedParagraph, side: "before" | "after"): ControlInfo | undefined {
+  // Nested controls follow the one that holds them
+  const controls = (para.controls ?? []).map((r) => r.control);
+  if (side === "after") return controls[controls.length - 1];
+  let i = 0;
+  while (i + 1 < controls.length && controlChain(controls[i + 1]).includes(controls[i]!)) i++;
+  return controls[i];
 }
 
 /**

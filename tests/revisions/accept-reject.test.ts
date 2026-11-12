@@ -12,6 +12,7 @@ import {
   createTableDocx,
   createStyledDocx,
   createMultiParagraphDocx,
+  createBodyDocx,
 } from "../fixtures/create-docx.js";
 
 const AUTHOR = "USI Legal AI";
@@ -210,6 +211,66 @@ describe("acceptAllRevisions", () => {
     doc.acceptAllRevisions();
     // No following paragraph to merge into → an empty paragraph remains, as in Word
     expect(doc.getParagraphs().map((p) => p.text)).toEqual(["One", ""]);
+  });
+
+  describe("rejecting an inserted paragraph that has no next paragraph to merge into", () => {
+    const TBL = (inner: string): string => `<w:tbl><w:tr><w:tc><w:tcPr/>${inner}</w:tc></w:tr></w:tbl>`;
+    const P = (text: string): string => `<w:p><w:r><w:t>${text}</w:t></w:r></w:p>`;
+    const xmlOf = async (doc: Docxtor): Promise<string> =>
+      (await JSZip.loadAsync(await doc.toBuffer())).file("word/document.xml")!.async("string");
+
+    it.each([
+      ["after the last paragraph of the body", P("One") + P("Two"), "p1"],
+      ["after the last paragraph of a table cell", TBL(P("Cell")) + "<w:p/>", "tbl0.r0.c0.p0"],
+      ["after a paragraph that a table follows", P("One") + TBL(P("Cell")) + P("Two"), "p0"],
+      ["after a paragraph of a cell that a nested table follows", TBL(P("Cell") + TBL(P("Inner")) + "<w:p/>") + "<w:p/>", "tbl0.r0.c0.p0"],
+    ])("%s: the document is as it was", async (_name, body, target) => {
+      const buffer = await createBodyDocx(body);
+      const before = await xmlOf(await Docxtor.load(buffer));
+      const doc = await Docxtor.load(buffer);
+      const r = doc.applyPatches([{ type: "insert_paragraph", target, position: "after", text: "New\nSecond new" }], TRACKED);
+      expect(r[0]!.error).toBeUndefined();
+      doc.rejectAllRevisions();
+      expect(await xmlOf(doc)).toBe(before);
+    });
+
+    it("accepting it instead keeps the new paragraphs", async () => {
+      const doc = await Docxtor.load(await createBodyDocx(TBL(P("Cell")) + "<w:p/>"));
+      doc.applyPatches([{ type: "insert_paragraph", target: "tbl0.r0.c0.p0", position: "after", text: "New" }], TRACKED);
+      doc.acceptAllRevisions();
+      expect(doc.getTables()[0]!.rows[0]!.cells[0]!.paragraphs.map((p) => p.text)).toEqual(["Cell", "New"]);
+    });
+
+    it("keeps the paragraph when another author's text is still in it", async () => {
+      // The last paragraph of the cell was inserted by one author; another author typed in it
+      const stamp = (id: number, author: string): string => `w:id="${id}" w:author="${author}" w:date="2026-01-01T00:00:00Z"`;
+      const inserted =
+        `<w:p><w:pPr><w:rPr><w:ins ${stamp(8, "First")}/></w:rPr></w:pPr>` +
+        `<w:ins ${stamp(9, "First")}><w:r><w:t>Ours</w:t></w:r></w:ins>` +
+        `<w:ins ${stamp(10, "Second")}><w:r><w:t xml:space="preserve"> theirs</w:t></w:r></w:ins></w:p>`;
+      const doc = await Docxtor.load(await createBodyDocx(TBL(P("Cell") + inserted) + "<w:p/>"));
+      doc.rejectAllRevisions({ authors: ["First"] });
+      expect(doc.getTables()[0]!.rows[0]!.cells[0]!.paragraphs.map((p) => p.text)).toEqual(["Cell", " theirs"]);
+    });
+
+    it("keeps an inserted paragraph that is the only one in its cell, or that follows a table", async () => {
+      // A paragraph whose mark is a tracked insertion, with nothing before it in the cell
+      const INS = `<w:p><w:pPr><w:rPr><w:ins w:id="9" w:author="Someone" w:date="2026-01-01T00:00:00Z"/></w:rPr></w:pPr></w:p>`;
+      const only = await Docxtor.load(await createBodyDocx(TBL(INS) + "<w:p/>"));
+      only.rejectAllRevisions();
+      expect(only.getTables()[0]!.rows[0]!.cells[0]!.paragraphs).toHaveLength(1);
+
+      const afterTable = await Docxtor.load(await createBodyDocx(TBL(TBL(P("Inner")) + INS) + "<w:p/>"));
+      afterTable.rejectAllRevisions();
+      expect(afterTable.getTables()[0]!.rows[0]!.cells[0]!.paragraphs).toHaveLength(1);
+    });
+
+    it("keeps a section-break paragraph", async () => {
+      const SECT = `<w:p><w:pPr><w:rPr><w:ins w:id="9" w:author="Someone" w:date="2026-01-01T00:00:00Z"/></w:rPr><w:sectPr/></w:pPr></w:p>`;
+      const doc = await Docxtor.load(await createBodyDocx(P("One") + SECT + TBL(P("Cell")) + "<w:p/>"));
+      doc.rejectAllRevisions();
+      expect(await xmlOf(doc)).toContain("<w:sectPr/>");
+    });
   });
 
   it("merges a split paragraph when the inserted mark is accepted... and keeps content on reject", async () => {
