@@ -206,6 +206,8 @@ function validateStructure(
         if (typeof raw.text !== "string") {
           return { valid: false, error: "insert_text needs text (the text to insert)" };
         }
+        // A JSON null is how many serializers write an optional field that
+        // is not set, so it reads as no anchor, like leaving the field out.
         if (raw.anchor !== undefined && raw.anchor !== null && typeof raw.anchor !== "string") {
           return {
             valid: false,

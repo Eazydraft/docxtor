@@ -174,7 +174,57 @@ describe("insert_text without an anchor", () => {
   });
 });
 
+describe("insert_text into an empty paragraph that holds an empty inline control", () => {
+  const sdt = (id: number, inner = "", lock = ""): string =>
+    `<w:sdt><w:sdtPr><w:id w:val="${id}"/>${lock}</w:sdtPr><w:sdtContent>${inner}</w:sdtContent></w:sdt>`;
+  const fill = { type: "insert_text", target: "p0", position: "start", text: "Filled" };
+
+  it("puts the text inside the control, untracked and tracked", async () => {
+    const plain = await Docxtor.load(await createBodyDocx(`<w:p>${sdt(7)}</w:p>`));
+    expect(apply(plain, fill).error).toBeUndefined();
+    expect(text(plain, "p0")).toBe("Filled");
+    expect(await documentXml(plain)).toContain(`<w:sdtContent><w:r><w:t>Filled</w:t></w:r></w:sdtContent>`);
+
+    const tracked = await Docxtor.load(await createBodyDocx(`<w:p>${sdt(7)}</w:p>`));
+    expect(apply(tracked, fill, TRACKED).error).toBeUndefined();
+    expect(await documentXml(tracked)).toMatch(/<w:sdtContent><w:ins [^>]*><w:r><w:t>Filled<\/w:t><\/w:r><\/w:ins><\/w:sdtContent>/);
+    tracked.acceptAllRevisions();
+    expect(await documentXml(tracked)).toBe(await documentXml(plain));
+  });
+
+  it("refuses a locked control, and an item a drop-down list does not have", async () => {
+    const locked = await Docxtor.load(await createBodyDocx(`<w:p>${sdt(7, "", `<w:lock w:val="contentLocked"/>`)}</w:p>`));
+    const r = apply(locked, fill);
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/locked/);
+    expect(await documentXml(locked)).not.toContain("Filled");
+
+    const list = `<w:dropDownList><w:listItem w:displayText="Yes" w:value="Yes"/><w:listItem w:displayText="No" w:value="No"/></w:dropDownList>`;
+    const dropdown = await Docxtor.load(await createBodyDocx(`<w:p>${sdt(7, "", list)}</w:p>`));
+    expect(apply(dropdown, fill).error).toMatch(/not an option/);
+    expect(apply(dropdown, { ...fill, text: "Yes" }).error).toBeUndefined();
+    expect(text(dropdown, "p0")).toBe("Yes");
+  });
+
+  it("picks the first control for the start and the last for the end, innermost in a nest", async () => {
+    const body = `<w:p>${sdt(1, sdt(2))}${sdt(3)}</w:p>`;
+    const start = await Docxtor.load(await createBodyDocx(body));
+    expect(apply(start, fill).error).toBeUndefined();
+    expect(await documentXml(start)).toContain(`<w:id w:val="2"/></w:sdtPr><w:sdtContent><w:r><w:t>Filled</w:t></w:r></w:sdtContent>`);
+    const end = await Docxtor.load(await createBodyDocx(body));
+    expect(apply(end, { ...fill, position: "end" }).error).toBeUndefined();
+    expect(await documentXml(end)).toContain(`<w:id w:val="3"/></w:sdtPr><w:sdtContent><w:r><w:t>Filled</w:t></w:r></w:sdtContent>`);
+  });
+});
+
 describe("insert_text validation", () => {
+  it("reads a JSON null anchor as no anchor", async () => {
+    const doc = await load();
+    const r = apply(doc, JSON.parse('{"type":"insert_text","target":"p1","position":"start","anchor":null,"text":"Filled"}'));
+    expect(r.error).toBeUndefined();
+    expect(text(doc, "p1")).toBe("Filled");
+  });
+
   it("never surfaces a TypeError for a malformed patch", async () => {
     const doc = await load();
     for (const patch of [

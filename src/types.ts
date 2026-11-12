@@ -698,7 +698,8 @@ export interface InsertTextPatch {
    */
   position: "before" | "after" | "start" | "end";
   /**
-   * Text to anchor against. Omit it (or pass `""`) to insert at the start
+   * Text to anchor against. Omit it (or pass `""`; a JSON `null` is read
+   * as omitted) to insert at the start
    * or end of the paragraph; this is how an empty paragraph or table cell
    * is filled.
    */

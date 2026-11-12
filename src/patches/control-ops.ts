@@ -318,9 +318,14 @@ export function planControlEdit(
   let editEnd = matchEnd;
   let runs = matchRuns;
 
-  // A paragraph with no text has no run to land in: the new text becomes a
-  // run of the paragraph itself, inside whatever control wraps the paragraph.
+  // A paragraph with no text has no run to land in. When it holds an empty
+  // inline control (a field left with no text and no prompt), the text
+  // fills that control: the first one for the start of the paragraph, the
+  // last for the end, and the innermost where controls are nested.
+  // Otherwise the text becomes a run of the paragraph itself, inside
+  // whatever control wraps the paragraph.
   let emptyFill = false;
+  let emptyInline: ControlInfo | undefined;
   if (point) {
     // An anchor on a prompt fills the control. Otherwise the text goes next
     // to the anchor, in whichever run the insertion picks.
@@ -328,8 +333,10 @@ export function planControlEdit(
     if (!(matchRuns.length > 0 && sameControl(matchRuns) && anchorControl?.placeholder)) {
       const target = findInsertTargetRun(para, point.offset, point.side);
       if (target) runs = [target];
-      else if (para.runs.length === 0) emptyFill = true;
-      else return undefined;
+      else if (para.runs.length === 0) {
+        emptyFill = true;
+        emptyInline = emptyInlineControl(para, point.side);
+      } else return undefined;
       editStart = point.offset;
       editEnd = point.offset;
     }
@@ -344,7 +351,7 @@ export function planControlEdit(
     );
   }
 
-  const inline = runs[0]?.control;
+  const inline = runs[0]?.control ?? emptyInline;
   const control = inline ?? para.control;
   if (!control) return undefined;
   const scope: ControlScope = inline ? "inline" : "block";
@@ -415,9 +422,24 @@ export function planControlEdit(
     );
   }
 
-  return control.placeholder
+  return control.placeholder || control === emptyInline
     ? { mode: "fill", control, scope, text, raw }
     : { mode: "edit", control, text };
+}
+
+/**
+ * The inline control that text put into a paragraph with no text goes to:
+ * the first of the paragraph's controls for the start, the last for the
+ * end, and in either case the innermost of a nest. Undefined when the
+ * paragraph holds no inline control.
+ */
+function emptyInlineControl(para: NormalizedParagraph, side: "before" | "after"): ControlInfo | undefined {
+  // Nested controls follow the one that holds them
+  const controls = (para.controls ?? []).map((r) => r.control);
+  if (side === "after") return controls[controls.length - 1];
+  let i = 0;
+  while (i + 1 < controls.length && controlChain(controls[i + 1]).includes(controls[i]!)) i++;
+  return controls[i];
 }
 
 /**
