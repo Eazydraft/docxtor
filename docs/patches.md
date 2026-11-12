@@ -275,7 +275,7 @@ Insert one or more new paragraphs immediately before or after an existing paragr
 - `text` supports inline formatting markers (`markers: false` writes it verbatim) and `{{FIELD}}` placeholders; `\n` creates multiple paragraphs, inserted contiguously in the given order. Markdown tables and lists are **not** supported here (the validator rejects them) — use `add_table` / `add_list` with `afterId`.
 - `inheritStyle` copies the target's `w:pPr` (paragraph style, numbering `numId`/`ilvl`, indentation, spacing — not section breaks or revision state) and gives the new text the formatting of the target's last run, which is what Word does when you press Enter at the end of a paragraph.
 - New paragraphs get the next free positional id in the target's container (e.g. `p13`, `tbl0.r1.c0.p1`), a fresh `paraId` when the part declares `w14`, and are addressable by later patches in the same batch.
-- With `trackRevisions`, the runs are wrapped in `w:ins` **and** the paragraph mark carries `w:pPr/w:rPr/w:ins`, so accepting the change leaves exactly one new paragraph and no stray blank one.
+- With `trackRevisions`, the runs are wrapped in `w:ins` **and** the paragraph mark carries `w:pPr/w:rPr/w:ins`, so accepting the change leaves exactly one new paragraph and no stray blank one. Rejecting it removes the new paragraph, also when it was inserted after the last paragraph of the body or of a table cell, or before a table, where it has no next paragraph to merge into. If another author has since added text to it, the paragraph stays with that text.
 
 ## `delete_paragraph`
 

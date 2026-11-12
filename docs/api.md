@@ -279,6 +279,8 @@ const { rejected } = doc.rejectAllRevisions({ ids: ["14", "15"] });     // only 
 | Paragraph mark `w:pPr/w:rPr/w:ins` | marker dropped | paragraph merged into the next |
 | Paragraph mark `w:pPr/w:rPr/w:del` | paragraph merged into the next | marker dropped |
 
+A paragraph with no next paragraph to merge into (the last one of the body, a table cell, a header or a note, or one that a table follows) is handled by what the change was. An accepted deletion keeps it as an empty paragraph, as Word does: the last paragraph mark cannot be deleted. A rejected insertion removes it when nothing is left in it and the paragraph before it stays, so rejecting an `insert_paragraph` there gives back the document as it was; a paragraph that still holds something, such as text another author added, is kept.
+
 With `authors`, only revisions by those authors are touched; a reviewer's hand edits survive while the tool's own marks are accepted. With `ids`, only the revisions whose `w:id` is listed are touched (both filters apply when both are given). Each insertion and deletion in a projection with `includeRevisions` carries its `id`; a replacement is a `w:del` and a `w:ins`, so pass both ids to resolve it. Move ranges are matched by their own ids. The document is re-normalized afterwards: positional ids are reassigned, `paraId`s are not. Use these to produce the clean final document from a redline (accept the tool's author, then strip any remaining bracket tokens with `delete_text`).
 
 ## Metadata: `doc.getCoreProperties()` / `doc.setCoreProperties(props)` / `doc.scrubMetadata()`

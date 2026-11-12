@@ -436,7 +436,8 @@ function restorePropertyChange(
 
 /**
  * Resolve `w:pPr/w:rPr/w:ins|w:del` on a paragraph.
- * Returns true if the paragraph was merged into the next one (and removed).
+ * Returns true if the paragraph was removed: merged into the next one, or,
+ * with no next one and nothing left in it, dropped.
  */
 function handleParagraphMark(
   siblings: FXPNode[],
@@ -451,12 +452,16 @@ function handleParagraphMark(
   const rPrChildren = getChildren(rPr);
 
   let removeParagraph = false;
+  let insertionRejected = false;
 
   const insIdx = rPrChildren.findIndex((c) => getTagName(c) === "w:ins");
   if (insIdx !== -1 && matches(rPrChildren[insIdx]!, ctx)) {
     ctx.count++;
     rPrChildren.splice(insIdx, 1);
-    if (ctx.mode === "reject") removeParagraph = true;
+    if (ctx.mode === "reject") {
+      removeParagraph = true;
+      insertionRejected = true;
+    }
   }
 
   const delIdx = rPrChildren.findIndex((c) => getTagName(c) === "w:del");
@@ -482,7 +487,45 @@ function handleParagraphMark(
   // untracked; otherwise it would be merged into the next paragraph as an
   // empty field.
   pruneEmptyControls(getChildren(pNode));
-  return mergeIntoNextParagraph(siblings, index, pNode);
+  if (mergeIntoNextParagraph(siblings, index, pNode)) return true;
+  // With no next paragraph a deleted mark keeps its paragraph, as in Word,
+  // where the last paragraph mark cannot be deleted. A rejected insertion is
+  // different: the paragraph was never part of the document.
+  return insertionRejected && removeInsertedParagraph(siblings, index, pNode);
+}
+
+/**
+ * Remove a paragraph whose inserted mark was rejected and that has no next
+ * paragraph to merge into: the last paragraph of the body, a cell, a header
+ * or a note, or one that a table follows. This is where a rejected
+ * `insert_paragraph` after such a paragraph ends up; without this the
+ * rejection would leave an empty paragraph the original did not have.
+ *
+ * Only a paragraph that holds nothing any more is removed, and only when
+ * the paragraph before it stays: a cell must end with a paragraph, and two
+ * tables with no paragraph between them would become one. A paragraph that
+ * still holds something (text another author added, a bookmark, a comment's
+ * range) is kept, since there is nowhere to move it.
+ */
+function removeInsertedParagraph(siblings: FXPNode[], index: number, pNode: FXPNode): boolean {
+  const pPr = findChild(pNode, "w:pPr");
+  // A section-break paragraph must survive or the section is lost
+  if (pPr && findChild(pPr, "w:sectPr")) return false;
+  if (getChildren(pNode).some((c) => c !== pPr && getTagName(c) !== undefined)) return false;
+
+  let j = index - 1;
+  while (j >= 0) {
+    const t = getTagName(siblings[j]!);
+    if (t === undefined || TRANSPARENT_SIBLINGS.has(t)) {
+      j--;
+      continue;
+    }
+    break;
+  }
+  if (j < 0 || getTagName(siblings[j]!) !== "w:p") return false;
+
+  siblings.splice(index, 1);
+  return true;
 }
 
 /**

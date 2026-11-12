@@ -59,7 +59,7 @@ const ORIGINAL_ROWS = [
 ];
 
 /** The patches under test, each with the view rows it should leave (untracked). */
-const EDITS: { name: string; patch: Record<string, unknown>; rows: string[]; skipReject?: boolean }[] = [
+const EDITS: { name: string; patch: Record<string, unknown>; rows: string[] }[] = [
   {
     name: "replace_text in a nested cell",
     patch: { type: "replace_text", target: `${N}.r1.c1.p0`, find: "$900", replace: "$950" },
@@ -97,9 +97,6 @@ const EDITS: { name: string; patch: Record<string, unknown>; rows: string[]; ski
   },
   {
     name: "insert_paragraph after a paragraph of a nested cell",
-    // Rejecting a tracked insert_paragraph leaves an empty paragraph behind. That is how it behaves
-    // in the body and in any cell, not something about nested tables, so it is not checked here.
-    skipReject: true,
     patch: { type: "insert_paragraph", target: `${N}.r1.c0.p0`, position: "after", text: "Ultra-low sulphur" },
     rows: [ORIGINAL_ROWS[0]!, ORIGINAL_ROWS[1]!, `| [${N}.r1.c0.p0] Diesel [${N}.r1.c0.p1] Ultra-low sulphur | [${N}.r1.c1.p0] $900 |`, ORIGINAL_ROWS[3]!, ORIGINAL_ROWS[4]!],
   },
@@ -110,7 +107,7 @@ describe("editing a nested table", () => {
     expect(rows(await load())).toEqual(ORIGINAL_ROWS);
   });
 
-  describe.each(EDITS)("$name", ({ patch, rows: expected, skipReject }) => {
+  describe.each(EDITS)("$name", ({ patch, rows: expected }) => {
     it("untracked: changes the nested table only, and survives a save", async () => {
       const doc = await load();
       expect(apply(doc, patch).error).toBeUndefined();
@@ -137,7 +134,6 @@ describe("editing a nested table", () => {
       expect(rows(accepted)).toEqual(expected);
       expect(await documentXml(accepted)).not.toContain(`w:author="Reviewer"`);
 
-      if (skipReject) return;
       const rejected = await load();
       expect(apply(rejected, patch, TRACKED).error).toBeUndefined();
       rejected.rejectAllRevisions();
